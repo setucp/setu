@@ -49,17 +49,15 @@ where
 {
     match cmd {
         Command::CreateDatabase { db, role, password } => {
-            match rt.postgres().create_db_and_role(db, role, password).await {
+            match rt.postgres().create_or_alter(db, role, password).await {
                 Ok(()) => ok(cmd_id, serde_json::json!({"db": db}), "create_database ok"),
                 Err(e) => err(cmd_id, "create_database failed", e),
             }
         }
-        Command::DropDatabase { db, role } => {
-            match rt.postgres().drop_db_and_role(db, role).await {
-                Ok(()) => ok(cmd_id, serde_json::json!({"db": db}), "drop_database ok"),
-                Err(e) => err(cmd_id, "drop_database failed", e),
-            }
-        }
+        Command::DropDatabase { db, role } => match rt.postgres().drop(db, role).await {
+            Ok(()) => ok(cmd_id, serde_json::json!({"db": db}), "drop_database ok"),
+            Err(e) => err(cmd_id, "drop_database failed", e),
+        },
         Command::Install { site } => match rt.install_version(site).await {
             Ok(version) => ok(
                 cmd_id,

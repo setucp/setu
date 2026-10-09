@@ -15,18 +15,18 @@ use crate::caddy::CaddySocket;
 use crate::config::AgentConfig;
 use crate::dispatch::handle;
 use crate::helper_client::{Helper, SudoHelper};
-use crate::postgres::PsqlCli;
+use crate::postgres::PsqlSudo;
 use crate::runtime::NativeRuntime;
 use crate::state::StateFile;
 
 /// Production runtime wiring.
-pub type ProdRuntime = NativeRuntime<SudoHelper, PsqlCli, CaddySocket>;
+pub type ProdRuntime = NativeRuntime<SudoHelper, PsqlSudo, CaddySocket>;
 
 /// Build the production runtime from config.
 pub fn prod_runtime(config: &AgentConfig) -> ProdRuntime {
     NativeRuntime::new(
         SudoHelper::new(),
-        PsqlCli::new(),
+        PsqlSudo::system(),
         CaddySocket::new(&config.caddy_socket),
         config.clone(),
     )

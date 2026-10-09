@@ -73,7 +73,7 @@ pub fn top_level_dirs(archive: &[u8]) -> anyhow::Result<Vec<String>> {
     Ok(dirs)
 }
 
-/// Take a backup: `pg_dump` into `db.dump`, helper `backup` into
+/// Take a backup: `pg_dump` (stdout) into `db.dump`, helper `backup` into
 /// `dirs.tar.zst`. Returns the backup dir.
 pub async fn backup_site<H: Helper, P: PostgresAdmin, C>(
     rt: &NativeRuntime<H, P, C>,
@@ -86,22 +86,27 @@ pub async fn backup_site<H: Helper, P: PostgresAdmin, C>(
     let dir = backup_dir(&rt.config().backups_root, short, dest)?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", dir.display()))?;
-    // The leaf is 0770: `pg_dump` (group postgres, inherited from the
-    // setgid backups root) writes inside; other site users cannot.
+    // The agent's own files (`setu`, 0750): `pg_dump` writes to stdout,
+    // so postgres never writes here.
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o770))
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o750))
             .map_err(|e| anyhow::anyhow!("cannot chmod {}: {e}", dir.display()))?;
     }
-    rt.postgres().dump(db, &dir.join(DB_DUMP)).await?;
+    let dump = rt.postgres().dump(db).await?;
+    crate::config::atomic_write(&dir.join(DB_DUMP), &dump)
+        .map_err(|e| anyhow::anyhow!("cannot write {DB_DUMP}: {e}"))?;
     let archive = rt.backup_dirs(short, dirs).await?;
     crate::config::atomic_write(&dir.join(DIRS_ARCHIVE), &archive)
         .map_err(|e| anyhow::anyhow!("cannot write {DIRS_ARCHIVE}: {e}"))?;
     Ok(dir)
 }
 
-/// Restore a backup (the caller stopped the site): `pg_restore` from
-/// `db.dump`, then helper `restore` of the dirs in `dirs.tar.zst`.
+/// Restore a backup (the caller stopped the site): the database is
+/// replaced from `db.dump` (drop with force, create, `pg_restore` as the
+/// site role `site_<short>`), then helper `restore` of the dirs in
+/// `dirs.tar.zst`. WS5 adds `Restore.role`; until then the role is the
+/// site's by construction (ledger R81).
 pub async fn restore_site<H: Helper, P: PostgresAdmin, C>(
     rt: &NativeRuntime<H, P, C>,
     site: &SiteSpec,
@@ -110,11 +115,10 @@ pub async fn restore_site<H: Helper, P: PostgresAdmin, C>(
 ) -> anyhow::Result<()> {
     let short = &site.short_id;
     let dir = backup_dir(&rt.config().backups_root, short, src)?;
-    let dump = dir.join(DB_DUMP);
-    if !dump.is_file() {
-        anyhow::bail!("backup has no {DB_DUMP}");
-    }
-    rt.postgres().restore(db, &dump).await?;
+    let dump = std::fs::read(dir.join(DB_DUMP))
+        .map_err(|e| anyhow::anyhow!("backup has no readable {DB_DUMP}: {e}"))?;
+    let role = format!("site_{short}");
+    rt.postgres().restore_replace(db, &role, dump).await?;
     let archive_path = dir.join(DIRS_ARCHIVE);
     if archive_path.is_file() {
         let archive = std::fs::read(&archive_path)

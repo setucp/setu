@@ -177,11 +177,12 @@ async fn ensure_user(sys: &dyn SystemCommands) -> Result<(), InstallError> {
 
 /// Directories as `(path, owner, group, mode)`, created in order.
 /// `/etc/setu` is root's: it holds `nftables.conf`, which root loads.
-/// Backups stay `setu:postgres` 2770 until WS4 moves dumps to stdout.
+/// Backups are the agent's own (`setu` 0750): `pg_dump` writes to
+/// stdout and the agent writes the file (ledger R80).
 pub const DIRS: &[(&str, &str, &str, &str)] = &[
     ("/var/lib/setu", "setu", "setu", "0750"),
     ("/var/lib/setu/downloads", "setu", "setu", "0750"),
-    ("/var/lib/setu/backups", "setu", "postgres", "2770"),
+    ("/var/lib/setu/backups", "setu", "setu", "0750"),
     ("/etc/setu", "root", "root", "0755"),
     ("/srv/setu", "root", "root", "0755"),
     ("/srv/setu/sites", "root", "root", "0755"),
@@ -524,6 +525,7 @@ mod tests {
         assert!(DIRS.contains(&("/var/lib/setu", "setu", "setu", "0750")));
         assert!(DIRS.contains(&("/srv/setu/sites", "root", "root", "0755")));
         assert!(DIRS.contains(&("/etc/setu", "root", "root", "0755")));
+        assert!(DIRS.contains(&("/var/lib/setu/backups", "setu", "setu", "0750")));
     }
 
     #[tokio::test]

@@ -3,7 +3,7 @@
 //!
 //! `NativeRuntime<H, P, C>` is generic over the privileged helper and the
 //! Postgres/Caddy adapters so tests run fully unprivileged behind the
-//! fakes; production wires `SudoHelper`/`PsqlCli`/`CaddySocket`.
+//! fakes; production wires `SudoHelper`/`PsqlSudo`/`CaddySocket`.
 
 mod native;
 

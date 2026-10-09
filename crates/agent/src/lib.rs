@@ -33,6 +33,8 @@ pub use config::AgentConfig;
 pub use dispatch::{command_kind, handle};
 pub use helper_client::{FakeHelper, Helper, HelperOutput, LocalHelper, SudoHelper};
 pub use paths::Paths;
-pub use postgres::{FakePostgres, PostgresAdmin, PsqlCli};
+pub use postgres::{
+    CommandRunner, FakePostgres, FakeRunner, PostgresAdmin, PsqlSudo, RunOutput, TokioRunner,
+};
 pub use runtime::{NativeRuntime, Runtime, RuntimeStatus};
 pub use state::{SiteEntry, StateFile};
