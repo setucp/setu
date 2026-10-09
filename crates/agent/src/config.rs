@@ -23,8 +23,11 @@ pub struct AgentConfig {
     pub downloads_dir: PathBuf,
     /// Backup root (`<backups_root>/<site_id>/<ts>/…`).
     pub backups_root: PathBuf,
-    /// Caddy admin API base URL.
-    pub caddy_admin: String,
+    /// Caddy admin API unix socket (TCP admin is off, spec §4).
+    pub caddy_socket: PathBuf,
+    /// Panel route on a control-plane box (`setu-panel`), reconciled
+    /// like a site route.
+    pub panel: Option<crate::caddy::PanelRoute>,
     /// Long-poll `?wait=` seconds for `GET /agent/v1/commands`.
     pub poll_wait_secs: u64,
     /// Heartbeat interval seconds.
@@ -47,7 +50,8 @@ impl Default for AgentConfig {
             sites_root: paths.sites(),
             downloads_dir: paths.downloads(),
             backups_root: paths.backups(),
-            caddy_admin: "http://127.0.0.1:2019".to_string(),
+            caddy_socket: PathBuf::from(crate::caddy::DEFAULT_SOCKET),
+            panel: None,
             poll_wait_secs: 30,
             heartbeat_secs: 15,
             backoff_min_secs: 1,
@@ -67,7 +71,8 @@ impl std::fmt::Debug for AgentConfig {
             .field("sites_root", &self.sites_root)
             .field("downloads_dir", &self.downloads_dir)
             .field("backups_root", &self.backups_root)
-            .field("caddy_admin", &self.caddy_admin)
+            .field("caddy_socket", &self.caddy_socket)
+            .field("panel", &self.panel)
             .field("poll_wait_secs", &self.poll_wait_secs)
             .field("heartbeat_secs", &self.heartbeat_secs)
             .field("backoff_min_secs", &self.backoff_min_secs)

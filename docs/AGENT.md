@@ -15,15 +15,41 @@ On the server, as root, with the one-time join token from
 **Servers → Add server** (or the setup wizard's last step):
 
 ```sh
-setu agent install --control-plane https://setu.example.com --join-token setu_join_…
+setu agent install --control-plane https://setu.example.com --join-token setu_join_… \
+  [--tls internal] [--panel-host setu.example.com [--upstream unix//run/setu/http.sock]]
 ```
 
-Idempotent: creates user `setu`, directories `/var/lib/setu` and
-`/srv/setu/sites`, installs `postgresql-16` and `caddy` via apt when
-missing (with Caddy's admin API on `127.0.0.1:2019`), writes
-`/etc/sudoers.d/setu` from the golden asset, writes and starts
-`setu-agent.service`, joins the control plane, and writes
-`/etc/setu/agent.toml` (server token, mode 0600).
+Idempotent: adds Caddy's official apt repository and installs `sudo
+gnupg postgresql-16 caddy nftables zstd`; creates user `setu` and
+`/var/lib/setu` (0750), `/var/lib/setu/{downloads,backups}`,
+`/srv/setu/sites` (root 0755); runs `REVOKE CONNECT ON DATABASE postgres
+FROM PUBLIC`; then `install-system`:
+
+- the site template unit, `setu-agent.service` and
+  `/etc/sudoers.d/setu` (0440, checked with `visudo -cf`);
+- the firewall: `setu-nftables.service` loads `/etc/setu/nftables.conf`,
+  which replaces only `table inet setu` (never `flush ruleset`) and drops
+  non-loopback TCP to ports 20000–29999, so sites are reachable only
+  through Caddy;
+- Caddy: `caddy.service` is disabled; `caddy-api.service` gets a drop-in
+  running `caddy run --environ --config /etc/caddy/setu.json --resume`.
+  The admin API listens only on `unix//run/caddy/admin.sock|0660` (group
+  `caddy`, which `setu` joins along with `systemd-journal`); TCP 2019 is
+  off. Server `setu` listens on `:443` with automatic HTTPS (and the
+  HTTP→HTTPS redirect); `--tls internal` uses Caddy's internal CA. A
+  re-run applies a new base through the socket (`POST /load` merged
+  with the running routes), so site routes survive.
+
+It then joins the control plane, writes `/etc/setu/agent.toml` (server
+token, mode 0600, owner `setu`) and starts `setu-agent.service`.
+`setu agent install-system [--caddy-only] [--tls internal] [--panel-host
+H --upstream U]` runs the system part alone (root; it is not a helper
+verb, so sudo cannot reach it).
+
+Routes are Caddy objects with `@id` `setu-site-<short>` (upstream
+`127.0.0.1:<port>`) or `setu-panel`; the agent adds with `POST
+…/servers/setu/routes`, replaces with `PATCH /id/<id>`, removes with
+`DELETE /id/<id>`.
 
 ## Commands
 
@@ -34,7 +60,9 @@ missing (with Caddy's admin API on `127.0.0.1:2019`), writes
 - `setu agent join --control-plane URL --join-token T` — redeem a
   join token without reinstalling.
 - `setu agent doctor` — checks each dependency (systemd, Postgres,
-  Caddy admin, disk, token file), prints a table, exits 1 on failure.
+  Caddy admin socket reachable, TCP 2019 closed, `nft list table inet
+  setu`, state file, template unit, token, control plane), prints a
+  table, exits 1 on failure.
 
 ## Protocol (`/agent/v1`)
 
@@ -58,7 +86,7 @@ short id, opens each component `O_NOFOLLOW`, writes temp-file-plus-
 rename, never sets special mode bits, and refuses archives containing
 links, devices, `..`, absolute names or setuid/setgid/sticky bits.
 Postgres admin is confined to `psql`, `pg_dump` and `pg_restore` as
-the `postgres` user. The sudoers file is the three-line golden asset
+the `postgres` user. The sudoers file is the two-line golden asset
 `crates/agent/assets/sudoers`; `scripts/check-sudoers.sh` asserts it
 and runs `visudo -cf`. Logs are read with `journalctl` as `setu`
 (group `systemd-journal`), not through the helper.

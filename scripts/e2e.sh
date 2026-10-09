@@ -306,11 +306,11 @@ echo "$CREATE_RESP" | jq -r '.install_command // empty' | grep -q "join-token" \
   || fail "install_command" "no join token in install command"
 pass "server row created ($SERVER_ID)"
 
-# Caddy ACME off for e2e only: hello.test has no public DNS, so issuance
-# would fail (SETU_AGENT_CADDY_INTERNAL_TLS=off; default keeps ACME).
-cexec env SETU_AGENT_CADDY_INTERNAL_TLS=off \
-  /opt/setu/setu agent install \
+# `--tls internal`: hello.test has no public DNS, so ACME would fail;
+# Caddy issues from its internal CA and the checks use `curl -k`.
+cexec /opt/setu/setu agent install \
   --control-plane "http://${GW}:${SERVE_PORT}" --join-token "$JOIN_TOKEN" \
+  --tls internal \
   >"$E2E_DIR/install.log" 2>&1 \
   || fail "agent install" "$(tail -15 "$E2E_DIR/install.log")"
 pass "agent install (postgres-16 + caddy via apt, joined)"
@@ -348,7 +348,7 @@ wait_site "$API/sites/$SITE_ID" running 30 \
   || fail "site 1 running" "site never running"
 pass "site 1 provisioned (running, 0.1.0)"
 
-FROM=$(cexec curl -s -H 'Host: hello.test' http://127.0.0.1/) || FROM="CURL-FAILED"
+FROM=$(cexec curl -sk --resolve hello.test:443:127.0.0.1 https://hello.test/) || FROM="CURL-FAILED"
 [ "$FROM" = "hello from hello" ] || fail "route hello.test" "got: $FROM"
 pass "Caddy routes hello.test → 'hello from hello'"
 
@@ -384,7 +384,7 @@ wait_job "$API/jobs/$UP_JOB" completed 300 \
   || { dump_agent_debug || true; fail "update to 0.1.1" "job $UP_JOB did not complete"; }
 [ "$(curl -s -b "$JAR" "$API/sites/$SITE_ID" | jq -r .app_version)" = "0.1.1" ] \
   || fail "site version" "not 0.1.1 after update"
-FROM=$(cexec curl -s -H 'Host: hello.test' http://127.0.0.1/) || FROM="CURL-FAILED"
+FROM=$(cexec curl -sk --resolve hello.test:443:127.0.0.1 https://hello.test/) || FROM="CURL-FAILED"
 [ "$FROM" = "hello from hello-1" ] || fail "updated greeting" "got: $FROM"
 pass "update to 0.1.1 (version + greeting observed)"
 
@@ -402,7 +402,7 @@ SITE_JSON=$(curl -s -b "$JAR" "$API/sites/$SITE_ID")
 { [ "$(echo "$SITE_JSON" | jq -r .status)" = "running" ] &&
   [ "$(echo "$SITE_JSON" | jq -r .app_version)" = "0.1.1" ]; } \
   || fail "rollback state" "$SITE_JSON"
-FROM=$(cexec curl -s -H 'Host: hello.test' http://127.0.0.1/) || FROM="CURL-FAILED"
+FROM=$(cexec curl -sk --resolve hello.test:443:127.0.0.1 https://hello.test/) || FROM="CURL-FAILED"
 [ "$FROM" = "hello from hello-1" ] || fail "post-rollback route" "got: $FROM"
 pass "0.1.2 rejected → rollback to running 0.1.1"
 
@@ -427,7 +427,7 @@ wait_job "$API/jobs/$JOB2_ID" completed 420 \
   || { dump_agent_debug || true; fail "provision survives agent kill" "job $JOB2_ID did not complete"; }
 wait_site "$API/sites/$SITE2_ID" running 30 \
   || fail "site 2 running" "site never running after agent restart"
-FROM=$(cexec curl -s -H 'Host: hello2.test' http://127.0.0.1/) || FROM="CURL-FAILED"
+FROM=$(cexec curl -sk --resolve hello2.test:443:127.0.0.1 https://hello2.test/) || FROM="CURL-FAILED"
 [ "$FROM" = "hello from hello" ] || fail "route hello2.test" "got: $FROM"
 pass "agent kill mid-provision → redelivery → site 2 running"
 

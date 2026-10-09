@@ -2910,6 +2910,12 @@
                 "type": "integer",
                 "format": "int32",
                 "minimum": 0
+              },
+              "site_short_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             }
           },
@@ -2927,6 +2933,12 @@
                 "type": "string",
                 "enum": [
                   "remove_route"
+                ]
+              },
+              "site_short_id": {
+                "type": [
+                  "string",
+                  "null"
                 ]
               }
             }

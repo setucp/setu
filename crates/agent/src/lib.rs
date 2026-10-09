@@ -4,7 +4,8 @@
 //! The agent runs unprivileged as `setu`: every privileged step is one
 //! typed `setu helper <verb> --site <short>` through `sudo -n`
 //! ([`helper_client::SudoHelper`], [`helper`]). It manages the local
-//! Postgres through `sudo -u postgres` and Caddy through its admin API.
+//! Postgres through `sudo -u postgres` and Caddy through its admin
+//! unix socket ([`caddy::CaddySocket`]).
 //! Every command handler in [`dispatch::handle`] is idempotent, so the
 //! control plane may redeliver freely.
 
@@ -17,6 +18,7 @@ pub mod download;
 pub mod helper;
 pub mod helper_client;
 pub mod install;
+pub mod install_system;
 pub mod journal;
 pub mod metrics;
 pub mod paths;
@@ -25,7 +27,7 @@ pub mod run_loop;
 pub mod runtime;
 pub mod state;
 
-pub use caddy::{Caddy, CaddyAdmin, CaddyFake};
+pub use caddy::{CaddyAdmin, CaddySocket, FakeCaddy, PanelRoute};
 pub use cli::{run_agent, AgentCmd};
 pub use config::AgentConfig;
 pub use dispatch::{command_kind, handle};

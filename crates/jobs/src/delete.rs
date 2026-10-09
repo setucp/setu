@@ -15,6 +15,8 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
     let site = ctx.db.sites().get(site_id).await?;
     let server_id = site.server_id.clone();
     let domain = site.domain.clone();
+    // Route id `setu-site-<short>` on the agent (ledger R71).
+    let route_short = Some(setu_common::short_id(&site.id).to_lowercase());
     let db_name = site.db_name.clone();
 
     // `build_spec` needs no prompts (Stop/Remove key off `site_id`);
@@ -57,6 +59,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
         &server_id,
         Command::RemoveRoute {
             domain: domain.clone(),
+            site_short_id: route_short.clone(),
         },
     )
     .await

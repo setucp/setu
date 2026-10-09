@@ -117,12 +117,18 @@ pub enum Command {
         path: String,
         timeout_s: u64,
     },
+    // `site_short_id` names the Caddy route `setu-site-<short>`; the
+    // agent refuses the command without it (ledger R71).
     SetRoute {
         domain: String,
         port: u16,
+        #[serde(default)]
+        site_short_id: Option<String>,
     },
     RemoveRoute {
         domain: String,
+        #[serde(default)]
+        site_short_id: Option<String>,
     },
     Backup {
         site: SiteSpec,
@@ -196,14 +202,23 @@ impl fmt::Debug for Command {
                 .field("path", path)
                 .field("timeout_s", timeout_s)
                 .finish(),
-            Self::SetRoute { domain, port } => f
+            Self::SetRoute {
+                domain,
+                port,
+                site_short_id,
+            } => f
                 .debug_struct("SetRoute")
                 .field("domain", domain)
                 .field("port", port)
+                .field("site_short_id", site_short_id)
                 .finish(),
-            Self::RemoveRoute { domain } => f
+            Self::RemoveRoute {
+                domain,
+                site_short_id,
+            } => f
                 .debug_struct("RemoveRoute")
                 .field("domain", domain)
+                .field("site_short_id", site_short_id)
                 .finish(),
             Self::Backup {
                 site,
@@ -437,12 +452,14 @@ mod tests {
                 Command::SetRoute {
                     domain: "example.com".to_string(),
                     port: 20001,
+                    site_short_id: Some("abcd1234".to_string()),
                 },
                 "set_route",
             ),
             (
                 Command::RemoveRoute {
                     domain: "example.com".to_string(),
+                    site_short_id: Some("abcd1234".to_string()),
                 },
                 "remove_route",
             ),

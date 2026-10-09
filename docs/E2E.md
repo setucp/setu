@@ -42,10 +42,9 @@ container + provision/update/rollback/delete with real timeouts).
   with apt after boot (seconds) so there is one path, not two.
   `E2E_IMAGE` is not a script knob: edit the `docker run` line to use a
   prebuilt image.
-- **`SETU_AGENT_CADDY_INTERNAL_TLS=off` (e2e only).** Test domains have
-  no public DNS, so Caddy ACME issuance would fail; the env makes
-  `agent install` post a bootstrap Caddy config with
-  `automatic_https.disable` (shape verified via `caddy adapt`).
+- **`agent install --tls internal` (e2e).** Test domains have no public
+  DNS, so ACME issuance would fail; Caddy issues from its internal CA
+  and the route checks use `curl -k --resolve <domain>:443:127.0.0.1`.
   Production default keeps ACME on.
 - **Site users take the 8-char short id.** `setu-site-<full ULID>` is 36
   chars and shadow `useradd` rejects names over 32 (`invalid user name`,
@@ -73,7 +72,7 @@ container + provision/update/rollback/delete with real timeouts).
 - While it runs: `docker exec setu-e2e systemctl status setu-agent 'setu-site@*'`;
   `docker exec setu-e2e journalctl -u setu-agent -n 200`;
   `docker exec setu-e2e cat /var/lib/setu/state.json`;
-  `docker exec setu-e2e curl -s localhost:2019/config/`;
+  `docker exec setu-e2e curl -s --unix-socket /run/caddy/admin.sock -H 'Host: 127.0.0.1' http://x/config/`;
   control-plane job log via `GET /api/v1/jobs/<id>` (cookie from login).
 - Cleanup is the script's trap (recorded PIDs + the two containers). If
   it died hard: `docker rm -f setu-e2e setu-e2e-pg` and kill the PID in

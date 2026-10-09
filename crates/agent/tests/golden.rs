@@ -6,6 +6,10 @@ const SUDOERS: &str = include_str!("../assets/sudoers");
 const SITE_UNIT: &str = include_str!("../assets/setu-site@.service");
 const AGENT_UNIT: &str = include_str!("../assets/setu-agent.service");
 const DROPIN: &str = include_str!("../assets/dropin.conf.tmpl");
+const NFT_UNIT: &str = include_str!("../assets/setu-nftables.service");
+const NFT_CONF: &str = include_str!("../assets/nftables.conf");
+const CADDY_BASE: &str = include_str!("../assets/caddy-base.json");
+const CADDY_DROPIN: &str = include_str!("../assets/caddy-api.dropin.conf");
 
 #[test]
 fn sudoers_is_exactly_the_helper_and_postgres_lines() {
@@ -118,4 +122,129 @@ fn install_embeds_the_golden_assets() {
     assert_eq!(setu_agent::install::SUDOERS_ASSET, SUDOERS);
     assert_eq!(setu_agent::install::SITE_TEMPLATE_ASSET, SITE_UNIT);
     assert_eq!(setu_agent::install::AGENT_UNIT_ASSET, AGENT_UNIT);
+    assert_eq!(setu_agent::install_system::NFT_UNIT_ASSET, NFT_UNIT);
+    assert_eq!(setu_agent::install_system::NFT_CONF_ASSET, NFT_CONF);
+    assert_eq!(setu_agent::install_system::CADDY_BASE_ASSET, CADDY_BASE);
+    assert_eq!(setu_agent::install_system::CADDY_DROPIN_ASSET, CADDY_DROPIN);
+}
+
+#[test]
+fn nftables_unit_is_golden() {
+    // After the distro `nftables.service` (whose /etc/nftables.conf may
+    // `flush ruleset`), before the network comes up.
+    assert_eq!(
+        NFT_UNIT,
+        "[Unit]
+Description=Setu firewall table (inet setu)
+After=nftables.service
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/setu/nftables.conf
+
+[Install]
+WantedBy=multi-user.target
+"
+    );
+}
+
+#[test]
+fn nftables_conf_is_golden_and_never_flushes_the_ruleset() {
+    assert_eq!(
+        NFT_CONF,
+        "# Setu: only `table inet setu` is touched (never `flush ruleset`), so
+# Docker's and the operator's rules stay intact. `add` then `delete`
+# makes the load idempotent on a first boot and on every re-run.
+add table inet setu
+delete table inet setu
+
+table inet setu {
+\tchain input {
+\t\ttype filter hook input priority 0; policy accept;
+\t\tiifname != \"lo\" tcp dport 20000-29999 drop
+\t}
+}
+"
+    );
+    let rules: Vec<&str> = NFT_CONF
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect();
+    assert!(!rules.iter().any(|l| l.contains("flush")), "{rules:?}");
+}
+
+#[test]
+fn caddy_base_json_is_golden() {
+    assert_eq!(
+        CADDY_BASE,
+        r#"{
+  "admin": {
+    "listen": "unix//run/caddy/admin.sock|0660",
+    "config": {
+      "persist": true
+    }
+  },
+  "apps": {
+    "http": {
+      "servers": {
+        "setu": {
+          "listen": [":443"],
+          "routes": []
+        }
+      }
+    }
+  }
+}
+"#
+    );
+}
+
+#[test]
+fn caddy_base_config_adds_internal_tls_and_panel_route_only_when_asked() {
+    use setu_agent::caddy::PanelRoute;
+    use setu_agent::install_system::caddy_base_config;
+    let base: serde_json::Value = serde_json::from_str(CADDY_BASE).expect("json");
+    assert_eq!(caddy_base_config(false, None).expect("base"), base);
+
+    let mut internal = base.clone();
+    internal["apps"]["tls"] = serde_json::json!({
+        "automation": { "policies": [ { "issuers": [ { "module": "internal" } ] } ] }
+    });
+    assert_eq!(caddy_base_config(true, None).expect("internal"), internal);
+
+    let panel = PanelRoute {
+        host: "panel.example.test".into(),
+        upstream: "unix//run/setu/http.sock".into(),
+    };
+    let with_panel = caddy_base_config(false, Some(&panel)).expect("panel");
+    assert_eq!(
+        with_panel["apps"]["http"]["servers"]["setu"]["routes"],
+        serde_json::json!([{
+            "@id": "setu-panel",
+            "match": [{ "host": ["panel.example.test"] }],
+            "handle": [{
+                "handler": "reverse_proxy",
+                "upstreams": [{ "dial": "unix//run/setu/http.sock" }]
+            }],
+            "terminal": true
+        }])
+    );
+    assert!(with_panel["apps"].get("tls").is_none());
+}
+
+#[test]
+fn caddy_api_dropin_is_golden() {
+    assert_eq!(
+        CADDY_DROPIN,
+        "[Service]
+ExecStart=
+ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/setu.json --resume
+RuntimeDirectory=caddy
+RuntimeDirectoryMode=0750
+Group=caddy
+"
+    );
 }

@@ -1,0 +1,21 @@
+{
+  "@id": "setu-panel",
+  "handle": [
+    {
+      "handler": "reverse_proxy",
+      "upstreams": [
+        {
+          "dial": "unix//run/setu/http.sock"
+        }
+      ]
+    }
+  ],
+  "match": [
+    {
+      "host": [
+        "panel.example.test"
+      ]
+    }
+  ],
+  "terminal": true
+}

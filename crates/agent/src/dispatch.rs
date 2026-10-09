@@ -6,7 +6,7 @@
 
 use setu_proto::{Command, CommandResult};
 
-use crate::caddy::Caddy;
+use crate::caddy::CaddyAdmin;
 use crate::helper::unit_name;
 use crate::helper_client::Helper;
 use crate::postgres::PostgresAdmin;
@@ -45,7 +45,7 @@ pub async fn handle<H, P, C>(
 where
     H: Helper,
     P: PostgresAdmin + Send + Sync,
-    C: Caddy + Send + Sync,
+    C: CaddyAdmin,
 {
     match cmd {
         Command::CreateDatabase { db, role, password } => {
@@ -122,35 +122,37 @@ where
                 Err(e) => err(cmd_id, "health failed", e),
             }
         }
-        Command::SetRoute { domain, port } => {
-            if !crate::caddy::valid_domain(domain) {
-                return err(
-                    cmd_id,
-                    "set_route failed",
-                    anyhow::anyhow!("invalid domain"),
-                );
-            }
-            match rt.caddy().set_route(domain, *port).await {
+        Command::SetRoute {
+            domain,
+            port,
+            site_short_id,
+        } => {
+            let id = match route_id_for(site_short_id.as_deref()) {
+                Ok(id) => id,
+                Err(e) => return err(cmd_id, "set_route failed", e),
+            };
+            let upstream = crate::caddy::site_upstream(*port);
+            match rt.caddy().upsert_route(&id, domain, &upstream).await {
                 Ok(()) => ok(
                     cmd_id,
-                    serde_json::json!({"domain": domain}),
+                    serde_json::json!({"domain": domain, "route_id": id}),
                     "set_route ok",
                 ),
                 Err(e) => err(cmd_id, "set_route failed", e),
             }
         }
-        Command::RemoveRoute { domain } => {
-            if !crate::caddy::valid_domain(domain) {
-                return err(
-                    cmd_id,
-                    "remove_route failed",
-                    anyhow::anyhow!("invalid domain"),
-                );
-            }
-            match rt.caddy().remove_route(domain).await {
+        Command::RemoveRoute {
+            domain,
+            site_short_id,
+        } => {
+            let id = match route_id_for(site_short_id.as_deref()) {
+                Ok(id) => id,
+                Err(e) => return err(cmd_id, "remove_route failed", e),
+            };
+            match rt.caddy().remove_route(&id).await {
                 Ok(()) => ok(
                     cmd_id,
-                    serde_json::json!({"domain": domain}),
+                    serde_json::json!({"domain": domain, "route_id": id}),
                     "remove_route ok",
                 ),
                 Err(e) => err(cmd_id, "remove_route failed", e),
@@ -219,6 +221,13 @@ where
             }
         }
     }
+}
+
+/// Route id `setu-site-<short>`; a route command without the site's
+/// short id is refused rather than keyed off the domain (ledger R71).
+fn route_id_for(short: Option<&str>) -> anyhow::Result<String> {
+    let short = short.ok_or_else(|| anyhow::anyhow!("route command without site_short_id"))?;
+    crate::caddy::site_route_id(short)
 }
 
 /// Snake-case kind tag, mirroring the proto `kind` tag (for transcripts).

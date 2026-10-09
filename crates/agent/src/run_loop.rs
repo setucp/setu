@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use setu_proto::{CommandEnvelope, CommandResult, Heartbeat, SiteMetric, UnitState};
 
-use crate::caddy::CaddyAdmin;
+use crate::caddy::CaddySocket;
 use crate::config::AgentConfig;
 use crate::dispatch::handle;
 use crate::helper_client::{Helper, SudoHelper};
@@ -20,14 +20,14 @@ use crate::runtime::NativeRuntime;
 use crate::state::StateFile;
 
 /// Production runtime wiring.
-pub type ProdRuntime = NativeRuntime<SudoHelper, PsqlCli, CaddyAdmin>;
+pub type ProdRuntime = NativeRuntime<SudoHelper, PsqlCli, CaddySocket>;
 
 /// Build the production runtime from config.
 pub fn prod_runtime(config: &AgentConfig) -> ProdRuntime {
     NativeRuntime::new(
         SudoHelper::new(),
         PsqlCli::new(),
-        CaddyAdmin::new(config.caddy_admin.clone()),
+        CaddySocket::new(&config.caddy_socket),
         config.clone(),
     )
 }
@@ -112,7 +112,7 @@ pub async fn collect_heartbeat<H, P, C>(rt: &NativeRuntime<H, P, C>) -> Heartbea
 where
     H: Helper,
     P: crate::postgres::PostgresAdmin + Send + Sync,
-    C: crate::caddy::Caddy + Send + Sync,
+    C: crate::caddy::CaddyAdmin,
 {
     let state = StateFile::load(&rt.config().state_path).unwrap_or_default();
     let mut units = Vec::new();

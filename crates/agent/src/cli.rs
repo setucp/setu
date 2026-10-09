@@ -6,7 +6,14 @@
 
 use std::path::PathBuf;
 
-/// `setu agent run|install|join|doctor`.
+/// `--tls` modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum TlsMode {
+    /// Caddy issues certificates from its internal CA.
+    Internal,
+}
+
+/// `setu agent run|install|install-system|join|doctor`.
 #[derive(Debug, Clone, clap::Subcommand)]
 pub enum AgentCmd {
     /// Run the agent loop (long-poll, handle, heartbeat).
@@ -26,6 +33,28 @@ pub enum AgentCmd {
         /// Where to write the agent config (default `/etc/setu/agent.toml`).
         #[arg(long)]
         config: Option<PathBuf>,
+        /// `internal`: Caddy uses its internal CA instead of ACME.
+        #[arg(long, value_enum)]
+        tls: Option<TlsMode>,
+        /// Route this host to the panel (control-plane box).
+        #[arg(long)]
+        panel_host: Option<String>,
+        /// Panel upstream for `--panel-host`.
+        #[arg(long, default_value = crate::caddy::DEFAULT_PANEL_UPSTREAM)]
+        upstream: String,
+    },
+    /// Write the system artefacts only (root; not reachable through sudo):
+    /// units, sudoers, firewall and Caddy, or with `--caddy-only` just
+    /// the Caddy config and drop-in.
+    InstallSystem {
+        #[arg(long)]
+        caddy_only: bool,
+        #[arg(long, value_enum)]
+        tls: Option<TlsMode>,
+        #[arg(long)]
+        panel_host: Option<String>,
+        #[arg(long, default_value = crate::caddy::DEFAULT_PANEL_UPSTREAM)]
+        upstream: String,
     },
     /// Join the control plane with a one-time token (no system setup).
     Join {
@@ -59,10 +88,28 @@ pub async fn run_agent(cmd: AgentCmd) -> anyhow::Result<()> {
             control_plane,
             join_token,
             config,
+            tls,
+            panel_host,
+            upstream,
         } => crate::install::install(&crate::install::InstallOpts {
             control_plane,
             join_token,
             config_path: config,
+            tls_internal: tls == Some(TlsMode::Internal),
+            panel: panel_route(panel_host, upstream),
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}")),
+        AgentCmd::InstallSystem {
+            caddy_only,
+            tls,
+            panel_host,
+            upstream,
+        } => crate::install::install_system_cmd(&crate::install_system::InstallSystemOpts {
+            root: None,
+            tls_internal: tls == Some(TlsMode::Internal),
+            panel: panel_route(panel_host, upstream),
+            caddy_only,
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}")),
@@ -74,6 +121,8 @@ pub async fn run_agent(cmd: AgentCmd) -> anyhow::Result<()> {
             control_plane,
             join_token,
             config_path: config,
+            tls_internal: false,
+            panel: None,
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}")),
@@ -81,4 +130,8 @@ pub async fn run_agent(cmd: AgentCmd) -> anyhow::Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("{e}")),
     }
+}
+
+fn panel_route(host: Option<String>, upstream: String) -> Option<crate::caddy::PanelRoute> {
+    host.map(|host| crate::caddy::PanelRoute { host, upstream })
 }

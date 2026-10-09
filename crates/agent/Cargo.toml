@@ -34,6 +34,10 @@ futures.workspace = true
 zstd.workspace = true
 nix.workspace = true
 url.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
 setu-common = { path = "../common" }
 setu-proto = { path = "../proto" }
 

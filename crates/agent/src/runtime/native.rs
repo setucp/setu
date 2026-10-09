@@ -10,7 +10,7 @@
 use serde_json::json;
 use setu_proto::{EnvVar, SiteSpec};
 
-use crate::caddy::Caddy;
+use crate::caddy::CaddyAdmin;
 use crate::config::AgentConfig;
 use crate::download::DownloadPolicy;
 use crate::helper::{UnitInput, Verb, Workdir};
@@ -338,9 +338,7 @@ impl<H: Helper, P, C> NativeRuntime<H, P, C> {
 }
 
 #[async_trait::async_trait]
-impl<H: Helper, P: PostgresAdmin + Send + Sync, C: Caddy + Send + Sync> Runtime
-    for NativeRuntime<H, P, C>
-{
+impl<H: Helper, P: PostgresAdmin + Send + Sync, C: CaddyAdmin> Runtime for NativeRuntime<H, P, C> {
     async fn install(&self, site: &SiteSpec) -> anyhow::Result<()> {
         self.install_version(site).await.map(|_| ())
     }

@@ -41,6 +41,8 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
     let site = ctx.db.sites().get(site_id).await?;
     let server_id = site.server_id.clone();
     let domain = site.domain.clone();
+    // Route id `setu-site-<short>` on the agent (ledger R71).
+    let route_short = Some(setu_common::short_id(&site.id).to_lowercase());
     let port = site.port;
 
     let prep = match prepare_site(ctx, &site).await {
@@ -127,6 +129,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
         Command::SetRoute {
             domain: domain.clone(),
             port: port as u16,
+            site_short_id: route_short.clone(),
         },
     )
     .await
@@ -153,6 +156,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
                             &server_id,
                             Command::RemoveRoute {
                                 domain: domain.clone(),
+                                site_short_id: route_short.clone(),
                             },
                         )
                         .await;
@@ -173,6 +177,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
                             &server_id,
                             Command::RemoveRoute {
                                 domain: domain.clone(),
+                                site_short_id: route_short.clone(),
                             },
                         )
                         .await;
@@ -225,6 +230,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
                 &server_id,
                 Command::RemoveRoute {
                     domain: domain.clone(),
+                    site_short_id: route_short.clone(),
                 },
             )
             .await;
@@ -249,6 +255,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
                 &server_id,
                 Command::RemoveRoute {
                     domain: domain.clone(),
+                    site_short_id: route_short.clone(),
                 },
             )
             .await;

@@ -6,7 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use setu_agent::helper::{Ctx, FakeSystemctl, FakeUsers, Recording};
-use setu_agent::{AgentConfig, CaddyFake, FakePostgres, LocalHelper, NativeRuntime, Paths};
+use setu_agent::{AgentConfig, FakeCaddy, FakePostgres, LocalHelper, NativeRuntime, Paths};
 use setu_proto::{BinaryRef, Command, EnvVar, Limits, SiteSpec};
 
 fn test_site(root: &Path, site_id: &str, port: u16) -> SiteSpec {
@@ -32,7 +32,7 @@ fn test_site(root: &Path, site_id: &str, port: u16) -> SiteSpec {
     }
 }
 
-type Rt = NativeRuntime<LocalHelper, FakePostgres, CaddyFake>;
+type Rt = NativeRuntime<LocalHelper, FakePostgres, FakeCaddy>;
 
 fn test_runtime(root: &Path) -> (Rt, FakeSystemctl) {
     let units = FakeSystemctl::new();
@@ -54,7 +54,7 @@ fn test_runtime(root: &Path) -> (Rt, FakeSystemctl) {
         NativeRuntime::new(
             LocalHelper::new(ctx),
             FakePostgres::new(),
-            CaddyFake::new(),
+            FakeCaddy::new(),
             cfg,
         ),
         units,
@@ -192,6 +192,7 @@ async fn every_command_kind_is_handled() {
         Command::SetRoute {
             domain: "example.com".to_string(),
             port: servers.health_port,
+            site_short_id: Some(short.to_string()),
         },
         Command::Backup {
             site: site.clone(),
@@ -221,6 +222,7 @@ async fn every_command_kind_is_handled() {
         },
         Command::RemoveRoute {
             domain: "example.com".to_string(),
+            site_short_id: Some(short.to_string()),
         },
         Command::Remove { site: site.clone() },
         Command::DropDatabase {
@@ -382,4 +384,50 @@ async fn redelivered_write_unit_is_a_noop_when_unchanged() {
     let third = setu_agent::handle("cmd-2", &Command::WriteUnit { site: changed }, &rt).await;
     assert!(third.ok, "changed write_unit: {:?}", third.error);
     assert_eq!(units.reloads(), 2);
+}
+
+/// `SetRoute`/`RemoveRoute` address the Caddy route `setu-site-<short>`
+/// (spec §4) and are refused without the short id (ledger R71).
+#[tokio::test]
+async fn route_commands_key_off_the_site_short_id() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (rt, _units) = test_runtime(dir.path());
+    let set = Command::SetRoute {
+        domain: "a.example.test".to_string(),
+        port: 20001,
+        site_short_id: Some("abcd1234".to_string()),
+    };
+    let r = setu_agent::handle("c1", &set, &rt).await;
+    assert!(r.ok, "{:?}", r.error);
+    let routes = rt.caddy().admin().routes();
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0]["@id"], "setu-site-abcd1234");
+    assert_eq!(
+        routes[0]["handle"][0]["upstreams"][0]["dial"],
+        "127.0.0.1:20001"
+    );
+
+    let no_short = Command::SetRoute {
+        domain: "b.example.test".to_string(),
+        port: 20002,
+        site_short_id: None,
+    };
+    let r = setu_agent::handle("c2", &no_short, &rt).await;
+    assert!(!r.ok);
+    let bad_short = Command::RemoveRoute {
+        domain: "a.example.test".to_string(),
+        site_short_id: Some("../etc".to_string()),
+    };
+    assert!(!setu_agent::handle("c3", &bad_short, &rt).await.ok);
+
+    let remove = Command::RemoveRoute {
+        domain: "a.example.test".to_string(),
+        site_short_id: Some("abcd1234".to_string()),
+    };
+    assert!(setu_agent::handle("c4", &remove, &rt).await.ok);
+    assert!(
+        setu_agent::handle("c5", &remove, &rt).await.ok,
+        "idempotent"
+    );
+    assert!(rt.caddy().admin().routes().is_empty());
 }

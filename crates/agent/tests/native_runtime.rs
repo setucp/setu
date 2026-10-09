@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 use setu_agent::helper::{Ctx, Verb};
 use setu_agent::{
-    AgentConfig, CaddyFake, FakeHelper, FakePostgres, LocalHelper, NativeRuntime, Paths, Runtime,
+    AgentConfig, FakeCaddy, FakeHelper, FakePostgres, LocalHelper, NativeRuntime, Paths, Runtime,
     StateFile,
 };
 use setu_proto::{BinaryRef, Limits, SiteSpec};
@@ -51,15 +51,15 @@ fn config(root: &Path) -> AgentConfig {
     }
 }
 
-fn fake_rt(root: &Path, helper: FakeHelper) -> NativeRuntime<FakeHelper, FakePostgres, CaddyFake> {
-    NativeRuntime::new(helper, FakePostgres::new(), CaddyFake::new(), config(root))
+fn fake_rt(root: &Path, helper: FakeHelper) -> NativeRuntime<FakeHelper, FakePostgres, FakeCaddy> {
+    NativeRuntime::new(helper, FakePostgres::new(), FakeCaddy::new(), config(root))
 }
 
-fn local_rt(root: &Path) -> NativeRuntime<LocalHelper, FakePostgres, CaddyFake> {
+fn local_rt(root: &Path) -> NativeRuntime<LocalHelper, FakePostgres, FakeCaddy> {
     NativeRuntime::new(
         LocalHelper::new(Ctx::fake(root)),
         FakePostgres::new(),
-        CaddyFake::new(),
+        FakeCaddy::new(),
         config(root),
     )
 }

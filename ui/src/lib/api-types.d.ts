@@ -801,10 +801,12 @@ export interface components {
             kind: "set_route";
             /** Format: int32 */
             port: number;
+            site_short_id?: string | null;
         } | {
             domain: string;
             /** @enum {string} */
             kind: "remove_route";
+            site_short_id?: string | null;
         } | {
             db: string;
             dest: string;
