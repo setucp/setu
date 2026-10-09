@@ -259,6 +259,19 @@ impl<'a> Servers<'a> {
         .map_err(map_db_error)
         .map(|rows| rows.into_iter().map(|r| r.into_server()).collect())
     }
+    /// Delete a server row. Callers check for dependent sites first and
+    /// return `conflict` (the API refuses 409 while sites reference it).
+    pub async fn delete(&self, id: &str) -> Result<(), AppError> {
+        let n = sqlx::query!("DELETE FROM servers WHERE id = $1", id)
+            .execute(self.pool)
+            .await
+            .map_err(map_db_error)?
+            .rows_affected();
+        if n == 0 {
+            return Err(AppError::not_found("server not found"));
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn hash_token(plain: &str) -> String {

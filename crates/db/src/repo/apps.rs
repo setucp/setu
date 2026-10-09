@@ -112,6 +112,39 @@ impl<'a> Apps<'a> {
         })
     }
 
+    pub async fn get(&self, app_id: &str) -> Result<App, AppError> {
+        sqlx::query_as!(
+            AppRow,
+            "SELECT id, name, homepage, created_at, updated_at
+             FROM apps WHERE id = $1",
+            app_id,
+        )
+        .fetch_optional(self.pool)
+        .await
+        .map_err(map_db_error)?
+        .map(|r| App {
+            id: r.id,
+            name: r.name,
+            homepage: r.homepage,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        })
+        .ok_or_else(|| AppError::not_found("app not found"))
+    }
+
+    pub async fn versions(&self, app_id: &str) -> Result<Vec<AppVersion>, AppError> {
+        sqlx::query_as!(
+            AppVersionRow,
+            "SELECT id, app_id, version, manifest, channel, published_at
+             FROM app_versions WHERE app_id = $1 ORDER BY published_at DESC, version DESC",
+            app_id,
+        )
+        .fetch_all(self.pool)
+        .await
+        .map_err(map_db_error)
+        .map(|rows| rows.into_iter().map(|r| r.into_version()).collect())
+    }
+
     pub async fn version(&self, app_id: &str, version: &str) -> Result<AppVersion, AppError> {
         sqlx::query_as!(
             AppVersionRow,

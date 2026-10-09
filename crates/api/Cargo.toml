@@ -15,3 +15,35 @@ path = "src/main.rs"
 
 [lints]
 workspace = true
+
+[dependencies]
+tokio.workspace = true
+axum.workspace = true
+tower.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+url.workspace = true
+clap.workspace = true
+argon2.workspace = true
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
+reqwest.workspace = true
+tower-sessions.workspace = true
+rmp-serde.workspace = true
+time.workspace = true
+futures.workspace = true
+sqlx.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+setu-common = { path = "../common" }
+setu-db = { path = "../db" }
+setu-jobs = { path = "../jobs" }
+setu-manifest = { path = "../manifest" }
+setu-proto = { path = "../proto" }
+setu-testkit = { path = "../testkit" }
+
+[dev-dependencies]
+setu-testkit = { path = "../testkit" }
+tokio.workspace = true

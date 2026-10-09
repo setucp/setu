@@ -78,6 +78,19 @@ impl<'a> Operators<'a> {
         .map(|r| r.map(|r| r.into_operator()))
     }
 
+    pub async fn by_id(&self, id: &str) -> Result<Option<Operator>, AppError> {
+        sqlx::query_as!(
+            OperatorRow,
+            "SELECT id, email, password_hash, totp_secret, role, created_at
+             FROM operators WHERE id = $1",
+            id,
+        )
+        .fetch_optional(self.pool)
+        .await
+        .map_err(map_db_error)
+        .map(|r| r.map(|r| r.into_operator()))
+    }
+
     pub async fn count(&self) -> Result<i64, AppError> {
         let n: Option<i64> = sqlx::query_scalar!("SELECT COUNT(*) FROM operators")
             .fetch_one(self.pool)

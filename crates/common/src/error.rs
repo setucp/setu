@@ -20,6 +20,7 @@ pub enum ErrorCode {
     Forbidden,
     NotFound,
     Conflict,
+    RateLimited,
     AgentUnreachable,
     Internal,
 }
@@ -32,6 +33,7 @@ impl ErrorCode {
             Self::Forbidden => "forbidden",
             Self::NotFound => "not_found",
             Self::Conflict => "conflict",
+            Self::RateLimited => "rate_limited",
             Self::AgentUnreachable => "agent_unreachable",
             Self::Internal => "internal",
         }
@@ -44,6 +46,7 @@ impl ErrorCode {
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Conflict => StatusCode::CONFLICT,
+            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::AgentUnreachable => StatusCode::BAD_GATEWAY,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -92,6 +95,10 @@ impl AppError {
 
     pub fn conflict(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Conflict, message)
+    }
+
+    pub fn rate_limited(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::RateLimited, message)
     }
 
     pub fn agent_unreachable(message: impl Into<String>) -> Self {
@@ -149,6 +156,7 @@ mod tests {
             (ErrorCode::Forbidden, 403),
             (ErrorCode::NotFound, 404),
             (ErrorCode::Conflict, 409),
+            (ErrorCode::RateLimited, 429),
             (ErrorCode::AgentUnreachable, 502),
             (ErrorCode::Internal, 500),
         ];
