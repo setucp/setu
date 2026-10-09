@@ -20,6 +20,8 @@
 //! `failed` with an error starting `rollback:`. A rollback that fails
 //! leaves the site `failed` (`failed_step = rollback`).
 
+use std::collections::BTreeMap;
+
 use setu_common::{AppError, ErrorCode};
 use setu_db::Site;
 use setu_proto::{Command, SiteSpec};
@@ -217,13 +219,16 @@ async fn env_step(
     let db_url = stored_db_url(&old_manifest, &existing)
         .unwrap_or_default()
         .to_string();
+    // Answers for prompts V adds, sealed in the payload by `POST
+    // /sites/{id}/update`; existing answers are kept by name.
+    let prompts = open_prompts(ctx).await?;
     let mut input = resolve_input(
         &site.short_id,
         u16::try_from(site.port).map_err(|_| AppError::internal())?,
         &site.domain,
         &site.owner_email,
         db_url,
-        &Default::default(),
+        &prompts,
     );
     let merged =
         setu_manifest::merge(&existing, new_manifest, &mut input).map_err(resolve_error)?;
@@ -250,12 +255,42 @@ async fn env_step(
         .sites()
         .set_env(&site.id, &sealed_env(&ctx.sealer, &stored))
         .await?;
+    // The answers now live (sealed) in `sites.env` only.
+    if !prompts.is_empty() {
+        ctx.payload_set("prompts", serde_json::Value::Null).await?;
+    }
     Ok(Old {
         version: site.app_version.clone(),
         env: existing,
         spec: old_spec,
         backup_id: None,
     })
+}
+
+/// `payload.prompts`: name → `v1:` sealed answer (absent: none). Every
+/// answer is registered for log redaction.
+async fn open_prompts(ctx: &JobCtx) -> Result<BTreeMap<String, String>, AppError> {
+    let Some(map) = ctx
+        .payload_get("prompts")
+        .await
+        .and_then(|v| v.as_object().cloned())
+    else {
+        return Ok(BTreeMap::new());
+    };
+    let mut out = BTreeMap::new();
+    for (name, sealed) in map {
+        let plain = sealed
+            .as_str()
+            .filter(|s| s.starts_with("v1:"))
+            .and_then(|s| ctx.sealer.open(s).ok())
+            .ok_or_else(|| {
+                tracing::error!(name = %name, "update prompt answer is not sealed");
+                AppError::internal()
+            })?;
+        ctx.add_secret(&plain);
+        out.insert(name, plain);
+    }
+    Ok(out)
 }
 
 /// The old state from the payload (resume).

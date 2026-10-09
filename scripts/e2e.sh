@@ -207,7 +207,7 @@ echo "  bridge gateway: $GW"
 
 "$SETU_BIN" migrate
 OWNER_PASSWORD=$(openssl rand -base64 18)
-"$SETU_BIN" operator create --email "$OWNER_EMAIL" --password "$OWNER_PASSWORD"
+SETU_OPERATOR_PASSWORD="$OWNER_PASSWORD" "$SETU_BIN" operator create --email "$OWNER_EMAIL"
 pass "migrate + owner operator created"
 
 "$SETU_BIN" serve >"$E2E_DIR/serve.log" 2>&1 &
@@ -219,7 +219,7 @@ curl -sf "http://127.0.0.1:${SERVE_PORT}/readyz" >/dev/null \
 pass "setu serve on :$SERVE_PORT (pid $(cat "$E2E_DIR/serve.pid"))"
 
 # Login (session cookie jar for every later API call).
-CODE=$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -X POST "$API/auth/login" \
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -H "Origin: $SETU_PUBLIC_URL" -X POST "$API/auth/login" \
   -H 'Content-Type: application/json' \
   -d "{\"email\":\"$OWNER_EMAIL\",\"password\":\"$OWNER_PASSWORD\"}")
 [ "$CODE" = "200" ] || fail "owner login" "HTTP $CODE"
@@ -297,13 +297,15 @@ cexec /opt/setu/setu agent doctor >/dev/null 2>&1 || true  # doctor fails pre-in
 pass "container essentials + setu binary at /opt/setu/setu"
 
 # Join: create the server row, install the agent with its one-time token.
-CREATE_RESP=$(curl -s -b "$JAR" -X POST "$API/servers" \
+CREATE_RESP=$(curl -s -b "$JAR" -H "Origin: $SETU_PUBLIC_URL" -X POST "$API/servers" \
   -H 'Content-Type: application/json' -d '{"name":"e2e"}')
 SERVER_ID=$(echo "$CREATE_RESP" | jq -r '.server.id // empty')
 JOIN_TOKEN=$(echo "$CREATE_RESP" | jq -r '.join_token // empty')
 [ -n "$SERVER_ID" ] && [ -n "$JOIN_TOKEN" ] || fail "POST /servers" "$CREATE_RESP"
-echo "$CREATE_RESP" | jq -r '.install_command // empty' | grep -q "SETU_JOIN_TOKEN=" \
-  || fail "install_command" "no join token in install command"
+echo "$CREATE_RESP" | jq -r '.install_command // empty' | grep -q "^setu agent install --control-plane " \
+  || fail "install_command" "unexpected install command"
+echo "$CREATE_RESP" | jq -r '.install_command // empty' | grep -qF "$JOIN_TOKEN" \
+  && fail "install_command" "join token inside the install command"
 pass "server row created ($SERVER_ID)"
 
 # `--tls internal`: hello.test has no public DNS, so ACME would fail;
@@ -324,7 +326,7 @@ pass "agent online (heartbeat flowing)"
 # ---------------------------------------------------------------- catalogue
 
 for v in 0.1.0 0.1.1 0.1.2; do
-  RESP=$(curl -s -b "$JAR" -X POST "$API/apps" -H 'Content-Type: application/json' \
+  RESP=$(curl -s -b "$JAR" -H "Origin: $SETU_PUBLIC_URL" -X POST "$API/apps" -H 'Content-Type: application/json' \
     --data "$(jq -n --rawfile toml "$E2E_DIR/hello-$v.toml" '{toml: $toml}')")
   echo "$RESP" | jq -e '.version.version == "'"$v"'"' >/dev/null \
     || fail "publish hello $v" "$RESP"
@@ -337,7 +339,7 @@ pass "Default plan found ($PLAN_ID)"
 
 # ---------------------------------------------------------------- provision site 1
 
-SITE_RESP=$(curl -s -b "$JAR" -X POST "$API/sites" -H 'Content-Type: application/json' \
+SITE_RESP=$(curl -s -b "$JAR" -H "Origin: $SETU_PUBLIC_URL" -X POST "$API/sites" -H 'Content-Type: application/json' \
   -d '{"name":"hello","app_id":"hello","version":"0.1.0","plan_id":"'"$PLAN_ID"'","server_id":"'"$SERVER_ID"'","domain":"hello.test","owner_email":"'"$OWNER_EMAIL"'","prompts":{}}')
 SITE_ID=$(echo "$SITE_RESP" | jq -r '.site.id // empty')
 JOB_ID=$(echo "$SITE_RESP" | jq -r '.job.id // empty')
@@ -365,7 +367,7 @@ pass "site system user exists"
 
 # ---------------------------------------------------------------- backup
 
-BK_RESP=$(curl -s -b "$JAR" -X POST "$API/sites/$SITE_ID/backups")
+BK_RESP=$(curl -s -b "$JAR" -H "Origin: $SETU_PUBLIC_URL" -X POST "$API/sites/$SITE_ID/backups")
 BK_JOB=$(echo "$BK_RESP" | jq -r '.job.id // empty')
 [ -n "$BK_JOB" ] || fail "POST backup" "$BK_RESP"
 wait_job "$API/jobs/$BK_JOB" completed 180 \
@@ -378,7 +380,7 @@ pass "manual backup completed ($DUMP)"
 
 # ---------------------------------------------------------------- update to 0.1.1
 
-UP_RESP=$(curl -s -b "$JAR" -X POST "$API/sites/$SITE_ID/update" \
+UP_RESP=$(curl -s -b "$JAR" -H "Origin: $SETU_PUBLIC_URL" -X POST "$API/sites/$SITE_ID/update" \
   -H 'Content-Type: application/json' -d '{"version":"0.1.1"}')
 UP_JOB=$(echo "$UP_RESP" | jq -r '.job.id // empty')
 [ -n "$UP_JOB" ] || fail "POST update 0.1.1" "$UP_RESP"
@@ -392,7 +394,7 @@ pass "update to 0.1.1 (version + greeting observed)"
 
 # ---------------------------------------------------------------- broken 0.1.2 → rollback
 
-BAD_RESP=$(curl -s -b "$JAR" -X POST "$API/sites/$SITE_ID/update" \
+BAD_RESP=$(curl -s -b "$JAR" -H "Origin: $SETU_PUBLIC_URL" -X POST "$API/sites/$SITE_ID/update" \
   -H 'Content-Type: application/json' -d '{"version":"0.1.2"}')
 BAD_JOB=$(echo "$BAD_RESP" | jq -r '.job.id // empty')
 [ -n "$BAD_JOB" ] || fail "POST update 0.1.2" "$BAD_RESP"
@@ -410,7 +412,7 @@ pass "0.1.2 rejected → rollback to running 0.1.1"
 
 # ---------------------------------------------------------------- kill agent mid-provision
 
-SITE2_RESP=$(curl -s -b "$JAR" -X POST "$API/sites" -H 'Content-Type: application/json' \
+SITE2_RESP=$(curl -s -b "$JAR" -H "Origin: $SETU_PUBLIC_URL" -X POST "$API/sites" -H 'Content-Type: application/json' \
   -d '{"name":"hello2","app_id":"hello","version":"0.1.0","plan_id":"'"$PLAN_ID"'","server_id":"'"$SERVER_ID"'","domain":"hello2.test","owner_email":"'"$OWNER_EMAIL"'","prompts":{}}')
 SITE2_ID=$(echo "$SITE2_RESP" | jq -r '.site.id // empty')
 JOB2_ID=$(echo "$SITE2_RESP" | jq -r '.job.id // empty')
@@ -435,7 +437,7 @@ pass "agent kill mid-provision → redelivery → site 2 running"
 
 # ---------------------------------------------------------------- delete site 1
 
-DEL_RESP=$(curl -s -b "$JAR" -X DELETE "$API/sites/$SITE_ID")
+DEL_RESP=$(curl -s -b "$JAR" -H "Origin: $SETU_PUBLIC_URL" -X DELETE "$API/sites/$SITE_ID")
 DEL_JOB=$(echo "$DEL_RESP" | jq -r '.job.id // empty')
 [ -n "$DEL_JOB" ] || fail "DELETE site 1" "$DEL_RESP"
 # The delete job removes the site row, cascading its own job row: the

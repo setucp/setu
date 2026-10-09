@@ -12,7 +12,8 @@ for.
 ## Install
 
 On the server, as root, with the one-time join token from
-**Servers → Add server** (or the setup wizard's last step):
+**Servers → Add server** (or the setup wizard's last step; the panel
+shows the install command and the token separately):
 
 ```sh
 SETU_JOIN_TOKEN=setu_join_… setu agent install --control-plane https://setu.example.com \

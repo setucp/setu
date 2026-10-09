@@ -74,7 +74,7 @@ async fn joined(srv: &TestServer, name: &str) -> (String, String) {
 }
 
 #[tokio::test]
-async fn join_with_used_token_is_401() {
+async fn join_retry_requires_same_nonce() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
     let owner = srv.login_as_owner().await;
@@ -177,7 +177,7 @@ async fn join_with_used_token_is_401() {
 }
 
 #[tokio::test]
-async fn commands_long_poll_returns_when_enqueued() {
+async fn commands_long_poll_wakes_on_enqueue_within_500ms() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
     let (server_id, server_token) = joined(&srv, "long-poll").await;
@@ -202,9 +202,9 @@ async fn commands_long_poll_returns_when_enqueued() {
         .expect("empty poll sends");
     assert_eq!(empty.status(), reqwest::StatusCode::NO_CONTENT);
 
-    // A wait=5 poll blocked in the handler must resolve well under a
-    // second once a command is enqueued 200 ms later.
-    let url = srv.url("/agent/v1/commands?wait=5");
+    // A wait=10 poll blocked in the handler must resolve within 500 ms
+    // of the enqueue (LISTEN/NOTIFY, not the 5 s fallback tick).
+    let url = srv.url("/agent/v1/commands?wait=10");
     let waiting = tokio::spawn({
         let agent = agent_client();
         let server_token = server_token.clone();
@@ -217,7 +217,7 @@ async fn commands_long_poll_returns_when_enqueued() {
                 .expect("long poll sends")
         }
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
     let start = Instant::now();
     let enqueued = srv
         .db
@@ -236,12 +236,61 @@ async fn commands_long_poll_returns_when_enqueued() {
     let elapsed = start.elapsed();
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
     assert!(
-        elapsed < Duration::from_secs(1),
-        "long poll must resolve in <1s after enqueue, took {elapsed:?}"
+        elapsed < Duration::from_millis(500),
+        "long poll must resolve in <500ms after enqueue, took {elapsed:?}"
     );
     let body: Value = resp.json().await.expect("command body is json");
     assert_eq!(body["id"].as_str().expect("command id"), enqueued.id);
     assert_eq!(body["command"]["kind"], json!("status"));
+}
+
+/// Subscribe-before-check: an enqueue racing the poll's queue check is
+/// never missed (a miss would only be noticed at the 5 s fallback tick).
+#[tokio::test]
+async fn long_poll_does_not_miss_enqueue_between_check_and_wait() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let (server_id, server_token) = joined(&srv, "race").await;
+    let url = srv.url("/agent/v1/commands?wait=10");
+    for round in 0..50 {
+        let poll = {
+            let url = url.clone();
+            let token = server_token.clone();
+            async move {
+                let start = Instant::now();
+                let resp = agent_client()
+                    .get(&url)
+                    .bearer_auth(&token)
+                    .send()
+                    .await
+                    .expect("poll sends");
+                (resp.status(), start.elapsed())
+            }
+        };
+        let enqueue = async {
+            // Vary the offset so the enqueue lands before, during and
+            // after the handler's check.
+            tokio::time::sleep(Duration::from_millis((round % 5) * 3)).await;
+            srv.db
+                .commands()
+                .enqueue(
+                    &server_id,
+                    None,
+                    &setu_proto::Command::Status {
+                        site: "abcd1234".to_string(),
+                    },
+                    Duration::from_secs(120),
+                )
+                .await
+                .expect("enqueue")
+        };
+        let ((status, elapsed), _) = tokio::join!(poll, enqueue);
+        assert_eq!(status, reqwest::StatusCode::OK, "round {round}");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "round {round}: missed the enqueue, woke after {elapsed:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -321,7 +370,7 @@ async fn result_completes_wait() {
 }
 
 #[tokio::test]
-async fn heartbeat_marks_online_and_stores_metrics() {
+async fn heartbeat_updates_last_seen_and_metrics() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
     let (server_id, server_token) = joined(&srv, "heartbeat").await;
@@ -384,6 +433,9 @@ async fn heartbeat_marks_online_and_stores_metrics() {
     assert_eq!(got.status(), reqwest::StatusCode::OK);
     let got_body: Value = got.json().await.expect("server body is json");
     assert_eq!(got_body["status"], json!("online"));
+    assert_eq!(got_body["load1"], json!(0.5));
+    assert_eq!(got_body["mem_free_mb"], json!(1024));
+    assert_eq!(got_body["disk_free_mb"], json!(2048));
 
     // The metrics batch landed in `site_metrics`.
     let row = sqlx::query("SELECT COUNT(*) AS c FROM site_metrics WHERE site_id = $1")
@@ -396,7 +448,7 @@ async fn heartbeat_marks_online_and_stores_metrics() {
 }
 
 #[tokio::test]
-async fn redelivered_command_is_idempotent() {
+async fn new_boot_id_requeues_delivered_commands() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
     let (server_id, server_token) = joined(&srv, "redeliver").await;
@@ -492,7 +544,7 @@ async fn redelivered_command_is_idempotent() {
 }
 
 #[tokio::test]
-async fn result_is_scoped_to_authed_server() {
+async fn other_servers_command_result_is_404() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
     let (_server_a, token_a) = joined(&srv, "scope-a").await;

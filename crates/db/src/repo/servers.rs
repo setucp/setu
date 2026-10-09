@@ -62,6 +62,10 @@ pub struct Server {
     pub cordoned: bool,
     pub is_control_plane: bool,
     pub created_at: DateTime<Utc>,
+    /// Load figures of the latest heartbeat (`None` before the first).
+    pub load1: Option<f64>,
+    pub mem_free_mb: Option<i64>,
+    pub disk_free_mb: Option<i64>,
 }
 
 impl Server {
@@ -158,6 +162,9 @@ impl From<JoinError> for AppError {
 pub struct HeartbeatInput<'h> {
     pub agent_version: &'h str,
     pub boot_id: Option<&'h str>,
+    pub load1: f64,
+    pub mem_free_mb: i64,
+    pub disk_free_mb: i64,
     pub metrics: &'h [setu_proto::SiteMetric],
 }
 
@@ -205,7 +212,7 @@ impl<'a> Servers<'a> {
                  RETURNING id, short_id, name, hostname, public_ip, token_hash, join_token_hash,
                     join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,
                     boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,
-                    is_control_plane, created_at",
+                    is_control_plane, created_at, load1, mem_free_mb, disk_free_mb",
                 setu_common::new_id(),
                 crate::repo::random_short_id(),
                 name,
@@ -266,7 +273,7 @@ impl<'a> Servers<'a> {
                  RETURNING id, short_id, name, hostname, public_ip, token_hash, join_token_hash,
                     join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,
                     boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,
-                    is_control_plane, created_at",
+                    is_control_plane, created_at, load1, mem_free_mb, disk_free_mb",
                 row.id,
                 hash_token(&server_token),
                 input.nonce,
@@ -314,7 +321,7 @@ impl<'a> Servers<'a> {
             "SELECT id, short_id, name, hostname, public_ip, token_hash, join_token_hash,
                     join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,
                     boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,
-                    is_control_plane, created_at FROM servers WHERE id = $1",
+                    is_control_plane, created_at, load1, mem_free_mb, disk_free_mb FROM servers WHERE id = $1",
             row.id,
         )
         .fetch_one(&mut *tx)
@@ -331,7 +338,7 @@ impl<'a> Servers<'a> {
             "SELECT id, short_id, name, hostname, public_ip, token_hash, join_token_hash,
                     join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,
                     boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,
-                    is_control_plane, created_at FROM servers WHERE token_hash = $1",
+                    is_control_plane, created_at, load1, mem_free_mb, disk_free_mb FROM servers WHERE token_hash = $1",
             hash_token(server_token_plain),
         )
         .fetch_optional(self.pool)
@@ -345,7 +352,7 @@ impl<'a> Servers<'a> {
             "SELECT id, short_id, name, hostname, public_ip, token_hash, join_token_hash,
                     join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,
                     boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,
-                    is_control_plane, created_at FROM servers WHERE id = $1",
+                    is_control_plane, created_at, load1, mem_free_mb, disk_free_mb FROM servers WHERE id = $1",
             id,
         )
         .fetch_optional(self.pool)
@@ -360,7 +367,7 @@ impl<'a> Servers<'a> {
             "SELECT id, short_id, name, hostname, public_ip, token_hash, join_token_hash,
                     join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,
                     boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,
-                    is_control_plane, created_at FROM servers ORDER BY name, id",
+                    is_control_plane, created_at, load1, mem_free_mb, disk_free_mb FROM servers ORDER BY name, id",
         )
         .fetch_all(self.pool)
         .await
@@ -387,6 +394,7 @@ impl<'a> Servers<'a> {
             "UPDATE servers SET
                  last_seen_at = now(), agent_version = $2,
                  boot_id = COALESCE($3, boot_id),
+                 load1 = $5, mem_free_mb = $6, disk_free_mb = $7,
                  join_token_sealed = CASE
                      WHEN joined_at < now() - make_interval(secs => $4) THEN NULL
                      ELSE join_token_sealed END
@@ -395,6 +403,9 @@ impl<'a> Servers<'a> {
             hb.agent_version,
             hb.boot_id,
             JOIN_RETRY_WINDOW_SECS as f64,
+            hb.load1,
+            hb.mem_free_mb,
+            hb.disk_free_mb,
         )
         .execute(&mut *tx)
         .await
@@ -414,7 +425,7 @@ impl<'a> Servers<'a> {
             "UPDATE servers SET cordoned = $2 WHERE id = $1 RETURNING id, short_id, name, hostname, public_ip, token_hash, join_token_hash,
                     join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,
                     boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,
-                    is_control_plane, created_at",
+                    is_control_plane, created_at, load1, mem_free_mb, disk_free_mb",
             id,
             cordoned,
         )

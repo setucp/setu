@@ -4,7 +4,7 @@
 //! never sessions or cookies, so these routes sit outside the CSRF layer
 //! (wired in [`super::router`]). Server `status` stays `pending` until
 //! the first join and is otherwise computed from `last_seen_at` at read
-//! time ([`super::servers::effective_status`]), so no write path here
+//! time ([`super::servers::ServerOut::from_row`]), so no write path here
 //! needs to flip it.
 
 use std::time::Duration;
@@ -24,13 +24,8 @@ use crate::state::AppState;
 
 use super::ApiJson;
 
-/// Long-poll ceiling: default and cap (spec §4: `?wait=30`).
+/// Long-poll ceiling: default and cap (spec §5: `?wait=30`).
 const MAX_WAIT_SECS: u64 = 30;
-/// Queue poll cadence inside the long-poll window. Task 8 review ruling
-/// (see `docs/plans/2026-10-09-setu-mvp.ledger.md`): plain DB polling is
-/// fine at MVP scale, no `Notify`; `DbAgentClient` keeps its own 500 ms
-/// `wait`. Kept as a named const so the cadence is greppable/tunable.
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// The agent behind `Authorization: Bearer <server token>`, or 401. The
 /// scheme match is case-insensitive (RFC 7235); a missing header, a wrong
@@ -125,10 +120,13 @@ fn parse_wait(raw: Option<String>) -> Result<Duration, AppError> {
 }
 
 /// The next undelivered command for this server (200), or 204 when none
-/// arrives within the wait window. Delivery marks the command delivered
-/// and counts the attempt; a new agent `boot_id` requeues delivered
-/// commands (spec §5). Polled per server at 600/min
-/// (spec §7); past that the poll is 429.
+/// arrives within the wait window. The poll subscribes to the
+/// [`crate::notifier::Notifier`] BEFORE it checks the queue, then sleeps
+/// until a `setu_commands` notification for this server (or the 5 s
+/// fallback tick) and checks again, so an enqueue racing the check is
+/// never missed. Delivery marks the command delivered; a new agent
+/// `boot_id` requeues delivered commands (spec §5). More than 600 polls
+/// per server per minute is 429.
 #[utoipa::path(
     get,
     path = "/agent/v1/commands",
@@ -150,15 +148,21 @@ pub async fn commands(
     state.check_agent_rate(&server.id).await?;
     let budget = parse_wait(query.wait)?;
     let deadline = tokio::time::Instant::now() + budget;
+    // Subscribe first: a notification sent after this line is seen even
+    // when its command committed after the check below.
+    let mut wakeups = state.notifier.subscribe(&server.id);
     loop {
         if let Some(envelope) = state.db.commands().next_for(&server.id).await? {
             return Ok(Json(envelope).into_response());
         }
-        if tokio::time::Instant::now() >= deadline {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
             return Ok(StatusCode::NO_CONTENT.into_response());
         }
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        tokio::time::sleep(remaining.min(POLL_INTERVAL)).await;
+        tokio::select! {
+            () = wakeups.notified() => {}
+            () = tokio::time::sleep(remaining.min(crate::notifier::FALLBACK_TICK)) => {}
+        }
     }
 }
 
@@ -227,6 +231,9 @@ pub async fn heartbeat(
             &setu_db::HeartbeatInput {
                 agent_version: &body.agent_version,
                 boot_id,
+                load1: body.load1,
+                mem_free_mb: i64::try_from(body.mem_free_mb).unwrap_or(i64::MAX),
+                disk_free_mb: i64::try_from(body.disk_free_mb).unwrap_or(i64::MAX),
                 metrics: &body.metrics,
             },
         )

@@ -15,7 +15,7 @@
         "tags": [
           "super::agent"
         ],
-        "summary": "The next undelivered command for this server (200), or 204 when none\narrives within the wait window. Delivery marks the command delivered\nand counts the attempt; a new agent `boot_id` requeues delivered\ncommands (spec §5). Polled per server at 600/min\n(spec §7); past that the poll is 429.",
+        "summary": "The next undelivered command for this server (200), or 204 when none\narrives within the wait window. The poll subscribes to the\n[`crate::notifier::Notifier`] BEFORE it checks the queue, then sleeps\nuntil a `setu_commands` notification for this server (or the 5 s\nfallback tick) and checks again, so an enqueue racing the check is\nnever missed. Delivery marks the command delivered; a new agent\n`boot_id` requeues delivered commands (spec §5). More than 600 polls\nper server per minute is 429.",
         "operationId": "commands",
         "parameters": [
           {
@@ -476,7 +476,7 @@
         "tags": [
           "super::auth"
         ],
-        "summary": "Log in: verify the argon2id hash, rotate the session id (fixation\nguard), store the operator id, and return the operator. Failures count\nper source IP: 10 within 15 minutes → 429 on subsequent attempts.",
+        "summary": "Log in: verify the argon2id hash, start a fresh session (a new random\ncookie, never the one the request carried: fixation guard) and return\nthe operator. Failures count per client IP (spec §7, behind Caddy or a\ntrusted proxy the forwarded address): 10 within 15 minutes → 429.",
         "operationId": "login",
         "requestBody": {
           "content": {
@@ -509,6 +509,16 @@
               }
             }
           },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "429": {
             "description": "",
             "content": {
@@ -527,7 +537,7 @@
         "tags": [
           "super::auth"
         ],
-        "summary": "Log out: destroy the session. Anonymous callers get 401 (checked first,",
+        "summary": "Log out: destroy the session row and clear the cookie. Anonymous\ncallers get 401.",
         "operationId": "logout",
         "responses": {
           "204": {
@@ -717,6 +727,28 @@
         }
       }
     },
+    "/api/v1/openapi.json": {
+      "get": {
+        "tags": [],
+        "summary": "The OpenAPI document (viewer and above).",
+        "operationId": "openapi_json",
+        "responses": {
+          "200": {
+            "description": "This API's OpenAPI 3.1 document"
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/operators": {
       "get": {
         "tags": [
@@ -815,6 +847,81 @@
             }
           },
           "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operators/{id}/password": {
+      "put": {
+        "tags": [
+          "super::operators"
+        ],
+        "summary": "Change a password: your own (with `current_password`), or anyone's\nas the owner. Every session of that operator ends (spec §3); changing\nyour own starts a fresh session for this browser.",
+        "operationId": "set_password",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Operator id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
             "description": "",
             "content": {
               "application/json": {
@@ -1274,12 +1381,84 @@
         }
       }
     },
+    "/api/v1/servers/{id}/cordon": {
+      "post": {
+        "tags": [
+          "super::servers"
+        ],
+        "summary": "Cordon or uncordon a server (operator and above): a cordoned server\ntakes no new sites (provision `validate` and placement refuse it);\nits running sites are untouched.",
+        "operationId": "cordon",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Server id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CordonRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/setup": {
       "get": {
         "tags": [
           "super::setup"
         ],
-        "summary": "Setup status (public, no auth): whether the first owner still needs\ncreating, plus the public URL for the wizard to display.",
+        "summary": "Setup status (public, no auth).",
         "operationId": "status",
         "responses": {
           "200": {
@@ -1298,7 +1477,7 @@
         "tags": [
           "super::setup"
         ],
-        "summary": "Create the owner operator. Public, exactly once: while at least one\noperator exists this is 409 `conflict` regardless of authentication.",
+        "summary": "Create the owner with the setup token. 401 on a wrong token, 201 once,\n409 for everyone once any operator exists.",
         "operationId": "create_owner",
         "requestBody": {
           "content": {
@@ -1331,6 +1510,16 @@
               }
             }
           },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "409": {
             "description": "",
             "content": {
@@ -1349,7 +1538,7 @@
         "tags": [
           "super::setup"
         ],
-        "summary": "Register the local server (operator and above): a pending server\nnamed after the hostname plus the `setu agent install` command.",
+        "summary": "Register this box as a pending control-plane server (owner only).",
         "operationId": "local_server",
         "requestBody": {
           "content": {
@@ -1501,7 +1690,7 @@
         "tags": [
           "super::sites"
         ],
-        "summary": "One site (viewer and above).",
+        "summary": "One site with its latest metric sample (viewer and above).",
         "operationId": "get",
         "parameters": [
           {
@@ -1520,7 +1709,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SiteOut"
+                  "$ref": "#/components/schemas/SiteDetailOut"
                 }
               }
             }
@@ -1693,6 +1882,97 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BackupJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}/backups/{bid}": {
+      "delete": {
+        "tags": [
+          "super::backups"
+        ],
+        "summary": "Delete a backup's files on its server (operator and above): 202 with a\nserver-level `delete_backup` job (it serialises with nothing on the\nsite); the row ends `deleted` and leaves the list. 409 when the backup\nis already deleted or a delete is already queued.",
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bid",
+            "in": "path",
+            "description": "Backup id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupJobResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -1961,6 +2241,97 @@
             }
           },
           "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}/env/{name}/reveal": {
+      "post": {
+        "tags": [
+          "super::sites"
+        ],
+        "summary": "Reveal one env value (operator and above) after re-checking the\ncaller's password (argon2). Every call is audited: `env.reveal` when\nthe value is returned, `env.reveal_denied` on a wrong password, with\ntarget `<site id>:<NAME>`. Wrong passwords count toward the login\nlimiter of the client IP.",
+        "operationId": "env_reveal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Env var name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevealRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevealOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
             "description": "",
             "content": {
               "application/json": {
@@ -2613,23 +2984,30 @@
         "type": "object",
         "required": [
           "id",
-          "site_id",
+          "site_name",
+          "domain",
           "taken_at",
-          "location",
           "kind",
           "status"
         ],
         "properties": {
+          "domain": {
+            "type": "string"
+          },
           "id": {
             "type": "string"
           },
           "kind": {
             "type": "string"
           },
-          "location": {
-            "type": "string"
-          },
           "site_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` once the site is deleted (the backup outlives it)."
+          },
+          "site_name": {
             "type": "string"
           },
           "size_bytes": {
@@ -3185,6 +3563,17 @@
           "output": {}
         }
       },
+      "CordonRequest": {
+        "type": "object",
+        "required": [
+          "cordoned"
+        ],
+        "properties": {
+          "cordoned": {
+            "type": "boolean"
+          }
+        }
+      },
       "CreateOperatorRequest": {
         "type": "object",
         "required": [
@@ -3249,11 +3638,11 @@
         "properties": {
           "install_command": {
             "type": "string",
-            "description": "One-line installer using the single binary."
+            "description": "`setu agent install --control-plane <public_url>` (no token)."
           },
           "join_token": {
             "type": "string",
-            "description": "Single-use join token (valid 1 hour); shown once."
+            "description": "Single-use join token (valid 1 hour); shown once. Pass it to the\ninstall command as `SETU_JOIN_TOKEN` or on stdin."
           },
           "server": {
             "$ref": "#/components/schemas/ServerOut"
@@ -3713,11 +4102,11 @@
         "properties": {
           "install_command": {
             "type": "string",
-            "description": "One-line installer reusing the already installed `setu` binary."
+            "description": "`setu agent install --control-plane …` for this box (no token)."
           },
           "join_token": {
             "type": "string",
-            "description": "Single-use join token (valid 1 hour); shown once."
+            "description": "Single-use join token (valid 1 hour); shown once. Pass it as\n`SETU_JOIN_TOKEN` or on stdin, never on the command line."
           },
           "server": {
             "$ref": "#/components/schemas/ServerOut"
@@ -3916,6 +4305,34 @@
           }
         }
       },
+      "RevealOut": {
+        "type": "object",
+        "description": "The plaintext of one env value. Holds a secret: `Debug` redacts it.",
+        "required": [
+          "name",
+          "value"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "RevealRequest": {
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The caller's own password (re-authentication)."
+          }
+        }
+      },
       "ServerListOut": {
         "type": "object",
         "required": [
@@ -3936,6 +4353,8 @@
           "id",
           "name",
           "status",
+          "cordoned",
+          "is_control_plane",
           "created_at",
           "updated_at"
         ],
@@ -3951,6 +4370,10 @@
               "string",
               "null"
             ]
+          },
+          "cordoned": {
+            "type": "boolean",
+            "description": "No new sites are placed on a cordoned server."
           },
           "cpu_cores": {
             "type": [
@@ -3986,6 +4409,10 @@
           "id": {
             "type": "string"
           },
+          "is_control_plane": {
+            "type": "boolean",
+            "description": "The control plane's own box (`POST /setup/local-server`)."
+          },
           "last_seen_at": {
             "type": [
               "string",
@@ -3998,7 +4425,8 @@
               "number",
               "null"
             ],
-            "format": "double"
+            "format": "double",
+            "description": "From the latest heartbeat (`null` before the first)."
           },
           "mem_free_mb": {
             "type": [
@@ -4025,7 +4453,7 @@
           },
           "status": {
             "type": "string",
-            "description": "Effective status: `pending` until first join, then `online` while\n`last_seen_at` is within 60 s, else `offline` (computed at read\ntime, spec §3/Task 8)."
+            "description": "Computed on read (spec §3): `pending` until the first join, then\n`online` while `last_seen_at` is within 60 s, else `offline`."
           },
           "updated_at": {
             "type": "string",
@@ -4033,9 +4461,28 @@
           }
         }
       },
+      "SetPasswordRequest": {
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Required when changing your own password."
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
       "SetupRequest": {
         "type": "object",
         "required": [
+          "token",
           "email",
           "password"
         ],
@@ -4045,6 +4492,10 @@
           },
           "password": {
             "type": "string"
+          },
+          "token": {
+            "type": "string",
+            "description": "The one-time token from `<data_dir>/setup-token`."
           }
         }
       },
@@ -4061,9 +4512,32 @@
           },
           "public_url": {
             "type": "string",
-            "description": "The configured `SETU_PUBLIC_URL`, shown by the wizard."
+            "description": "The configured `public_url`, shown by the wizard."
           }
         }
+      },
+      "SiteDetailOut": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SiteOut"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "metrics": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SiteMetricOut"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "`GET /sites/{id}`: the site plus its latest metric sample."
       },
       "SiteJobResponse": {
         "type": "object",
@@ -4128,6 +4602,34 @@
           }
         }
       },
+      "SiteMetricOut": {
+        "type": "object",
+        "description": "The newest 1-minute sample of a site (spec §3 `site_metrics`).",
+        "required": [
+          "at",
+          "cpu_seconds",
+          "memory_bytes",
+          "disk_bytes"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cpu_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "disk_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "SiteOut": {
         "type": "object",
         "description": "One site row (the sealed `env` is never included; see `./env`).",
@@ -4141,7 +4643,6 @@
           "domain",
           "status",
           "port",
-          "data_dir",
           "db_name",
           "owner_email",
           "created_at",
@@ -4157,9 +4658,6 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
-          },
-          "data_dir": {
-            "type": "string"
           },
           "db_name": {
             "type": "string"
@@ -4331,6 +4829,16 @@
           "version"
         ],
         "properties": {
+          "prompts": {
+            "type": "object",
+            "description": "Answers for `prompt` rules the target version adds (sealed into\nthe job; existing answers are kept by name).",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "version": {
             "type": "string"
           }

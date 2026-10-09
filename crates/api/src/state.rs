@@ -1,5 +1,5 @@
-//! Shared handler state: database, sealer, config, agent client and the
-//! in-memory login rate-limit table.
+//! Shared handler state: database, sealer, config, clock, agent client,
+//! the command notifier and the in-memory rate-limit tables.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 
 use setu_common::{AppError, Config, Sealer};
 use setu_db::Db;
-use setu_jobs::AgentClient;
+use setu_jobs::{AgentClient, Clock};
+
+use crate::notifier::Notifier;
 
 /// Failed logins per source IP within [`RATE_LIMIT_WINDOW`]; at
 /// [`MAX_LOGIN_FAILURES`] the next attempt is rejected with 429.
@@ -33,7 +35,11 @@ pub struct AppState {
     pub db: Db,
     pub sealer: Sealer,
     pub config: Config,
+    /// The same clock the runner and scheduler use (server status).
+    pub clock: Arc<dyn Clock>,
     pub agent: Arc<dyn AgentClient>,
+    /// Wakes `GET /agent/v1/commands` long polls on enqueue.
+    pub notifier: Notifier,
     login_failures: Arc<tokio::sync::Mutex<HashMap<IpAddr, Vec<Instant>>>>,
     agent_polls: Arc<tokio::sync::Mutex<HashMap<String, Vec<Instant>>>>,
     agent_poll_limit: usize,
@@ -51,12 +57,24 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
-    pub fn new(db: Db, sealer: Sealer, config: Config, agent: Arc<dyn AgentClient>) -> Self {
+    /// Build the state and start the command notifier's listener (on its
+    /// own connection from `db`'s pool options), so this must run inside
+    /// a tokio runtime.
+    pub fn new(
+        db: Db,
+        sealer: Sealer,
+        config: Config,
+        clock: Arc<dyn Clock>,
+        agent: Arc<dyn AgentClient>,
+    ) -> Self {
+        let notifier = Notifier::spawn(db.pool().clone());
         Self {
             db,
             sealer,
             config,
+            clock,
             agent,
+            notifier,
             login_failures: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             agent_polls: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             agent_poll_limit: MAX_AGENT_POLLS,

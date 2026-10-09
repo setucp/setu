@@ -356,6 +356,9 @@ async fn heartbeat_reports_boot_change_and_keeps_own_metrics() {
     let hb = |boot: &'static str, m: &'static [setu_proto::SiteMetric]| setu_db::HeartbeatInput {
         agent_version: "0.1.0",
         boot_id: Some(boot),
+        load1: 0.25,
+        mem_free_mb: 512,
+        disk_free_mb: 4096,
         metrics: m,
     };
     let metrics: &'static [setu_proto::SiteMetric] =
@@ -366,6 +369,12 @@ async fn heartbeat_reports_boot_change_and_keeps_own_metrics() {
         .await
         .unwrap();
     assert!(first.boot_changed, "no boot id stored yet");
+    let stored = db.servers().get(&site.server_id).await.unwrap();
+    assert_eq!(
+        (stored.load1, stored.mem_free_mb, stored.disk_free_mb),
+        (Some(0.25), Some(512), Some(4096)),
+        "heartbeat stores the load figures"
+    );
     let same = db
         .servers()
         .heartbeat(&site.server_id, &hb("b1", &[]))
@@ -970,6 +979,9 @@ async fn settings_and_backups_round_trip() {
         db.settings().get("k").await.unwrap(),
         Some(serde_json::json!({"a": 2}))
     );
+    db.settings().delete("k").await.unwrap();
+    assert!(db.settings().get("k").await.unwrap().is_none());
+    db.settings().delete("k").await.unwrap();
 
     let site = site(&db).await;
     let mut scheduled = Vec::new();

@@ -1,9 +1,8 @@
 //! The one `setu` binary (spec §8): `serve` is the control plane,
 //! `agent …` the per-server agent and `helper …` its privileged writer
-//! (both from the `setu-agent` library crate), plus operator management
-//! and OpenAPI export.
+//! (both from the `setu-agent` library crate), plus operator management,
+//! the control plane's own database backup and OpenAPI export.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
@@ -33,6 +32,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: OperatorCmd,
     },
+    /// Dump the control plane's database (`pg_dump -Fc`) to `--out`.
+    Backup {
+        /// Destination file.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
     /// Write the OpenAPI document to `openapi.json` (default) or `--out`.
     Openapi {
         /// Destination file.
@@ -51,12 +56,11 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum OperatorCmd {
-    /// Create an operator (`--role` defaults to `owner`).
+    /// Create an operator (`--role` defaults to `owner`). The password
+    /// comes from `SETU_OPERATOR_PASSWORD`, else the first line of stdin.
     Create {
         #[arg(long)]
         email: String,
-        #[arg(long)]
-        password: String,
         #[arg(long, default_value = "owner")]
         role: String,
     },
@@ -69,12 +73,9 @@ async fn main() {
         Cmd::Serve => serve().await,
         Cmd::Migrate => migrate().await,
         Cmd::Operator { cmd } => match cmd {
-            OperatorCmd::Create {
-                email,
-                password,
-                role,
-            } => operator_create(&email, &password, &role).await,
+            OperatorCmd::Create { email, role } => operator_create(&email, &role).await,
         },
+        Cmd::Backup { out } => backup(&out),
         Cmd::Openapi { out } => openapi(&out).await,
         Cmd::Agent { cmd } => setu_agent::cli::run_agent(cmd)
             .await
@@ -111,13 +112,23 @@ async fn serve() -> Result<(), String> {
     let config = load_config()?;
     let db = connect_and_migrate(&config).await?;
     db.plans().seed_default().await.map_err(|e| e.message)?;
+    // First boot (zero operators): the one-time setup token (spec §8).
+    setu_api::rest::setup::ensure_setup_token(&db, &config.data_dir)
+        .await
+        .map_err(|e| format!("setup token: {}", e.message))?;
     let sealer = Sealer::new(&config.secret_key);
     let agent: Arc<dyn setu_jobs::AgentClient> = Arc::new(DbAgentClient::new(db.clone()));
-    let state = setu_api::AppState::new(db.clone(), sealer.clone(), config.clone(), agent.clone());
     let clock: Arc<dyn setu_jobs::Clock> = Arc::new(setu_jobs::SystemClock);
+    let state = setu_api::AppState::new(
+        db.clone(),
+        sealer.clone(),
+        config.clone(),
+        clock.clone(),
+        agent.clone(),
+    );
     // Job runner (leases, renewal, two installs per server) and the
     // scheduler (nightly backups, retention, metric/command/session
-    // pruning), both spec §6 defaults.
+    // pruning), both spec §6 defaults, on the state's clock.
     let _runner = setu_jobs::Runner::spawn(
         db.clone(),
         agent,
@@ -128,27 +139,13 @@ async fn serve() -> Result<(), String> {
     let _scheduler =
         setu_jobs::Scheduler::spawn(db.clone(), clock, setu_jobs::SchedulerConfig::default());
     let app = setu_api::rest::router(state);
-    // Unix-socket serving (behind Caddy) arrives with the listen module
-    // (rev3 WS8); until then only TCP is served.
-    let addr: SocketAddr = match &config.listen {
-        setu_common::Listen::Tcp(addr) => *addr,
-        setu_common::Listen::Unix(path) => {
-            return Err(format!(
-                "listen = unix:{} is not supported by this build yet",
-                path.display()
-            ))
-        }
-    };
-    tracing::info!("setu serve listening on {addr}");
-    let listener = tokio::net::TcpListener::bind(addr)
+    let bound = setu_api::listen::bind(&config.listen)
         .await
-        .map_err(|e| format!("cannot bind {addr}: {e}"))?;
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await
-    .map_err(|e| format!("server error: {e}"))?;
+        .map_err(|e| format!("cannot listen on {}: {e}", config.listen))?;
+    tracing::info!("setu serve listening on {}", bound.describe());
+    setu_api::listen::serve(bound, app)
+        .await
+        .map_err(|e| format!("server error: {e}"))?;
     Ok(())
 }
 
@@ -159,22 +156,33 @@ async fn migrate() -> Result<(), String> {
     Ok(())
 }
 
-async fn operator_create(email: &str, password: &str, role: &str) -> Result<(), String> {
+async fn operator_create(email: &str, role: &str) -> Result<(), String> {
     if !matches!(role, "owner" | "operator" | "viewer") {
         return Err(format!("unknown role {role}"));
     }
+    let password = setu_api::cli::read_operator_password(
+        std::env::var(setu_api::cli::OPERATOR_PASSWORD_ENV).ok(),
+        &mut std::io::stdin().lock(),
+    )?;
     if password.len() < 8 {
         return Err("password must be at least 8 characters".to_string());
     }
     let config = load_config()?;
     let db = connect_and_migrate(&config).await?;
-    let hash = setu_api::auth::hash_password(password).map_err(|e| e.message)?;
+    let hash = setu_api::auth::hash_password(&password).map_err(|e| e.message)?;
     let op = db
         .operators()
         .create(email, &hash, role)
         .await
         .map_err(|e| e.message)?;
     println!("created operator {} ({})", op.email, op.id);
+    Ok(())
+}
+
+fn backup(out: &std::path::Path) -> Result<(), String> {
+    let config = load_config()?;
+    setu_api::cli::backup(&setu_api::cli::ProcessRunner, &config.database_url, out)?;
+    println!("wrote {}", out.display());
     Ok(())
 }
 

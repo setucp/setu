@@ -16,18 +16,15 @@ use axum::{
     extract::{FromRequest, Request, State},
     middleware,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use serde::Serialize;
 use setu_common::AppError;
-use tower_sessions::{cookie::SameSite, Expiry, SessionManagerLayer};
-use utoipa::{OpenApi, ToSchema};
-use utoipa_swagger_ui::SwaggerUi;
+use utoipa::ToSchema;
 
 use super::auth as authn;
 use super::embed;
-use super::session_store::PgSessionStore;
 use super::state::AppState;
 
 /// `{ "error": { "code": "...", "message": "..." } }` (spec §6).
@@ -63,27 +60,23 @@ where
     }
 }
 
-/// `Secure` cookies only when the control plane is served over https, i.e.
-/// when `public_url` has the `https` scheme. Plain-http deployments (local
-/// dev, http test servers) must not set it or browsers/proxies would drop
-/// the session cookie.
-pub(crate) fn use_secure_cookies(public_url: &url::Url) -> bool {
-    public_url.scheme() == "https"
-}
-
-/// Assemble the full control-plane router: health probes, `/api/v1`, the
-/// OpenAPI document and Swagger UI. The session layer wraps everything so
-/// the `Session` extractor works in every `/api/v1` handler.
+/// Assemble the full control-plane router: health probes, `/api/v1`
+/// (sessions, the `Origin` guard, the OpenAPI document behind a session;
+/// no Swagger UI, spec §7), `/agent/v1` (bearer tokens) and the embedded
+/// UI. Serve it with `connect_info::<listen::Peer>` (see
+/// [`crate::listen::serve`]).
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(auth::me))
         .route("/operators", get(operators::list).post(operators::create))
+        .route("/operators/{id}/password", put(operators::set_password))
         .route("/setup", get(setup::status).post(setup::create_owner))
         .route("/setup/local-server", post(setup::local_server))
         .route("/servers", get(servers::list).post(servers::create))
         .route("/servers/{id}", get(servers::get).delete(servers::delete))
+        .route("/servers/{id}/cordon", post(servers::cordon))
         .route("/apps", get(apps::list).post(apps::publish))
         .route("/apps/validate", post(apps::validate))
         .route("/apps/{id}/versions", get(apps::versions))
@@ -97,17 +90,27 @@ pub fn router(state: AppState) -> Router {
         .route("/sites/{id}/update", post(sites::update))
         .route("/sites/{id}/retry", post(sites::retry))
         .route("/sites/{id}/env", get(sites::env_get).put(sites::env_put))
+        .route("/sites/{id}/env/{name}/reveal", post(sites::env_reveal))
         .route("/sites/{id}/logs", get(sites::logs))
         .route(
             "/sites/{id}/backups",
             get(backups::list).post(backups::create),
         )
+        .route("/sites/{id}/backups/{bid}", delete(backups::delete))
         .route("/sites/{id}/backups/{bid}/restore", post(backups::restore))
         .route("/jobs", get(jobs::list))
         .route("/jobs/{id}", get(jobs::get))
         .route("/jobs/{id}/log", get(jobs::log))
         .route("/audit", get(jobs::audit_list))
-        .layer(middleware::from_fn(authn::csrf_middleware))
+        .route("/openapi.json", get(docs::openapi_json))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            authn::csrf_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            authn::session::session_middleware,
+        ))
         .with_state(state.clone());
 
     // Agent protocol (spec §4): bearer tokens, never sessions, so these
@@ -119,20 +122,11 @@ pub fn router(state: AppState) -> Router {
         .route("/heartbeat", post(agent::heartbeat))
         .with_state(state.clone());
 
-    let store = PgSessionStore::new(state.db.pool().clone());
-    let secure = use_secure_cookies(&state.config.public_url);
-    let session_layer = SessionManagerLayer::new(store)
-        .with_name("setu_session")
-        .with_secure(secure)
-        .with_same_site(SameSite::Lax)
-        .with_expiry(Expiry::OnInactivity(time::Duration::hours(24)));
-
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .nest("/api/v1", api)
         .nest("/agent/v1", agent_api)
-        .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", docs::ApiDoc::openapi()))
         // Embedded UI (plan Task 12): `/` is the SPA shell, `/assets/*`
         // the fingerprinted bundle, everything else client-side routing.
         // The API nests above win over these, and unknown `/api/*` or
@@ -141,7 +135,6 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(embed::index))
         .route("/assets/{*path}", get(embed::asset))
         .fallback(embed::fallback)
-        .layer(session_layer)
         .with_state(state)
 }
 
@@ -178,23 +171,4 @@ pub async fn readyz(State(state): State<AppState>) -> Result<impl IntoResponse, 
         status: "ok".to_string(),
         database: "up".to_string(),
     }))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn secure_cookie_flag_follows_public_url_scheme() {
-        let http: url::Url = "http://127.0.0.1:7000".parse().expect("http url parses");
-        assert!(
-            !use_secure_cookies(&http),
-            "http public_url must not set Secure"
-        );
-        let https: url::Url = "https://control.example".parse().expect("https url parses");
-        assert!(
-            use_secure_cookies(&https),
-            "https public_url must set Secure"
-        );
-    }
 }

@@ -3,10 +3,8 @@
 //! Reads are viewer-and-above; creation and updates are owner-only
 //! (operators may not touch plans, per the authz matrix).
 
-use std::net::SocketAddr;
-
 use axum::{
-    extract::{ConnectInfo, Path, State},
+    extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -14,10 +12,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use setu_common::AppError;
-use tower_sessions::Session;
 use utoipa::ToSchema;
 
-use crate::auth::{audit, audit_ip, require_role, Role};
+use crate::auth::{audit, require_role, ClientIp, Role, Session};
 use crate::state::AppState;
 
 use super::ApiJson;
@@ -111,7 +108,7 @@ pub async fn list(
     State(state): State<AppState>,
     session: Session,
 ) -> Result<impl IntoResponse, AppError> {
-    require_role(&session, &state.db, Role::Viewer).await?;
+    require_role(&session, Role::Viewer).await?;
     let plans = state.db.plans().list().await?;
     Ok(Json(PlanListOut {
         plans: plans.iter().map(PlanOut::from_row).collect(),
@@ -134,10 +131,10 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     session: Session,
-    peer: ConnectInfo<SocketAddr>,
+    ip: ClientIp,
     ApiJson(body): ApiJson<CreatePlanRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let caller = require_role(&session, &state.db, Role::Owner).await?;
+    let caller = require_role(&session, Role::Owner).await?;
     if body.name.trim().is_empty() {
         return Err(AppError::validation("plan name must not be empty"));
     }
@@ -148,7 +145,7 @@ pub async fn create(
         Some(&caller.id),
         "plan.create",
         Some(&plan.id),
-        audit_ip(None, Some(peer.0)).as_deref(),
+        ip.as_deref(),
     )
     .await;
     Ok((StatusCode::CREATED, Json(PlanOut::from_row(&plan))))
@@ -170,7 +167,7 @@ pub async fn get(
     session: Session,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_role(&session, &state.db, Role::Viewer).await?;
+    require_role(&session, Role::Viewer).await?;
     let plan = state.db.plans().get(&id).await?;
     Ok(Json(PlanOut::from_row(&plan)))
 }
@@ -193,11 +190,11 @@ pub async fn get(
 pub async fn update(
     State(state): State<AppState>,
     session: Session,
-    peer: ConnectInfo<SocketAddr>,
+    ip: ClientIp,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<UpdatePlanRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let caller = require_role(&session, &state.db, Role::Owner).await?;
+    let caller = require_role(&session, Role::Owner).await?;
     if body.name.trim().is_empty() {
         return Err(AppError::validation("plan name must not be empty"));
     }
@@ -208,7 +205,7 @@ pub async fn update(
         Some(&caller.id),
         "plan.update",
         Some(&plan.id),
-        audit_ip(None, Some(peer.0)).as_deref(),
+        ip.as_deref(),
     )
     .await;
     Ok(Json(PlanOut::from_row(&plan)))

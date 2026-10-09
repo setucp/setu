@@ -50,6 +50,7 @@ describe("setup wizard", () => {
         return json(needed);
       }
       if (url.endsWith("/api/v1/setup")) {
+        expect(JSON.parse(String(init?.body))).toMatchObject({ token: "tok-123" });
         return json(
           {
             id: "op1",
@@ -75,12 +76,14 @@ describe("setup wizard", () => {
               id: "srv1",
               name: "local-server",
               status: "pending",
+              cordoned: false,
+              is_control_plane: true,
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
             },
             join_token: "setu_join_abc",
             install_command:
-              "setu agent install --control-plane http://127.0.0.1:7000 --join-token setu_join_abc",
+              "setu agent install --control-plane http://127.0.0.1:7000",
           },
           201,
         );
@@ -100,10 +103,8 @@ describe("setup wizard", () => {
     // Real timers: the wizard polls every 2 s, so the online transition
     // lands a little after that (generous waitFor below).
     render(<SetupWizard onDone={onDone} />);
-    await userEvent.type(
-      await screen.findByLabelText(/email/i),
-      "owner@example.com",
-    );
+    await userEvent.type(await screen.findByLabelText(/setup token/i), "tok-123");
+    await userEvent.type(screen.getByLabelText(/email/i), "owner@example.com");
     await userEvent.type(screen.getByLabelText(/^password/i), "correct-horse-1");
     await userEvent.click(screen.getByRole("button", { name: /create owner/i }));
 
@@ -121,6 +122,7 @@ describe("setup wizard", () => {
         expect(screen.getByText(/setu agent install/i)).toBeInTheDocument(),
       { timeout: 8000 },
     );
+    expect(screen.getByText("setu_join_abc")).toBeInTheDocument();
 
     // The 2 s poll reads the server back as online → done.
     await waitFor(() => expect(onDone).toHaveBeenCalled(), { timeout: 8000 });

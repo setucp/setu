@@ -32,10 +32,12 @@ What it does, in order:
    `setu migrate` as `ExecStartPre`), starts it, waits for `/healthz`.
 7. Prints the setup URL: `http://<ip>:7000/setup`.
 
-Then open the setup URL: create the owner (works exactly once), note
-the panel URL, register the server, and run the shown
-`setu agent install …` line as root. That is the whole single-node
-install.
+Then open the setup URL: paste the one-time setup token from
+`/var/lib/setu/setup-token` (written by `setu serve` on its first boot,
+mode 0600, removed once the owner exists), create the owner (works
+exactly once), note the panel URL, register the server, and run the
+shown `setu agent install …` line as root with the join token in
+`SETU_JOIN_TOKEN` (or on stdin). That is the whole single-node install.
 
 ## Manual install
 
@@ -45,13 +47,20 @@ install.
    `setu.toml` in the working directory):
    `SETU_DATABASE_URL`, `SETU_SECRET_KEY` (64 hex chars),
    `SETU_PUBLIC_URL`. Optional: `SETU_LISTEN` (`<ip>:<port>`, default
-   `127.0.0.1:7000`; `unix:<path>` arrives with the installer),
+   `127.0.0.1:7000`, or `unix:<path>`: a socket created 0660 for group
+   `caddy`, behind Caddy),
    `SETU_TRUSTED_PROXIES` (comma-separated IPs/CIDRs, default
    `127.0.0.1`), `SETU_DATA_DIR` (default `/var/lib/setu`).
 3. `setu migrate`, then `setu serve` (systemd unit in
    E2E.md style: `User=setu`,
    `WorkingDirectory=/etc/setu`, `ExecStart=/opt/setu/setu serve`).
-4. Open `http://<host>:7000/setup`.
+4. Open `http://<host>:7000/setup` with the token from
+   `$SETU_DATA_DIR/setup-token`. Operators can also be created on the
+   host: `SETU_OPERATOR_PASSWORD=… setu operator create --email <e>
+   [--role owner|operator|viewer]` (or pipe the password on stdin;
+   never on the command line). `setu backup --out <file>` dumps the
+   control plane's database with `pg_dump -Fc` (password via
+   `PGPASSWORD` in the child's environment).
 
 ## Upgrading
 

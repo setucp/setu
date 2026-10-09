@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE servers SET cordoned = $2 WHERE id = $1 RETURNING id, short_id, name, hostname, public_ip, token_hash, join_token_hash,\n                    join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,\n                    boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,\n                    is_control_plane, created_at",
+  "query": "UPDATE servers SET cordoned = $2 WHERE id = $1 RETURNING id, short_id, name, hostname, public_ip, token_hash, join_token_hash,\n                    join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,\n                    boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,\n                    is_control_plane, created_at, load1, mem_free_mb, disk_free_mb",
   "describe": {
     "columns": [
       {
@@ -244,6 +244,39 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "ordinal": 22,
+        "name": "load1",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "load1"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "mem_free_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "mem_free_mb"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "disk_free_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "disk_free_mb"
+          }
+        }
       }
     ],
     "parameters": {
@@ -274,8 +307,11 @@
       true,
       false,
       false,
-      false
+      false,
+      true,
+      true,
+      true
     ]
   },
-  "hash": "5e41319e34000e8b294820ad2825add9c231695549728f0213b5f0c7dfb5d5a9"
+  "hash": "59c4ee99745a437bbaca418f135f9a7732608e126d5275ec2b7805ceac6ba0a0"
 }

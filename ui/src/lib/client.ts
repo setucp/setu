@@ -297,10 +297,10 @@ export const api = {
     return request("/api/v1/setup");
   },
 
-  setupOwner(email: string, password: string): Promise<Operator> {
+  setupOwner(token: string, email: string, password: string): Promise<Operator> {
     return request("/api/v1/setup", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ token, email, password }),
     });
   },
 

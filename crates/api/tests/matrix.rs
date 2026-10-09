@@ -193,23 +193,43 @@ async fn route_matrix() {
     ctx.row(
         "POST",
         "/api/v1/setup",
-        Some(json!({"email": "late@example.com", "password": "correct-horse-1"})),
+        Some(json!({"token": "whatever", "email": "late@example.com", "password": "correct-horse-1"})),
         409,
         409,
         409,
         409,
     )
     .await;
+    // local-server is the owner's (it creates the control-plane server).
     ctx.row(
         "POST",
         "/api/v1/setup/local-server",
         Some(json!({})),
         401,
         403,
-        201,
+        403,
         201,
     )
     .await;
+
+    // Password changes: someone else's is the owner's alone.
+    ctx.row(
+        "PUT",
+        "/api/v1/operators/does-not-exist/password",
+        Some(json!({"password": "new-password-1"})),
+        401,
+        403,
+        403,
+        404,
+    )
+    .await;
+
+    // The OpenAPI document needs a session; Swagger UI is gone.
+    ctx.row("GET", "/api/v1/openapi.json", None, 401, 200, 200, 200)
+        .await;
+    ctx.row("GET", "/api/docs/", None, 404, 404, 404, 404).await;
+    ctx.row("GET", "/api/openapi.json", None, 404, 404, 404, 404)
+        .await;
 
     // Servers: reads viewer+, writes operator+.
     ctx.row("GET", "/api/v1/servers", None, 401, 200, 200, 200)
@@ -260,6 +280,26 @@ async fn route_matrix() {
         None,
         401,
         404,
+        404,
+        404,
+    )
+    .await;
+    ctx.row(
+        "POST",
+        &format!("/api/v1/servers/{keep}/cordon"),
+        Some(json!({"cordoned": true})),
+        401,
+        403,
+        200,
+        200,
+    )
+    .await;
+    ctx.row(
+        "POST",
+        "/api/v1/servers/does-not-exist/cordon",
+        Some(json!({"cordoned": false})),
+        401,
+        403,
         404,
         404,
     )
@@ -549,6 +589,27 @@ async fn route_matrix() {
         "POST",
         "/api/v1/sites/does-not-exist/backups/nope/restore",
         None,
+        401,
+        403,
+        404,
+        404,
+    )
+    .await;
+    ctx.row(
+        "DELETE",
+        "/api/v1/sites/does-not-exist/backups/nope",
+        None,
+        401,
+        403,
+        404,
+        404,
+    )
+    .await;
+    // Reveal is operator+ (viewers never read secrets).
+    ctx.row(
+        "POST",
+        "/api/v1/sites/does-not-exist/env/FOO/reveal",
+        Some(json!({"password": "correct-horse-1"})),
         401,
         403,
         404,

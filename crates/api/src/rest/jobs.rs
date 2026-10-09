@@ -13,10 +13,9 @@ use futures::channel::mpsc;
 use futures::SinkExt;
 use serde::{Deserialize, Serialize};
 use setu_common::AppError;
-use tower_sessions::Session;
 use utoipa::ToSchema;
 
-use crate::auth::{require_role, Role};
+use crate::auth::{require_role, Role, Session};
 use crate::state::AppState;
 
 use super::sites::JobOut;
@@ -41,7 +40,7 @@ pub async fn list(
     session: Session,
     Query(query): Query<JobsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_role(&session, &state.db, Role::Viewer).await?;
+    require_role(&session, Role::Viewer).await?;
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
     let jobs = state.db.jobs().list_recent(limit).await?;
     Ok(Json(JobListOut {
@@ -70,7 +69,7 @@ pub async fn get(
     session: Session,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_role(&session, &state.db, Role::Viewer).await?;
+    require_role(&session, Role::Viewer).await?;
     let job = state.db.jobs().get(&id).await?;
     Ok(Json(JobOut::from_row(&job)))
 }
@@ -94,7 +93,7 @@ pub async fn log(
     session: Session,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_role(&session, &state.db, Role::Viewer).await?;
+    require_role(&session, Role::Viewer).await?;
     let job = state.db.jobs().get(&id).await?;
 
     let (mut tx, rx) = mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(64);
@@ -180,7 +179,7 @@ pub async fn audit_list(
     session: Session,
     Query(query): Query<AuditQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_role(&session, &state.db, Role::Viewer).await?;
+    require_role(&session, Role::Viewer).await?;
     let limit = query.limit.unwrap_or(100).clamp(1, 500);
     let rows = state.db.audit().list_recent(limit).await?;
     Ok(Json(AuditListOut {

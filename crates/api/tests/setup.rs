@@ -1,242 +1,282 @@
-//! Setup wizard integration tests (plan Task 14, spec §8): the public
-//! first-owner flow, the single-use guarantee, and the local-server step
-//! whose install command joins a real agent.
+//! Setup wizard integration tests (plan Task 7, spec §7–§8): the boot
+//! setup token, the token-gated single-use owner creation, and the
+//! local-server step's install command.
 
+use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use setu_api::testing::{new_client, TestServer};
+use setu_api::testing::{new_client, TestOptions, TestServer};
 use setu_jobs::testing::FakeAgent;
 use setu_testkit::TestDb;
 
-#[tokio::test]
-async fn setup_status_reflects_operator_count() {
-    let tdb = TestDb::new().await;
-    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
-    let anon = new_client();
+fn sha256_hex(s: &str) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(s.as_bytes()))
+}
 
-    let resp = anon
-        .get(srv.url("/api/v1/setup"))
+async fn post_setup(srv: &TestServer, token: &str, email: &str) -> reqwest::StatusCode {
+    new_client()
+        .post(srv.url("/api/v1/setup"))
+        .json(&json!({"token": token, "email": email, "password": "correct-horse-1"}))
         .send()
         .await
-        .expect("status sends");
-    assert_eq!(resp.status(), reqwest::StatusCode::OK);
-    let body: Value = resp.json().await.expect("status body is json");
-    assert_eq!(body["needed"], json!(true));
+        .expect("setup sends")
+        .status()
+}
+
+#[tokio::test]
+async fn boot_writes_setup_token_once() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let path = srv.data_dir().join("setup-token");
+
+    // Boot (zero operators) wrote the token 0600 and stored its hash.
+    let token = srv.setup_token().expect("boot wrote the setup token");
     assert!(
-        body["public_url"].as_str().is_some_and(|u| !u.is_empty()),
-        "status must expose the public URL for the wizard, got: {body}"
+        token.len() >= 43,
+        "32 random bytes base64url: {}",
+        token.len()
+    );
+    let mode = std::fs::metadata(&path)
+        .expect("token file")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "setup-token mode {mode:o}");
+    let stored = srv
+        .db
+        .settings()
+        .get(setu_db::SETUP_TOKEN_HASH)
+        .await
+        .expect("settings read");
+    assert_eq!(
+        stored,
+        Some(json!(sha256_hex(&token))),
+        "hash, never the token"
     );
 
-    // After the owner exists, setup is no longer needed.
-    let created = anon
-        .post(srv.url("/api/v1/setup"))
-        .json(&json!({"email": "owner@example.com", "password": "correct-horse-1"}))
-        .send()
+    // A second boot keeps the same token.
+    let again = setu_api::rest::setup::ensure_setup_token(&srv.db, &srv.data_dir())
         .await
-        .expect("setup sends");
-    assert_eq!(created.status(), reqwest::StatusCode::CREATED);
+        .expect("second boot");
+    assert_eq!(again, None, "nothing written on the second boot");
+    assert_eq!(srv.setup_token().as_deref(), Some(token.as_str()));
 
-    let again = anon
+    // A boot whose file vanished mints a fresh one (only readable there).
+    std::fs::remove_file(&path).expect("remove token file");
+    let rewritten = setu_api::rest::setup::ensure_setup_token(&srv.db, &srv.data_dir())
+        .await
+        .expect("boot after the file vanished");
+    assert_eq!(rewritten, Some(path.clone()));
+    let fresh = srv.setup_token().expect("fresh token");
+    assert_ne!(fresh, token);
+
+    // Setup consumes it: file and hash are gone, and later boots (an
+    // operator exists) write nothing.
+    assert_eq!(
+        post_setup(&srv, &fresh, "owner@example.com").await,
+        reqwest::StatusCode::CREATED
+    );
+    assert!(!path.exists(), "setup removes the token file");
+    assert_eq!(
+        srv.db
+            .settings()
+            .get(setu_db::SETUP_TOKEN_HASH)
+            .await
+            .expect("settings read"),
+        None
+    );
+    let after = setu_api::rest::setup::ensure_setup_token(&srv.db, &srv.data_dir())
+        .await
+        .expect("boot with an owner");
+    assert_eq!(after, None);
+    assert!(!path.exists());
+}
+
+#[tokio::test]
+async fn setup_requires_token_and_creates_owner_once() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let anon = new_client();
+    let token = srv.setup_token().expect("setup token");
+
+    let status: Value = anon
         .get(srv.url("/api/v1/setup"))
         .send()
         .await
-        .expect("status sends");
-    let body: Value = again.json().await.expect("status body is json");
-    assert_eq!(body["needed"], json!(false));
-}
+        .expect("status sends")
+        .json()
+        .await
+        .expect("status json");
+    assert_eq!(status["needed"], json!(true));
 
-#[tokio::test]
-async fn setup_creates_owner_once() {
-    let tdb = TestDb::new().await;
-    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
-    let anon = new_client();
-
-    let resp = anon
+    // No token, or a wrong one: 401, and nothing is created.
+    let missing = anon
         .post(srv.url("/api/v1/setup"))
         .json(&json!({"email": "owner@example.com", "password": "correct-horse-1"}))
         .send()
         .await
         .expect("setup sends");
-    assert_eq!(resp.status(), reqwest::StatusCode::CREATED);
-    let body: Value = resp.json().await.expect("setup body is json");
-    assert_eq!(body["email"], json!("owner@example.com"));
-    assert_eq!(body["role"], json!("owner"));
+    assert_eq!(missing.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        post_setup(&srv, "not-the-token", "owner@example.com").await,
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(srv.db.operators().count().await.expect("count"), 0);
 
-    // The new owner can log in with the same credentials.
-    let login = anon
-        .post(srv.url("/api/v1/auth/login"))
-        .json(&json!({"email": "owner@example.com", "password": "correct-horse-1"}))
+    // Invalid owner input is 400 even with the token.
+    let bad = anon
+        .post(srv.url("/api/v1/setup"))
+        .json(&json!({"token": token, "email": "nope", "password": "correct-horse-1"}))
         .send()
         .await
-        .expect("login sends");
+        .expect("setup sends");
+    assert_eq!(bad.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // Two concurrent POSTs with the token and different emails: exactly
+    // one owner (the advisory-locked transaction, not UNIQUE(email)).
+    let (a, b) = tokio::join!(
+        post_setup(&srv, &token, "first@example.com"),
+        post_setup(&srv, &token, "second@example.com"),
+    );
+    let mut codes = [a.as_u16(), b.as_u16()];
+    codes.sort_unstable();
+    assert_eq!(codes, [201, 409], "exactly one owner, got {codes:?}");
+    assert_eq!(srv.db.operators().count().await.expect("count"), 1);
+    let owners = srv.db.operators().list().await.expect("list");
+    assert_eq!(owners[0].role, "owner");
+
+    // The owner logs in; setup is no longer needed and is 409 for
+    // everyone afterwards, with or without the old token.
+    let login = srv.login(&anon, &owners[0].email, "correct-horse-1").await;
     assert_eq!(login.status(), reqwest::StatusCode::OK);
-
-    // A second setup attempt is 409 — for anonymous callers too (the
-    // endpoint is public-once, not authenticated).
-    for client in [&anon, &srv.login_as_owner().await] {
-        let second = client
-            .post(srv.url("/api/v1/setup"))
-            .json(&json!({"email": "other@example.com", "password": "correct-horse-2"}))
-            .send()
-            .await
-            .expect("second setup sends");
-        assert_eq!(second.status(), reqwest::StatusCode::CONFLICT);
-        let err: Value = second.json().await.expect("error body is json");
-        assert_eq!(err["error"]["code"], json!("conflict"));
-    }
-}
-
-#[tokio::test]
-async fn setup_validates_owner_input() {
-    let tdb = TestDb::new().await;
-    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
-    let anon = new_client();
-
-    for (email, password) in [
-        ("not-an-email", "correct-horse-1"),
-        ("owner@example.com", "short"),
-    ] {
-        let resp = anon
-            .post(srv.url("/api/v1/setup"))
-            .json(&json!({"email": email, "password": password}))
-            .send()
-            .await
-            .expect("setup sends");
+    let status: Value = anon
+        .get(srv.url("/api/v1/setup"))
+        .send()
+        .await
+        .expect("status sends")
+        .json()
+        .await
+        .expect("status json");
+    assert_eq!(status["needed"], json!(false));
+    for t in [token.as_str(), "anything"] {
         assert_eq!(
-            resp.status(),
-            reqwest::StatusCode::BAD_REQUEST,
-            "setup({email:?}) must be 400"
+            post_setup(&srv, t, "late@example.com").await,
+            reqwest::StatusCode::CONFLICT
         );
     }
-    // No operator was created by the invalid attempts: setup still needed.
-    assert_eq!(srv.db.operators().count().await.expect("count"), 0);
+    let audit = srv.db.audit().list_recent(10).await.expect("audit");
+    assert!(audit.iter().any(|a| a.action == "setup.create-owner"));
 }
 
 #[tokio::test]
-async fn setup_local_server_returns_install_command() {
+async fn local_server_command_targets_loopback_or_public_url() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
-    let anon = new_client();
 
-    // Anonymous callers cannot register the local server.
-    let denied = anon
+    // Owner only: anonymous 401, an operator 403.
+    let denied = new_client()
         .post(srv.url("/api/v1/setup/local-server"))
         .json(&json!({}))
         .send()
         .await
-        .expect("anon local-server sends");
+        .expect("anon sends");
     assert_eq!(denied.status(), reqwest::StatusCode::UNAUTHORIZED);
-
-    // Full wizard flow: create owner, log in, register local server.
-    let created = anon
-        .post(srv.url("/api/v1/setup"))
-        .json(&json!({"email": "owner@example.com", "password": "correct-horse-1"}))
+    let operator = srv.login_as("operator").await;
+    let forbidden = operator
+        .post(srv.url("/api/v1/setup/local-server"))
+        .json(&json!({}))
         .send()
         .await
-        .expect("setup sends");
-    assert_eq!(created.status(), reqwest::StatusCode::CREATED);
-    let login = srv
-        .login(&anon, "owner@example.com", "correct-horse-1")
-        .await;
-    assert_eq!(login.status(), reqwest::StatusCode::OK);
+        .expect("operator sends");
+    assert_eq!(forbidden.status(), reqwest::StatusCode::FORBIDDEN);
 
-    let resp = anon
+    let owner = srv.login_as_owner().await;
+    let resp = owner
         .post(srv.url("/api/v1/setup/local-server"))
         .json(&json!({}))
         .send()
         .await
         .expect("local-server sends");
     assert_eq!(resp.status(), reqwest::StatusCode::CREATED);
-    let body: Value = resp.json().await.expect("local-server body is json");
-
-    // Default name is the machine hostname, never empty.
-    let name = body["server"]["name"].as_str().expect("server name");
-    assert!(!name.is_empty(), "local server must be named, got: {body}");
-    assert_eq!(body["server"]["status"], json!("pending"));
-
-    let join_token = body["join_token"].as_str().expect("join_token is a string");
+    let body: Value = resp.json().await.expect("body");
+    let join_token = body["join_token"].as_str().expect("join_token");
     assert!(join_token.starts_with("setu_join_"));
-    let command = body["install_command"]
-        .as_str()
-        .expect("install_command is a string");
-    assert!(
-        command.contains("setu agent install"),
-        "install command must reuse the single binary, got: {command}"
+    let command = body["install_command"].as_str().expect("install_command");
+    // TCP listener: the local agent joins over loopback.
+    assert_eq!(
+        command,
+        format!(
+            "setu agent install --control-plane http://127.0.0.1:{}",
+            srv.addr.port()
+        )
     );
-    assert!(
-        command.contains(join_token),
-        "install command must embed the join token, got: {command}"
-    );
+    assert!(!command.contains(join_token), "token never in the command");
+    assert_eq!(body["server"]["status"], json!("pending"));
+    assert_eq!(body["server"]["is_control_plane"], json!(true));
+    let row = srv
+        .db
+        .servers()
+        .get(body["server"]["id"].as_str().expect("id"))
+        .await
+        .expect("server row");
+    assert!(row.is_control_plane);
 
-    // The join token really joins (agent side, no session).
-    let agent = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .expect("agent client builds");
-    let join = agent
+    // The join token joins (agent side, no session).
+    let join = reqwest::Client::new()
         .post(srv.url("/agent/v1/join"))
         .json(&json!({
-            "join_token": join_token,
-            "nonce": "setup-nonce",
-            "hostname": name,
-            "arch": "x86_64",
-            "os": "linux",
-            "cpu_cores": 4,
-            "memory_mb": 8192,
+            "join_token": join_token, "nonce": "setup-nonce", "hostname": "local",
+            "arch": "x86_64", "os": "linux", "cpu_cores": 4, "memory_mb": 8192,
             "disk_mb": 102400,
         }))
+        .timeout(Duration::from_secs(10))
         .send()
         .await
         .expect("join sends");
     assert_eq!(join.status(), reqwest::StatusCode::OK);
 
-    // An explicit name overrides the hostname default.
-    let named = anon
-        .post(srv.url("/api/v1/setup/local-server"))
-        .json(&json!({"name": "db-1"}))
-        .send()
-        .await
-        .expect("named local-server sends");
-    assert_eq!(named.status(), reqwest::StatusCode::CREATED);
-    let named_body: Value = named.json().await.expect("named body is json");
-    assert_eq!(named_body["server"]["name"], json!("db-1"));
-}
-
-/// Two concurrent `POST /setup` with *different* emails: exactly one
-/// wins with 201, the other gets 409 (the advisory-locked insert, not
-/// just `UNIQUE(email)`).
-#[tokio::test]
-async fn setup_concurrent_posts_create_one_owner() {
+    // Unix-socket install: through Caddy at the public URL, plus Caddy's
+    // local CA when `tls internal`.
     let tdb = TestDb::new().await;
-    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
-    let url = srv.url("/api/v1/setup");
-
-    let post = |email: &str| {
-        let client = new_client();
-        let url = url.clone();
-        let body = json!({"email": email, "password": "correct-horse-1"});
+    let opts = TestOptions {
+        public_url: Some("https://panel.example/".parse().expect("url")),
+        config_listen: Some(setu_common::Listen::Unix("/run/setu/http.sock".into())),
+        ..TestOptions::default()
+    };
+    let unix = TestServer::spawn_with(tdb, FakeAgent::new(), opts).await;
+    let owner = unix.login_as_owner().await;
+    let local = |client: reqwest::Client| {
+        let url = unix.url("/api/v1/setup/local-server");
         async move {
-            client
+            let body: Value = client
                 .post(url)
-                .json(&body)
+                .json(&json!({"name": "panel"}))
                 .send()
                 .await
-                .expect("setup sends")
-                .status()
+                .expect("local-server sends")
+                .json()
+                .await
+                .expect("body");
+            body["install_command"]
+                .as_str()
+                .expect("command")
+                .to_string()
         }
     };
-    let (a, b) = tokio::join!(post("first@example.com"), post("second@example.com"),);
-    // Exactly one 201 and one 409, in either order (`StatusCode` has
-    // no numeric `Ord`, so compare raw codes).
-    let mut codes = [a.as_u16(), b.as_u16()];
-    codes.sort_unstable();
     assert_eq!(
-        codes,
-        [201, 409],
-        "exactly one owner may be created, got {codes:?}"
+        local(owner.clone()).await,
+        "setu agent install --control-plane https://panel.example"
     );
-    // A slow `count()` is fine here: no more writers remain.
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(srv.db.operators().count().await.expect("count"), 1);
+    unix.db
+        .settings()
+        .set(setu_db::TLS_INTERNAL, &json!(true))
+        .await
+        .expect("set tls_internal");
+    assert_eq!(
+        local(owner).await,
+        "setu agent install --control-plane https://panel.example \
+         --ca /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt"
+    );
 }

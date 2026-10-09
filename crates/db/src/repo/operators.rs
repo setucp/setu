@@ -65,14 +65,18 @@ impl<'a> Operators<'a> {
         .map_err(map_db_error)
     }
 
-    /// Create the first operator atomically: the check and the insert
-    /// run under a transaction-scoped advisory lock, so two concurrent
-    /// `POST /setup` calls cannot both succeed (the loser gets 409
-    /// `conflict`, whatever email it used).
+    /// Create the first operator atomically with the one-time setup
+    /// token (spec §7): under a transaction-scoped advisory lock, an
+    /// existing operator is 409 `conflict` (whatever the token), a token
+    /// whose SHA-256 hex differs from `settings.setup_token_hash` (or no
+    /// stored hash) is 401 `unauthorized`; on success the owner is
+    /// inserted and the stored hash deleted in the same transaction, so
+    /// two concurrent `POST /setup` calls cannot both succeed.
     pub async fn create_first_owner(
         &self,
         email: &str,
         password_hash: &str,
+        setup_token_hash: &str,
     ) -> Result<Operator, AppError> {
         let mut tx = self.pool.begin().await.map_err(map_db_error)?;
         sqlx::query!("SELECT pg_advisory_xact_lock($1)", SETUP_LOCK_KEY)
@@ -86,6 +90,19 @@ impl<'a> Operators<'a> {
         if n.unwrap_or(0) != 0 {
             return Err(AppError::conflict("setup already complete"));
         }
+        let stored: Option<serde_json::Value> = sqlx::query_scalar!(
+            "SELECT value FROM settings WHERE key = $1",
+            crate::repo::settings::SETUP_TOKEN_HASH,
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_db_error)?;
+        let matches = stored.as_ref().and_then(|v| v.as_str()).is_some_and(|h| {
+            crate::repo::constant_time_eq(h.as_bytes(), setup_token_hash.as_bytes())
+        });
+        if !matches {
+            return Err(AppError::unauthorized("invalid setup token"));
+        }
         let op = sqlx::query_as!(
             Operator,
             "INSERT INTO operators (id, email, password_hash, role)
@@ -96,6 +113,13 @@ impl<'a> Operators<'a> {
             password_hash,
         )
         .fetch_one(&mut *tx)
+        .await
+        .map_err(map_db_error)?;
+        sqlx::query!(
+            "DELETE FROM settings WHERE key = $1",
+            crate::repo::settings::SETUP_TOKEN_HASH,
+        )
+        .execute(&mut *tx)
         .await
         .map_err(map_db_error)?;
         tx.commit().await.map_err(map_db_error)?;

@@ -36,6 +36,7 @@ export function SetupWizard({
   className?: string;
 }) {
   const [phase, setPhase] = React.useState<Phase>({ name: "checking" });
+  const [token, setToken] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -70,10 +71,11 @@ export function SetupWizard({
     setError(null);
     try {
       const trimmedEmail = email.trim();
-      await api.setupOwner(trimmedEmail, password);
+      await api.setupOwner(token.trim(), trimmedEmail, password);
       // The setup endpoint does not start a session; sign in explicitly.
       await api.login(trimmedEmail, password);
       setPassword("");
+      setToken("");
       const status = await api.setupStatus();
       setPhase({ name: "panel", publicUrl: status.public_url });
     } catch (err) {
@@ -138,7 +140,20 @@ export function SetupWizard({
           >
             <p className="text-sm text-muted-foreground">
               Create the first operator account. This step works exactly once.
+              The setup token is in{" "}
+              <span className="font-mono">/var/lib/setu/setup-token</span> on
+              the panel host.
             </p>
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Setup token
+              <Input
+                type="password"
+                autoComplete="off"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                required
+              />
+            </label>
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Email
               <Input
@@ -193,6 +208,13 @@ export function SetupWizard({
             </p>
             <code className="block overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs break-all">
               {phase.install.install_command}
+            </code>
+            <p className="text-sm">
+              It reads the join token from{" "}
+              <span className="font-mono">SETU_JOIN_TOKEN</span> or stdin:
+            </p>
+            <code className="block overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs break-all">
+              {phase.install.join_token}
             </code>
             <div className="flex gap-2">
               <Button

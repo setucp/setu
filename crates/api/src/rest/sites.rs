@@ -5,12 +5,11 @@
 //! `TestServer`) picks the job up.
 
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
 use std::time::Duration;
 
 use axum::{
     body::Body,
-    extract::{ConnectInfo, Path, State},
+    extract::{Path, State},
     http::{header, StatusCode},
     response::IntoResponse,
     Json,
@@ -19,10 +18,9 @@ use futures::channel::mpsc;
 use futures::SinkExt;
 use serde::{Deserialize, Serialize};
 use setu_common::{AppError, ErrorCode};
-use tower_sessions::Session;
 use utoipa::ToSchema;
 
-use crate::auth::{audit, audit_ip, require_role, Role};
+use crate::auth::{audit, require_role, ClientIp, Role, Session};
 use crate::state::AppState;
 
 use super::ApiJson;
@@ -44,7 +42,6 @@ pub struct SiteOut {
     pub status: String,
     pub failed_step: Option<String>,
     pub port: i32,
-    pub data_dir: String,
     pub db_name: String,
     pub owner_email: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -64,8 +61,6 @@ impl SiteOut {
             status: s.status.clone(),
             failed_step: s.failed_step.clone(),
             port: s.port,
-            // Derived (spec §4); WS8 drops it from the API.
-            data_dir: format!("/srv/setu/sites/{}/data", s.short_id),
             db_name: s.db_name.clone(),
             owner_email: s.owner_email.clone(),
             created_at: s.created_at,
@@ -116,7 +111,7 @@ impl JobOut {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateSiteRequest {
     pub name: String,
     pub app_id: String,
@@ -129,13 +124,16 @@ pub struct CreateSiteRequest {
     pub prompts: BTreeMap<String, String>,
 }
 
-// Holds prompt secrets: redact the values.
-impl CreateSiteRequest {
-    fn redacted(&self) -> String {
-        format!(
-            "CreateSiteRequest {{ name: {:?}, app_id: {:?}, version: {:?}, domain: {:?} }}",
-            self.name, self.app_id, self.version, self.domain
-        )
+// Holds prompt answers: `Debug` prints their names only.
+impl std::fmt::Debug for CreateSiteRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreateSiteRequest")
+            .field("name", &self.name)
+            .field("app_id", &self.app_id)
+            .field("version", &self.version)
+            .field("domain", &self.domain)
+            .field("prompts", &self.prompts.keys().collect::<Vec<_>>())
+            .finish()
     }
 }
 
@@ -145,9 +143,69 @@ pub struct CreateSiteResponse {
     pub job: JobOut,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema)]
 pub struct UpdateSiteRequest {
     pub version: String,
+    /// Answers for `prompt` rules the target version adds (sealed into
+    /// the job; existing answers are kept by name).
+    #[serde(default)]
+    pub prompts: BTreeMap<String, String>,
+}
+
+// Holds prompt answers: `Debug` prints their names only.
+impl std::fmt::Debug for UpdateSiteRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpdateSiteRequest")
+            .field("version", &self.version)
+            .field("prompts", &self.prompts.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+/// The newest 1-minute sample of a site (spec §3 `site_metrics`).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SiteMetricOut {
+    pub at: chrono::DateTime<chrono::Utc>,
+    pub cpu_seconds: f64,
+    pub memory_bytes: i64,
+    pub disk_bytes: i64,
+}
+
+/// `GET /sites/{id}`: the site plus its latest metric sample.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SiteDetailOut {
+    #[serde(flatten)]
+    pub site: SiteOut,
+    pub metrics: Option<SiteMetricOut>,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct RevealRequest {
+    /// The caller's own password (re-authentication).
+    pub password: String,
+}
+
+// Holds a credential: `Debug` redacts it.
+impl std::fmt::Debug for RevealRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RevealRequest([redacted])")
+    }
+}
+
+/// The plaintext of one env value. Holds a secret: `Debug` redacts it.
+#[derive(Serialize, ToSchema)]
+pub struct RevealOut {
+    pub name: String,
+    pub value: String,
+}
+
+impl std::fmt::Debug for RevealOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RevealOut")
+            .field("name", &self.name)
+            .field("value", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -179,16 +237,17 @@ pub struct EnvGetOut {
     pub env: Vec<EnvEntryOut>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema)]
 pub struct EnvPutRequest {
     pub env: BTreeMap<String, String>,
 }
 
-// Holds env values: redact them.
-impl EnvPutRequest {
-    fn redacted(&self) -> String {
-        let names: Vec<&String> = self.env.keys().collect();
-        format!("EnvPutRequest {{ env keys: {names:?} }}")
+// Holds env values: `Debug` prints their names only.
+impl std::fmt::Debug for EnvPutRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EnvPutRequest")
+            .field("env", &self.env.keys().collect::<Vec<_>>())
+            .finish()
     }
 }
 
@@ -272,7 +331,7 @@ pub async fn list(
     State(state): State<AppState>,
     session: Session,
 ) -> Result<impl IntoResponse, AppError> {
-    require_role(&session, &state.db, Role::Viewer).await?;
+    require_role(&session, Role::Viewer).await?;
     let sites = state.db.sites().list().await?;
     Ok(Json(SiteListOut {
         sites: sites.iter().map(SiteOut::from_row).collect(),
@@ -304,11 +363,11 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     session: Session,
-    peer: ConnectInfo<SocketAddr>,
+    ip: ClientIp,
     ApiJson(body): ApiJson<CreateSiteRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let caller = require_role(&session, &state.db, Role::Operator).await?;
-    tracing::debug!("site create {}", body.redacted());
+    let caller = require_role(&session, Role::Operator).await?;
+    tracing::debug!("site create {body:?}");
 
     let name = body.name.trim().to_string();
     if name.is_empty() {
@@ -423,7 +482,7 @@ pub async fn create(
         Some(&caller.id),
         "site.create",
         Some(&site.id),
-        audit_ip(None, Some(peer.0)).as_deref(),
+        ip.as_deref(),
     )
     .await;
     Ok((
@@ -435,13 +494,13 @@ pub async fn create(
     ))
 }
 
-/// One site (viewer and above).
+/// One site with its latest metric sample (viewer and above).
 #[utoipa::path(
     get,
     path = "/api/v1/sites/{id}",
     params(("id" = String, Path, description = "Site id")),
     responses(
-        (status = 200, body = SiteOut),
+        (status = 200, body = SiteDetailOut),
         (status = 401, body = super::ErrorBody),
         (status = 404, body = super::ErrorBody),
     )
@@ -451,9 +510,23 @@ pub async fn get(
     session: Session,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_role(&session, &state.db, Role::Viewer).await?;
+    require_role(&session, Role::Viewer).await?;
     let site = state.db.sites().get(&id).await?;
-    Ok(Json(SiteOut::from_row(&site)))
+    let metrics = state
+        .db
+        .metrics()
+        .latest_for_site(&site.id)
+        .await?
+        .map(|m| SiteMetricOut {
+            at: m.at,
+            cpu_seconds: m.cpu_seconds,
+            memory_bytes: m.memory_bytes,
+            disk_bytes: m.disk_bytes,
+        });
+    Ok(Json(SiteDetailOut {
+        site: SiteOut::from_row(&site),
+        metrics,
+    }))
 }
 
 /// Enqueue a lifecycle job (`restart_site` | `stop_site` | `start_site`;
@@ -462,7 +535,7 @@ pub async fn get(
 async fn enqueue_lifecycle(
     state: &AppState,
     caller_id: &str,
-    peer: SocketAddr,
+    ip: &ClientIp,
     id: &str,
     kind: &str,
     action: &str,
@@ -491,7 +564,7 @@ async fn enqueue_lifecycle(
         Some(caller_id),
         action,
         Some(&site.id),
-        audit_ip(None, Some(peer)).as_deref(),
+        ip.as_deref(),
     )
     .await;
     Ok((SiteOut::from_row(&site), JobOut::from_row(&job)))
@@ -513,19 +586,12 @@ async fn enqueue_lifecycle(
 pub async fn restart(
     State(state): State<AppState>,
     session: Session,
-    peer: ConnectInfo<SocketAddr>,
+    ip: ClientIp,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let caller = require_role(&session, &state.db, Role::Operator).await?;
-    let (site, job) = enqueue_lifecycle(
-        &state,
-        &caller.id,
-        peer.0,
-        &id,
-        "restart_site",
-        "site.restart",
-    )
-    .await?;
+    let caller = require_role(&session, Role::Operator).await?;
+    let (site, job) =
+        enqueue_lifecycle(&state, &caller.id, &ip, &id, "restart_site", "site.restart").await?;
     Ok((StatusCode::ACCEPTED, Json(SiteJobResponse { site, job })))
 }
 
@@ -545,12 +611,12 @@ pub async fn restart(
 pub async fn stop(
     State(state): State<AppState>,
     session: Session,
-    peer: ConnectInfo<SocketAddr>,
+    ip: ClientIp,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let caller = require_role(&session, &state.db, Role::Operator).await?;
+    let caller = require_role(&session, Role::Operator).await?;
     let (site, job) =
-        enqueue_lifecycle(&state, &caller.id, peer.0, &id, "stop_site", "site.stop").await?;
+        enqueue_lifecycle(&state, &caller.id, &ip, &id, "stop_site", "site.stop").await?;
     Ok((StatusCode::ACCEPTED, Json(SiteJobResponse { site, job })))
 }
 
@@ -570,12 +636,12 @@ pub async fn stop(
 pub async fn start(
     State(state): State<AppState>,
     session: Session,
-    peer: ConnectInfo<SocketAddr>,
+    ip: ClientIp,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let caller = require_role(&session, &state.db, Role::Operator).await?;
+    let caller = require_role(&session, Role::Operator).await?;
     let (site, job) =
-        enqueue_lifecycle(&state, &caller.id, peer.0, &id, "start_site", "site.start").await?;
+        enqueue_lifecycle(&state, &caller.id, &ip, &id, "start_site", "site.start").await?;
     Ok((StatusCode::ACCEPTED, Json(SiteJobResponse { site, job })))
 }
 
@@ -599,11 +665,11 @@ pub async fn start(
 pub async fn update(
     State(state): State<AppState>,
     session: Session,
-    peer: ConnectInfo<SocketAddr>,
+    ip: ClientIp,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<UpdateSiteRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let caller = require_role(&session, &state.db, Role::Operator).await?;
+    let caller = require_role(&session, Role::Operator).await?;
     let site = state.db.sites().get(&id).await?;
     require_no_running_job(&state.db, &id).await?;
     if site.status != "running" {
@@ -632,6 +698,30 @@ pub async fn update(
             "image runtime not available in this version",
         ));
     }
+    // Answers for the target's `prompt` rules ride SEALED on the job (every
+    // value `v1:`, security finding 4); the `env` step opens them.
+    let mut prompts = serde_json::Map::new();
+    for (name, value) in &body.prompts {
+        if !matches!(
+            manifest.env.get(name),
+            Some(setu_manifest::EnvSpec::Prompt(_))
+        ) {
+            return Err(AppError::validation(format!(
+                "{name} is not a prompt of version {}",
+                body.version
+            )));
+        }
+        if !setu_common::validate::no_control(value) {
+            return Err(AppError::validation(format!(
+                "prompt {name} must not contain control characters"
+            )));
+        }
+        prompts.insert(name.clone(), serde_json::json!(state.sealer.seal(value)));
+    }
+    let mut payload = serde_json::json!({ "to_version": body.version });
+    if !prompts.is_empty() {
+        payload["prompts"] = serde_json::Value::Object(prompts);
+    }
     let job = state
         .db
         .jobs()
@@ -639,7 +729,7 @@ pub async fn update(
             "update_site",
             Some(&site.id),
             Some(&site.server_id),
-            Some(&serde_json::json!({ "to_version": body.version })),
+            Some(&payload),
         )
         .await?;
     audit(
@@ -647,7 +737,7 @@ pub async fn update(
         Some(&caller.id),
         "site.update",
         Some(&site.id),
-        audit_ip(None, Some(peer.0)).as_deref(),
+        ip.as_deref(),
     )
     .await;
     Ok((
@@ -676,10 +766,10 @@ pub async fn update(
 pub async fn retry(
     State(state): State<AppState>,
     session: Session,
-    peer: ConnectInfo<SocketAddr>,
+    ip: ClientIp,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let caller = require_role(&session, &state.db, Role::Operator).await?;
+    let caller = require_role(&session, Role::Operator).await?;
     let site = state.db.sites().get(&id).await?;
     require_no_running_job(&state.db, &id).await?;
     if site.status != "failed" {
@@ -705,7 +795,7 @@ pub async fn retry(
         Some(&caller.id),
         "site.retry",
         Some(&site.id),
-        audit_ip(None, Some(peer.0)).as_deref(),
+        ip.as_deref(),
     )
     .await;
     Ok((
@@ -735,10 +825,10 @@ pub async fn retry(
 pub async fn delete(
     State(state): State<AppState>,
     session: Session,
-    peer: ConnectInfo<SocketAddr>,
+    ip: ClientIp,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let caller = require_role(&session, &state.db, Role::Operator).await?;
+    let caller = require_role(&session, Role::Operator).await?;
     let site = state.db.sites().get(&id).await?;
     require_no_running_job(&state.db, &id).await?;
     let job = state
@@ -751,7 +841,7 @@ pub async fn delete(
         Some(&caller.id),
         "site.delete",
         Some(&site.id),
-        audit_ip(None, Some(peer.0)).as_deref(),
+        ip.as_deref(),
     )
     .await;
     Ok((
@@ -780,7 +870,7 @@ pub async fn env_get(
     session: Session,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_role(&session, &state.db, Role::Viewer).await?;
+    require_role(&session, Role::Viewer).await?;
     let site = state.db.sites().get(&id).await?;
     // The manifest is only consulted to mask `postgres_url` sources; a
     // missing version masks on the stored flag alone.
@@ -835,12 +925,12 @@ pub async fn env_get(
 pub async fn env_put(
     State(state): State<AppState>,
     session: Session,
-    peer: ConnectInfo<SocketAddr>,
+    ip: ClientIp,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<EnvPutRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let caller = require_role(&session, &state.db, Role::Operator).await?;
-    tracing::debug!("site env update {}", body.redacted());
+    let caller = require_role(&session, Role::Operator).await?;
+    tracing::debug!("site env update {body:?}");
     let site = state.db.sites().get(&id).await?;
     require_no_running_job(&state.db, &id).await?;
     if site.status != "running" && site.status != "stopped" {
@@ -901,7 +991,7 @@ pub async fn env_put(
         Some(&caller.id),
         "site.env_update",
         Some(&site.id),
-        audit_ip(None, Some(peer.0)).as_deref(),
+        ip.as_deref(),
     )
     .await;
     let site = state.db.sites().get(&id).await?;
@@ -912,6 +1002,70 @@ pub async fn env_put(
             job: JobOut::from_row(&job),
         }),
     ))
+}
+
+/// Reveal one env value (operator and above) after re-checking the
+/// caller's password (argon2). Every call is audited: `env.reveal` when
+/// the value is returned, `env.reveal_denied` on a wrong password, with
+/// target `<site id>:<NAME>`. Wrong passwords count toward the login
+/// limiter of the client IP.
+#[utoipa::path(
+    post,
+    path = "/api/v1/sites/{id}/env/{name}/reveal",
+    params(
+        ("id" = String, Path, description = "Site id"),
+        ("name" = String, Path, description = "Env var name"),
+    ),
+    request_body = RevealRequest,
+    responses(
+        (status = 200, body = RevealOut),
+        (status = 401, body = super::ErrorBody),
+        (status = 403, body = super::ErrorBody),
+        (status = 404, body = super::ErrorBody),
+        (status = 429, body = super::ErrorBody),
+    )
+)]
+pub async fn env_reveal(
+    State(state): State<AppState>,
+    session: Session,
+    ip: ClientIp,
+    Path((id, name)): Path<(String, String)>,
+    ApiJson(body): ApiJson<RevealRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = require_role(&session, Role::Operator).await?;
+    let site = state.db.sites().get(&id).await?;
+    let var = stored_env(&site)
+        .into_iter()
+        .find(|v| v.name == name)
+        .ok_or_else(|| AppError::not_found(format!("env var {name} not found")))?;
+    let target = format!("{}:{}", site.id, var.name);
+    let key = ip.limiter_key();
+    state.check_login_rate(key).await?;
+    if crate::auth::verify_password(&caller.password_hash, &body.password).is_err() {
+        state.record_login_failure(key).await;
+        audit(
+            &state.db,
+            Some(&caller.id),
+            "env.reveal_denied",
+            Some(&target),
+            ip.as_deref(),
+        )
+        .await;
+        return Err(AppError::forbidden("password is incorrect"));
+    }
+    let value = open_stored(&state.sealer, &var.value)?;
+    audit(
+        &state.db,
+        Some(&caller.id),
+        "env.reveal",
+        Some(&target),
+        ip.as_deref(),
+    )
+    .await;
+    Ok(Json(RevealOut {
+        name: var.name,
+        value,
+    }))
 }
 
 /// Live logs as SSE (viewer and above): `FetchLogs` every 2 s with the
@@ -934,7 +1088,7 @@ pub async fn logs(
     session: Session,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_role(&session, &state.db, Role::Viewer).await?;
+    require_role(&session, Role::Viewer).await?;
     let site = state.db.sites().get(&id).await?;
     let server_id = site.server_id.clone();
     let short = site.short_id.clone();

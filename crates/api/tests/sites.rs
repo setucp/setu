@@ -147,6 +147,9 @@ async fn online_server(srv: &TestServer, name: &str, memory_mb: u64) -> String {
             &setu_db::HeartbeatInput {
                 agent_version: "0.1.0",
                 boot_id: None,
+                load1: 0.0,
+                mem_free_mb: 0,
+                disk_free_mb: 0,
                 metrics: &[],
             },
         )
@@ -1121,4 +1124,479 @@ async fn env_get_never_returns_postgres_url_to_viewers() {
         assert_eq!(db["masked"], json!(true));
         assert_eq!(db["secret"], json!(true));
     }
+}
+
+/// Publish 0.1.0, join a server and provision one site to `running`;
+/// returns `(site_id, server_id)`.
+async fn running_site(srv: &TestServer, owner: &reqwest::Client, tag: &str) -> (String, String) {
+    publish(srv, owner, &hello_toml("0.1.0")).await;
+    let server_id = online_server(srv, &unique(tag), 8192).await;
+    let (site_id, job_id) = post_site(
+        srv,
+        owner,
+        Some(&server_id),
+        &format!("{}.example.com", unique(tag)),
+    )
+    .await;
+    let done = poll_job(srv, owner, &job_id).await.expect("provision job");
+    assert_eq!(done["status"], json!("done"), "provision: {done}");
+    (site_id, server_id)
+}
+
+async fn reveal(
+    srv: &TestServer,
+    client: &reqwest::Client,
+    site_id: &str,
+    name: &str,
+    password: &str,
+) -> reqwest::Response {
+    client
+        .post(srv.url(&format!("/api/v1/sites/{site_id}/env/{name}/reveal")))
+        .json(&json!({"password": password}))
+        .send()
+        .await
+        .expect("reveal sends")
+}
+
+async fn audit_actions(srv: &TestServer, action: &str) -> Vec<setu_db::AuditEntry> {
+    srv.db
+        .audit()
+        .list_recent(200)
+        .await
+        .expect("audit")
+        .into_iter()
+        .filter(|a| a.action == action)
+        .collect()
+}
+
+#[tokio::test]
+async fn get_site_includes_latest_metric() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let viewer = srv.login_as("viewer").await;
+    let (site_id, server_id) = running_site(&srv, &owner, "metric").await;
+
+    let before = get_site(&srv, &viewer, &site_id).await;
+    assert_eq!(before["id"], json!(site_id), "site fields are flattened");
+    assert_eq!(before["metrics"], Value::Null, "no sample yet");
+
+    let short = srv.db.sites().get(&site_id).await.expect("site").short_id;
+    let now = chrono::Utc::now();
+    let sample = |at: chrono::DateTime<chrono::Utc>, cpu: f64| setu_proto::SiteMetric {
+        short_id: short.clone(),
+        at,
+        cpu_seconds: cpu,
+        memory_bytes: 64 << 20,
+        disk_bytes: 5 << 20,
+    };
+    srv.db
+        .metrics()
+        .insert_batch(
+            &server_id,
+            &[
+                sample(now - chrono::Duration::minutes(1), 1.0),
+                sample(now, 2.5),
+            ],
+        )
+        .await
+        .expect("insert metrics");
+    let after = get_site(&srv, &viewer, &site_id).await;
+    let m = &after["metrics"];
+    assert_eq!(m["cpu_seconds"], json!(2.5), "the newest sample: {after}");
+    assert_eq!(m["memory_bytes"], json!(64 << 20));
+    assert_eq!(m["disk_bytes"], json!(5 << 20));
+    assert_eq!(after["status"], json!("running"));
+}
+
+/// Review Focus 4: the control plane dies between `stop` and
+/// `switch_version`; a new runner resumes the update from its cursor and
+/// the site ends `running` on the new version.
+#[tokio::test]
+async fn update_resumes_after_runner_restart() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_id, _) = running_site(&srv, &owner, "resume").await;
+    publish(&srv, &owner, &hello_toml("0.1.1")).await;
+
+    srv.agent.delay("switch_version", Duration::from_secs(30));
+    let resp = owner
+        .post(srv.url(&format!("/api/v1/sites/{site_id}/update")))
+        .json(&json!({"version": "0.1.1"}))
+        .send()
+        .await
+        .expect("update sends");
+    assert_eq!(resp.status(), reqwest::StatusCode::ACCEPTED);
+    let job_id = resp.json::<Value>().await.expect("json")["job"]["id"]
+        .as_str()
+        .expect("job id")
+        .to_string();
+
+    // Wait until the update stopped the site and is inside
+    // `switch_version`, then kill the runner there.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let step = srv.db.jobs().get_step(&job_id).await.expect("step");
+        if step.as_deref() == Some("switch_version") && srv.agent.switch_versions().len() == 2 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "update never reached switch_version: {:?}",
+            srv.agent.transcript()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    srv.kill_runner().await;
+    let stops_before = srv.agent.call_count("stop");
+    let installs_before = srv.agent.call_count("install");
+    let mid = srv.db.sites().get(&site_id).await.expect("site");
+    assert_eq!(mid.status, "updating", "stopped mid-update");
+    assert_eq!(mid.app_version, "0.1.0");
+
+    srv.agent.clear_delay("switch_version");
+    srv.start_runner();
+    let done = poll_job(&srv, &owner, &job_id).await.expect("job row");
+    assert_eq!(done["status"], json!("done"), "resumed update: {done}");
+    assert_eq!(done["attempts"], json!(2), "reclaimed by the new runner");
+
+    let site = get_site(&srv, &owner, &site_id).await;
+    assert_eq!(site["status"], json!("running"));
+    assert_eq!(site["app_version"], json!("0.1.1"));
+    // Resumed at the cursor: `switch_version` again, nothing before it.
+    assert_eq!(
+        srv.agent.switch_versions().last().map(String::as_str),
+        Some("0.1.1")
+    );
+    assert_eq!(
+        srv.agent.call_count("stop"),
+        stops_before,
+        "stop not re-run"
+    );
+    assert_eq!(srv.agent.call_count("install"), installs_before);
+}
+
+#[tokio::test]
+async fn env_reveal_requires_password_and_is_audited_each_call() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_id, _) = running_site(&srv, &owner, "reveal").await;
+    let operator = srv.login_as("operator").await;
+    let viewer = srv.login_as("viewer").await;
+
+    // Anonymous 401, viewer 403 (operators and owners only).
+    let anon = reveal(
+        &srv,
+        &setu_api::testing::new_client(),
+        &site_id,
+        "HELLO_NAME",
+        "x",
+    )
+    .await;
+    assert_eq!(anon.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let denied = reveal(&srv, &viewer, &site_id, "HELLO_NAME", "correct-horse-1").await;
+    assert_eq!(denied.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // A wrong password is refused, audited, and reveals nothing.
+    let wrong = reveal(&srv, &operator, &site_id, "HELLO_NAME", "not-my-password").await;
+    assert_eq!(wrong.status(), reqwest::StatusCode::FORBIDDEN);
+    let wrong_body = wrong.text().await.expect("body");
+    assert!(!wrong_body.contains("test-display-name"));
+    assert_eq!(audit_actions(&srv, "env.reveal_denied").await.len(), 1);
+
+    // The right password reveals the secret, and every call is audited.
+    for _ in 0..2 {
+        let ok = reveal(&srv, &operator, &site_id, "HELLO_NAME", "correct-horse-1").await;
+        assert_eq!(ok.status(), reqwest::StatusCode::OK);
+        let body: Value = ok.json().await.expect("json");
+        assert_eq!(body["value"], json!("test-display-name"));
+        assert_eq!(body["name"], json!("HELLO_NAME"));
+    }
+    let reveals = audit_actions(&srv, "env.reveal").await;
+    assert_eq!(reveals.len(), 2, "each call audited");
+    assert!(reveals.iter().all(|a| {
+        a.target_id.as_deref() == Some(format!("{site_id}:HELLO_NAME").as_str())
+            && a.target_kind.as_deref() == Some("env")
+            && a.ip.as_deref() == Some("127.0.0.1")
+    }));
+
+    // `once` values stay revealable; unknown names are 404.
+    let once = reveal(&srv, &owner, &site_id, "HELLO_PASSWORD", "correct-horse-1").await;
+    assert_eq!(once.status(), reqwest::StatusCode::OK);
+    let once: Value = once.json().await.expect("json");
+    assert_eq!(once["value"].as_str().map(str::len), Some(20));
+    let missing = reveal(&srv, &owner, &site_id, "NOPE", "correct-horse-1").await;
+    assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn env_put_rejects_generated_vars_and_enqueues_env_update() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let viewer = srv.login_as("viewer").await;
+    let (site_id, _) = running_site(&srv, &owner, "envput").await;
+    let url = srv.url(&format!("/api/v1/sites/{site_id}/env"));
+    let put =
+        |client: &reqwest::Client, env: Value| client.put(&url).json(&json!({"env": env})).send();
+
+    for (name, why) in [
+        ("HELLO_SECRET", "generated"),
+        ("HELLO_PASSWORD", "generated once"),
+        ("HELLO_PORT", "derived"),
+        ("NOT_IN_MANIFEST", "unknown"),
+    ] {
+        let resp = put(&owner, json!({ name: "x" })).await.expect("put");
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "{name} ({why})"
+        );
+    }
+    let control = put(&owner, json!({"HELLO_LABEL": "a\nb"}))
+        .await
+        .expect("put");
+    assert_eq!(control.status(), reqwest::StatusCode::BAD_REQUEST);
+    let denied = put(&viewer, json!({"HELLO_LABEL": "v"}))
+        .await
+        .expect("put");
+    assert_eq!(denied.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(srv.agent.call_count("restart"), 0, "nothing ran");
+
+    let writes_before = srv.agent.write_env_calls().len();
+    let ok = put(
+        &owner,
+        json!({"HELLO_NAME": "renamed-secret-9", "HELLO_LABEL": "relabelled"}),
+    )
+    .await
+    .expect("put");
+    assert_eq!(ok.status(), reqwest::StatusCode::ACCEPTED);
+    let body: Value = ok.json().await.expect("json");
+    assert_eq!(body["job"]["kind"], json!("env_update"));
+    let job_id = body["job"]["id"].as_str().expect("job id").to_string();
+    // The changes ride sealed: no plaintext in the job row.
+    let row = srv.db.jobs().get(&job_id).await.expect("job row");
+    let payload = row.payload.to_string();
+    assert!(!payload.contains("renamed-secret-9"), "payload: {payload}");
+    assert!(!payload.contains("relabelled"), "even non-secrets sealed");
+    assert!(row.payload["changes"]["HELLO_NAME"]
+        .as_str()
+        .is_some_and(|v| v.starts_with("v1:")));
+
+    let done = poll_job(&srv, &owner, &job_id).await.expect("job");
+    assert_eq!(done["status"], json!("done"), "env_update: {done}");
+    assert!(!done["log"]
+        .as_str()
+        .unwrap_or("")
+        .contains("renamed-secret-9"));
+    // write_env without `once`, then a restart of the running site.
+    let writes = srv.agent.write_env_calls();
+    assert_eq!(writes.len(), writes_before + 1);
+    let last = writes.last().expect("write_env");
+    let get = |n: &str| last.iter().find(|v| v.name == n).map(|v| v.value.clone());
+    assert_eq!(get("HELLO_NAME").as_deref(), Some("renamed-secret-9"));
+    assert_eq!(get("HELLO_LABEL").as_deref(), Some("relabelled"));
+    assert_eq!(get("HELLO_PASSWORD"), None, "once values never rewritten");
+    assert_eq!(srv.agent.call_count("restart"), 1);
+    let shown = reveal(&srv, &owner, &site_id, "HELLO_NAME", "correct-horse-1").await;
+    assert_eq!(
+        shown.json::<Value>().await.expect("json")["value"],
+        json!("renamed-secret-9")
+    );
+}
+
+#[tokio::test]
+async fn update_seals_prompt_answers_for_new_prompts() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_id, _) = running_site(&srv, &owner, "prompts").await;
+    let v2 = hello_toml("0.1.1").replace(
+        "HELLO_LABEL = { value = \"hello-world\" }",
+        "HELLO_LABEL = { value = \"hello-world\" }\nHELLO_CITY = { prompt = \"City\", secret = true }",
+    );
+    publish(&srv, &owner, &v2).await;
+    let update = |body: Value| {
+        owner
+            .post(srv.url(&format!("/api/v1/sites/{site_id}/update")))
+            .json(&body)
+            .send()
+    };
+
+    // Only prompts of the target version are accepted.
+    let bad = update(json!({"version": "0.1.1", "prompts": {"HELLO_LABEL": "x"}}))
+        .await
+        .expect("update");
+    assert_eq!(bad.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let resp = update(json!({"version": "0.1.1", "prompts": {"HELLO_CITY": "atlantis-77"}}))
+        .await
+        .expect("update");
+    assert_eq!(resp.status(), reqwest::StatusCode::ACCEPTED);
+    let job_id = resp.json::<Value>().await.expect("json")["job"]["id"]
+        .as_str()
+        .expect("job id")
+        .to_string();
+    let queued = srv.db.jobs().get(&job_id).await.expect("job").payload;
+    assert!(!queued.to_string().contains("atlantis-77"), "{queued}");
+    let done = poll_job(&srv, &owner, &job_id).await.expect("job");
+    assert_eq!(done["status"], json!("done"), "update: {done}");
+    assert!(!done["log"].as_str().unwrap_or("").contains("atlantis-77"));
+    let finished = srv.db.jobs().get(&job_id).await.expect("job").payload;
+    assert!(
+        finished.get("prompts").is_none_or(Value::is_null),
+        "answers leave the payload once stored: {finished}"
+    );
+
+    let site = get_site(&srv, &owner, &site_id).await;
+    assert_eq!(site["app_version"], json!("0.1.1"));
+    for (name, want) in [
+        ("HELLO_CITY", "atlantis-77"),
+        ("HELLO_NAME", "test-display-name"),
+    ] {
+        let shown = reveal(&srv, &owner, &site_id, name, "correct-horse-1").await;
+        assert_eq!(
+            shown.json::<Value>().await.expect("json")["value"],
+            json!(want),
+            "{name}"
+        );
+    }
+    let last = srv.agent.write_env_calls();
+    assert!(last
+        .last()
+        .expect("write_env")
+        .iter()
+        .any(|v| v.name == "HELLO_CITY" && v.value == "atlantis-77"));
+}
+
+#[tokio::test]
+async fn delete_backup_enqueues_job_and_marks_row() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let viewer = srv.login_as("viewer").await;
+    let (site_id, server_id) = running_site(&srv, &owner, "delbk").await;
+
+    let take: Value = owner
+        .post(srv.url(&format!("/api/v1/sites/{site_id}/backups")))
+        .send()
+        .await
+        .expect("backup sends")
+        .json()
+        .await
+        .expect("json");
+    let bk_job = take["job"]["id"].as_str().expect("job id").to_string();
+    poll_job(&srv, &owner, &bk_job).await.expect("backup done");
+    let list: Value = owner
+        .get(srv.url(&format!("/api/v1/sites/{site_id}/backups")))
+        .send()
+        .await
+        .expect("list")
+        .json()
+        .await
+        .expect("json");
+    let bid = list["backups"][0]["id"].as_str().expect("bid").to_string();
+    assert_eq!(list["backups"][0]["site_id"], json!(site_id));
+    let url = srv.url(&format!("/api/v1/sites/{site_id}/backups/{bid}"));
+
+    let denied = viewer.delete(&url).send().await.expect("delete");
+    assert_eq!(denied.status(), reqwest::StatusCode::FORBIDDEN);
+    let wrong_site = owner
+        .delete(srv.url(&format!("/api/v1/sites/{site_id}/backups/nope")))
+        .send()
+        .await
+        .expect("delete");
+    assert_eq!(wrong_site.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let resp = owner.delete(&url).send().await.expect("delete");
+    assert_eq!(resp.status(), reqwest::StatusCode::ACCEPTED);
+    let body: Value = resp.json().await.expect("json");
+    assert_eq!(body["job"]["kind"], json!("delete_backup"));
+    assert_eq!(body["job"]["site_id"], Value::Null, "server-level job");
+    assert_eq!(body["job"]["server_id"], json!(server_id));
+    let job_id = body["job"]["id"].as_str().expect("job id").to_string();
+    let done = poll_job(&srv, &owner, &job_id).await.expect("job");
+    assert_eq!(done["status"], json!("done"), "delete_backup: {done}");
+
+    let row = srv.db.backups().get(&bid).await.expect("row kept");
+    assert_eq!(row.status, "deleted");
+    let cmds = srv.agent.commands_of("delete_backup");
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds[0]["backup_id"], json!(bid));
+    let list: Value = owner
+        .get(srv.url(&format!("/api/v1/sites/{site_id}/backups")))
+        .send()
+        .await
+        .expect("list")
+        .json()
+        .await
+        .expect("json");
+    assert!(list["backups"]
+        .as_array()
+        .expect("array")
+        .iter()
+        .all(|b| b["id"] != json!(bid)));
+    let again = owner.delete(&url).send().await.expect("delete");
+    assert_eq!(again.status(), reqwest::StatusCode::CONFLICT);
+    assert_eq!(audit_actions(&srv, "backup.delete").await.len(), 1);
+}
+
+#[tokio::test]
+async fn logs_sse_uses_cursor_without_duplicates() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_id, _) = running_site(&srv, &owner, "cursor").await;
+    let lines: Vec<String> = (1..=3).map(|i| format!("cursor-line-{i}")).collect();
+    srv.agent.set_log_lines(lines.clone());
+
+    let mut resp = owner
+        .get(srv.url(&format!("/api/v1/sites/{site_id}/logs")))
+        .send()
+        .await
+        .expect("logs sends");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let mut acc = String::new();
+    let mut read_for = async |acc: &mut String, how_long: Duration| {
+        let until = tokio::time::Instant::now() + how_long;
+        while let Ok(chunk) = tokio::time::timeout_at(until, resp.chunk()).await {
+            match chunk.expect("chunk ok") {
+                Some(bytes) => acc.push_str(&String::from_utf8_lossy(&bytes)),
+                None => break,
+            }
+        }
+    };
+    // Three pages at 2 s: the first returns every line, the rest are
+    // empty because they start from the returned cursor.
+    read_for(&mut acc, Duration::from_millis(4500)).await;
+    let mut more = lines.clone();
+    more.push("cursor-line-4".to_string());
+    srv.agent.set_log_lines(more);
+    read_for(&mut acc, Duration::from_millis(2500)).await;
+
+    for line in [
+        "cursor-line-1",
+        "cursor-line-2",
+        "cursor-line-3",
+        "cursor-line-4",
+    ] {
+        assert_eq!(
+            acc.matches(&format!("data: {line}\n")).count(),
+            1,
+            "{line} exactly once in {acc:?}"
+        );
+    }
+    let fetches = srv.agent.commands_of("fetch_logs");
+    assert!(fetches.len() >= 3, "{fetches:?}");
+    assert_eq!(
+        fetches[0]["cursor"],
+        Value::Null,
+        "first page from the tail"
+    );
+    assert!(
+        fetches[1..].iter().all(|f| f["cursor"].as_str().is_some()),
+        "later pages pass the previous cursor: {fetches:?}"
+    );
 }

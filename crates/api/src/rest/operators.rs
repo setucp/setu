@@ -1,24 +1,27 @@
-//! `GET/POST /api/v1/operators` — owner only (spec §6, authz matrix).
-
-use std::net::SocketAddr;
+//! `GET/POST /api/v1/operators` — owner only (spec §7, authz matrix) —
+//! and `PUT /api/v1/operators/{id}/password` (yourself with your current
+//! password, or the owner for anyone). A password change deletes every
+//! session of that operator (spec §3).
 
 use axum::{
-    extract::{ConnectInfo, State},
-    http::StatusCode,
+    extract::{Path, State},
+    http::{header, StatusCode},
     response::IntoResponse,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use setu_common::AppError;
-use tower_sessions::Session;
 use utoipa::ToSchema;
 
 use super::auth::OperatorOut;
 use super::ApiJson;
-use crate::auth::{audit, audit_ip, hash_password, require_role, Role};
+use crate::auth::session::{secure_cookies, set_cookie};
+use crate::auth::{
+    audit, current_operator, hash_password, require_role, verify_password, ClientIp, Role, Session,
+};
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateOperatorRequest {
     pub email: String,
     pub password: String,
@@ -26,12 +29,13 @@ pub struct CreateOperatorRequest {
 }
 
 // Holds a credential: `Debug` redacts the password.
-impl CreateOperatorRequest {
-    fn redacted(&self) -> String {
-        format!(
-            "CreateOperatorRequest {{ email: {:?}, role: {:?} }}",
-            self.email, self.role
-        )
+impl std::fmt::Debug for CreateOperatorRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreateOperatorRequest")
+            .field("email", &self.email)
+            .field("password", &"[redacted]")
+            .field("role", &self.role)
+            .finish()
     }
 }
 
@@ -54,26 +58,10 @@ pub async fn list(
     State(state): State<AppState>,
     session: Session,
 ) -> Result<impl IntoResponse, AppError> {
-    require_role(&session, &state.db, Role::Owner).await?;
-    // No `list` repo method (Task 5 surface is fixed): select directly.
-    let rows: Vec<(String, String, String, chrono::DateTime<chrono::Utc>)> =
-        sqlx::query_as("SELECT id, email, role, created_at FROM operators ORDER BY email, id")
-            .fetch_all(state.db.pool())
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "operator list failed");
-                AppError::internal()
-            })?;
+    require_role(&session, Role::Owner).await?;
+    let rows = state.db.operators().list().await?;
     Ok(Json(OperatorListOut {
-        operators: rows
-            .into_iter()
-            .map(|(id, email, role, created_at)| OperatorOut {
-                id,
-                email,
-                role,
-                created_at,
-            })
-            .collect(),
+        operators: rows.iter().map(OperatorOut::from_row).collect(),
     }))
 }
 
@@ -94,11 +82,11 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     session: Session,
-    peer: ConnectInfo<SocketAddr>,
+    ip: ClientIp,
     ApiJson(body): ApiJson<CreateOperatorRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let caller = require_role(&session, &state.db, Role::Owner).await?;
-    tracing::debug!("operator create {}", body.redacted());
+    let caller = require_role(&session, Role::Owner).await?;
+    tracing::debug!("operator create {body:?}");
     if !body.email.contains('@') || body.email.len() < 3 {
         return Err(AppError::validation("email must contain @"));
     }
@@ -119,8 +107,81 @@ pub async fn create(
         Some(&caller.id),
         "operator.create",
         Some(&op.email),
-        audit_ip(None, Some(peer.0)).as_deref(),
+        ip.as_deref(),
     )
     .await;
     Ok((StatusCode::CREATED, Json(OperatorOut::from_row(&op))))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct SetPasswordRequest {
+    /// Required when changing your own password.
+    #[serde(default)]
+    pub current_password: Option<String>,
+    pub password: String,
+}
+
+// Holds credentials: `Debug` redacts both.
+impl std::fmt::Debug for SetPasswordRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SetPasswordRequest([redacted])")
+    }
+}
+
+/// Change a password: your own (with `current_password`), or anyone's
+/// as the owner. Every session of that operator ends (spec §3); changing
+/// your own starts a fresh session for this browser.
+#[utoipa::path(
+    put,
+    path = "/api/v1/operators/{id}/password",
+    params(("id" = String, Path, description = "Operator id")),
+    request_body = SetPasswordRequest,
+    responses(
+        (status = 204),
+        (status = 400, body = super::ErrorBody),
+        (status = 401, body = super::ErrorBody),
+        (status = 403, body = super::ErrorBody),
+        (status = 404, body = super::ErrorBody),
+    )
+)]
+pub async fn set_password(
+    State(state): State<AppState>,
+    session: Session,
+    ip: ClientIp,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<SetPasswordRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = current_operator(&session).await?;
+    let own = caller.id == id;
+    if own {
+        let current = body.current_password.as_deref().unwrap_or_default();
+        verify_password(&caller.password_hash, current)
+            .map_err(|_| AppError::forbidden("current password is incorrect"))?;
+    } else {
+        require_role(&session, Role::Owner).await?;
+        if state.db.operators().by_id(&id).await?.is_none() {
+            return Err(AppError::not_found("operator not found"));
+        }
+    }
+    if body.password.len() < 8 {
+        return Err(AppError::validation(
+            "password must be at least 8 characters",
+        ));
+    }
+    let hash = hash_password(&body.password)?;
+    state.db.operators().set_password_hash(&id, &hash).await?;
+    audit(
+        &state.db,
+        Some(&caller.id),
+        "operator.password",
+        Some(&id),
+        ip.as_deref(),
+    )
+    .await;
+    if own {
+        let cookie = state.db.sessions().create(&id).await?;
+        let header = set_cookie(&cookie, secure_cookies(&state.config.public_url));
+        return Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, header)]).into_response());
+    }
+    Ok(StatusCode::NO_CONTENT.into_response())
 }

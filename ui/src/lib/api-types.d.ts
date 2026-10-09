@@ -13,10 +13,13 @@ export interface paths {
         };
         /**
          * The next undelivered command for this server (200), or 204 when none
-         *     arrives within the wait window. Delivery marks the command delivered
-         *     and counts the attempt; a new agent `boot_id` requeues delivered
-         *     commands (spec §5). Polled per server at 600/min
-         *     (spec §7); past that the poll is 429.
+         *     arrives within the wait window. The poll subscribes to the
+         *     [`crate::notifier::Notifier`] BEFORE it checks the queue, then sleeps
+         *     until a `setu_commands` notification for this server (or the 5 s
+         *     fallback tick) and checks again, so an enqueue racing the check is
+         *     never missed. Delivery marks the command delivered; a new agent
+         *     `boot_id` requeues delivered commands (spec §5). More than 600 polls
+         *     per server per minute is 429.
          */
         get: operations["commands"];
         put?: never;
@@ -177,9 +180,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Log in: verify the argon2id hash, rotate the session id (fixation
-         *     guard), store the operator id, and return the operator. Failures count
-         *     per source IP: 10 within 15 minutes → 429 on subsequent attempts.
+         * Log in: verify the argon2id hash, start a fresh session (a new random
+         *     cookie, never the one the request carried: fixation guard) and return
+         *     the operator. Failures count per client IP (spec §7, behind Caddy or a
+         *     trusted proxy the forwarded address): 10 within 15 minutes → 429.
          */
         post: operations["login"];
         delete?: never;
@@ -197,7 +201,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Log out: destroy the session. Anonymous callers get 401 (checked first, */
+        /**
+         * Log out: destroy the session row and clear the cookie. Anonymous
+         *     callers get 401.
+         */
         post: operations["logout"];
         delete?: never;
         options?: never;
@@ -278,6 +285,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/openapi.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The OpenAPI document (viewer and above). */
+        get: operations["openapi_json"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operators": {
         parameters: {
             query?: never;
@@ -293,6 +317,27 @@ export interface paths {
          *     before storage and never logged.
          */
         post: operations["create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operators/{id}/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change a password: your own (with `current_password`), or anyone's
+         *     as the owner. Every session of that operator ends (spec §3); changing
+         *     your own starts a fresh session for this browser.
+         */
+        put: operations["set_password"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -371,6 +416,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/servers/{id}/cordon": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cordon or uncordon a server (operator and above): a cordoned server
+         *     takes no new sites (provision `validate` and placement refuse it);
+         *     its running sites are untouched.
+         */
+        post: operations["cordon"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/setup": {
         parameters: {
             query?: never;
@@ -378,15 +444,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Setup status (public, no auth): whether the first owner still needs
-         *     creating, plus the public URL for the wizard to display.
-         */
+        /** Setup status (public, no auth). */
         get: operations["status"];
         put?: never;
         /**
-         * Create the owner operator. Public, exactly once: while at least one
-         *     operator exists this is 409 `conflict` regardless of authentication.
+         * Create the owner with the setup token. 401 on a wrong token, 201 once,
+         *     409 for everyone once any operator exists.
          */
         post: operations["create_owner"];
         delete?: never;
@@ -404,10 +467,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Register the local server (operator and above): a pending server
-         *     named after the hostname plus the `setu agent install` command.
-         */
+        /** Register this box as a pending control-plane server (owner only). */
         post: operations["local_server"];
         delete?: never;
         options?: never;
@@ -450,7 +510,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** One site (viewer and above). */
+        /** One site with its latest metric sample (viewer and above). */
         get: operations["get"];
         put?: never;
         post?: never;
@@ -482,6 +542,28 @@ export interface paths {
          */
         post: operations["create"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sites/{id}/backups/{bid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a backup's files on its server (operator and above): 202 with a
+         *     server-level `delete_backup` job (it serialises with nothing on the
+         *     site); the row ends `deleted` and leaves the list. 409 when the backup
+         *     is already deleted or a delete is already queued.
+         */
+        delete: operations["delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -530,6 +612,29 @@ export interface paths {
          */
         put: operations["env_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sites/{id}/env/{name}/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reveal one env value (operator and above) after re-checking the
+         *     caller's password (argon2). Every call is audited: `env.reveal` when
+         *     the value is returned, `env.reveal_denied` on a wrong password, with
+         *     target `<site id>:<NAME>`. Wrong passwords count toward the login
+         *     limiter of the client IP.
+         */
+        post: operations["env_reveal"];
         delete?: never;
         options?: never;
         head?: never;
@@ -731,10 +836,12 @@ export interface components {
             backups: components["schemas"]["BackupOut"][];
         };
         BackupOut: {
+            domain: string;
             id: string;
             kind: string;
-            location: string;
-            site_id: string;
+            /** @description `null` once the site is deleted (the backup outlives it). */
+            site_id?: string | null;
+            site_name: string;
             /** Format: int64 */
             size_bytes?: number | null;
             status: string;
@@ -873,6 +980,9 @@ export interface components {
             ok: boolean;
             output: unknown;
         };
+        CordonRequest: {
+            cordoned: boolean;
+        };
         CreateOperatorRequest: {
             email: string;
             password: string;
@@ -887,9 +997,12 @@ export interface components {
             name: string;
         };
         CreateServerResponse: {
-            /** @description One-line installer using the single binary. */
+            /** @description `setu agent install --control-plane <public_url>` (no token). */
             install_command: string;
-            /** @description Single-use join token (valid 1 hour); shown once. */
+            /**
+             * @description Single-use join token (valid 1 hour); shown once. Pass it to the
+             *     install command as `SETU_JOIN_TOKEN` or on stdin.
+             */
             join_token: string;
             server: components["schemas"]["ServerOut"];
         };
@@ -1036,9 +1149,12 @@ export interface components {
             name?: string | null;
         };
         LocalServerResponse: {
-            /** @description One-line installer reusing the already installed `setu` binary. */
+            /** @description `setu agent install --control-plane …` for this box (no token). */
             install_command: string;
-            /** @description Single-use join token (valid 1 hour); shown once. */
+            /**
+             * @description Single-use join token (valid 1 hour); shown once. Pass it as
+             *     `SETU_JOIN_TOKEN` or on stdin, never on the command line.
+             */
             join_token: string;
             server: components["schemas"]["ServerOut"];
         };
@@ -1096,12 +1212,23 @@ export interface components {
             database: string;
             status: string;
         };
+        /** @description The plaintext of one env value. Holds a secret: `Debug` redacts it. */
+        RevealOut: {
+            name: string;
+            value: string;
+        };
+        RevealRequest: {
+            /** @description The caller's own password (re-authentication). */
+            password: string;
+        };
         ServerListOut: {
             servers: components["schemas"]["ServerOut"][];
         };
         ServerOut: {
             agent_version?: string | null;
             arch?: string | null;
+            /** @description No new sites are placed on a cordoned server. */
+            cordoned: boolean;
             /** Format: int32 */
             cpu_cores?: number | null;
             /** Format: date-time */
@@ -1112,9 +1239,14 @@ export interface components {
             disk_mb?: number | null;
             host?: string | null;
             id: string;
+            /** @description The control plane's own box (`POST /setup/local-server`). */
+            is_control_plane: boolean;
             /** Format: date-time */
             last_seen_at?: string | null;
-            /** Format: double */
+            /**
+             * Format: double
+             * @description From the latest heartbeat (`null` before the first).
+             */
             load1?: number | null;
             /** Format: int64 */
             mem_free_mb?: number | null;
@@ -1123,23 +1255,33 @@ export interface components {
             name: string;
             os?: string | null;
             /**
-             * @description Effective status: `pending` until first join, then `online` while
-             *     `last_seen_at` is within 60 s, else `offline` (computed at read
-             *     time, spec §3/Task 8).
+             * @description Computed on read (spec §3): `pending` until the first join, then
+             *     `online` while `last_seen_at` is within 60 s, else `offline`.
              */
             status: string;
             /** Format: date-time */
             updated_at: string;
         };
+        SetPasswordRequest: {
+            /** @description Required when changing your own password. */
+            current_password?: string | null;
+            password: string;
+        };
         SetupRequest: {
             email: string;
             password: string;
+            /** @description The one-time token from `<data_dir>/setup-token`. */
+            token: string;
         };
         SetupStatusOut: {
             /** @description True while no operator exists (the wizard must run). */
             needed: boolean;
-            /** @description The configured `SETU_PUBLIC_URL`, shown by the wizard. */
+            /** @description The configured `public_url`, shown by the wizard. */
             public_url: string;
+        };
+        /** @description `GET /sites/{id}`: the site plus its latest metric sample. */
+        SiteDetailOut: components["schemas"]["SiteOut"] & {
+            metrics?: null | components["schemas"]["SiteMetricOut"];
         };
         SiteJobResponse: {
             job: components["schemas"]["JobOut"];
@@ -1160,13 +1302,23 @@ export interface components {
             memory_bytes: number;
             short_id: string;
         };
+        /** @description The newest 1-minute sample of a site (spec §3 `site_metrics`). */
+        SiteMetricOut: {
+            /** Format: date-time */
+            at: string;
+            /** Format: double */
+            cpu_seconds: number;
+            /** Format: int64 */
+            disk_bytes: number;
+            /** Format: int64 */
+            memory_bytes: number;
+        };
         /** @description One site row (the sealed `env` is never included; see `./env`). */
         SiteOut: {
             app_id: string;
             app_version: string;
             /** Format: date-time */
             created_at: string;
-            data_dir: string;
             db_name: string;
             domain: string;
             failed_step?: string | null;
@@ -1220,6 +1372,13 @@ export interface components {
             name: string;
         };
         UpdateSiteRequest: {
+            /**
+             * @description Answers for `prompt` rules the target version adds (sealed into
+             *     the job; existing answers are kept by name).
+             */
+            prompts?: {
+                [key: string]: string;
+            };
             version: string;
         };
         ValidateRequest: {
@@ -1633,6 +1792,14 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -1800,6 +1967,32 @@ export interface operations {
             };
         };
     };
+    openapi_json: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description This API's OpenAPI 3.1 document */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     list: {
         parameters: {
             query?: never;
@@ -1881,6 +2074,62 @@ export interface operations {
                 };
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    set_password: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Operator id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetPasswordRequest"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2240,6 +2489,56 @@ export interface operations {
             };
         };
     };
+    cordon: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Server id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CordonRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServerOut"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     status: {
         parameters: {
             query?: never;
@@ -2281,6 +2580,14 @@ export interface operations {
                 };
             };
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2436,7 +2743,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SiteOut"];
+                    "application/json": components["schemas"]["SiteDetailOut"];
                 };
             };
             401: {
@@ -2567,6 +2874,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BackupJobResponse"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+                /** @description Backup id */
+                bid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupJobResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
             401: {
@@ -2762,6 +3133,66 @@ export interface operations {
                 };
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    env_reveal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+                /** @description Env var name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevealRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevealOut"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

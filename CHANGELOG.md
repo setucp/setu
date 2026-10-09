@@ -24,3 +24,18 @@ nonce across retries, accepts `--insecure`/`--ca`, and creates
 `agent.toml` 0600 from the start; `setu agent doctor` checks the
 helper, sudoers, units, Caddy, firewall, Postgres and the control
 plane.
+`setu serve` listens on TCP or a unix socket (`listen =
+"unix:/run/setu/http.sock"`, 0660, group `caddy`), writes a one-time
+setup token to `/var/lib/setu/setup-token` on first boot (the owner
+form requires it), keeps sessions in its own table (cookie
+`setu_session`, sliding 7 days, ended on logout and password change),
+refuses cross-origin mutations (`Origin` must be the panel URL, or
+`Sec-Fetch-Site: same-origin`), takes the client IP from
+`X-Forwarded-For` only behind its unix socket or a trusted proxy, and
+wakes agent long polls with Postgres LISTEN/NOTIFY. New routes: env
+reveal with password re-entry (audited), backup delete, server cordon,
+password change; `GET /sites/{id}` carries the latest metric sample and
+servers their latest load. No Swagger UI; the OpenAPI document is at
+`/api/v1/openapi.json` for logged-in operators. `setu operator create`
+reads the password from `SETU_OPERATOR_PASSWORD` or stdin; `setu backup
+--out <file>` dumps the control plane's database.

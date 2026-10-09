@@ -1,19 +1,17 @@
 //! `POST /api/v1/auth/login`, `POST /auth/logout`, `GET /auth/me`.
 
-use std::net::SocketAddr;
-
 use axum::{
-    extract::{ConnectInfo, State},
-    http::StatusCode,
+    extract::State,
+    http::{header, StatusCode},
     response::IntoResponse,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use setu_common::AppError;
-use tower_sessions::Session;
 use utoipa::ToSchema;
 
-use crate::auth::{audit, audit_ip, current_operator, verify_password, SESSION_OPERATOR_ID};
+use crate::auth::session::{clear_cookie, secure_cookies, set_cookie};
+use crate::auth::{audit, current_operator, verify_password, ClientIp, Session};
 use crate::state::AppState;
 
 use super::ApiJson;
@@ -59,9 +57,10 @@ impl OperatorOut {
     }
 }
 
-/// Log in: verify the argon2id hash, rotate the session id (fixation
-/// guard), store the operator id, and return the operator. Failures count
-/// per source IP: 10 within 15 minutes → 429 on subsequent attempts.
+/// Log in: verify the argon2id hash, start a fresh session (a new random
+/// cookie, never the one the request carried: fixation guard) and return
+/// the operator. Failures count per client IP (spec §7, behind Caddy or a
+/// trusted proxy the forwarded address): 10 within 15 minutes → 429.
 #[utoipa::path(
     post,
     path = "/api/v1/auth/login",
@@ -69,17 +68,18 @@ impl OperatorOut {
     responses(
         (status = 200, body = OperatorOut),
         (status = 401, body = super::ErrorBody),
+        (status = 403, body = super::ErrorBody),
         (status = 429, body = super::ErrorBody),
     )
 )]
 pub async fn login(
     State(state): State<AppState>,
     session: Session,
-    peer: ConnectInfo<SocketAddr>,
+    ip: ClientIp,
     ApiJson(body): ApiJson<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ip = peer.0.ip();
-    state.check_login_rate(ip).await?;
+    let key = ip.limiter_key();
+    state.check_login_rate(key).await?;
     tracing::debug!("login attempt for {:?}", body.email);
 
     let fail = || AppError::unauthorized("invalid email or password");
@@ -88,39 +88,40 @@ pub async fn login(
         // Same-cost dummy verify so unknown-email timing matches the
         // known-user wrong-password path; the message stays identical.
         let _ = verify_password(DUMMY_HASH, &body.password);
-        state.record_login_failure(ip).await;
+        state.record_login_failure(key).await;
         return Err(fail());
     };
     if verify_password(&op.password_hash, &body.password).is_err() {
-        state.record_login_failure(ip).await;
+        state.record_login_failure(key).await;
         return Err(fail());
     }
 
-    state.clear_login_failures(ip).await;
-    session.cycle_id().await.map_err(|e| {
-        tracing::error!("session cycle failed: {e}");
-        AppError::internal()
-    })?;
-    session
-        .insert(SESSION_OPERATOR_ID, op.id.clone())
-        .await
-        .map_err(|e| {
-            tracing::error!("session store failed: {e}");
-            AppError::internal()
-        })?;
+    state.clear_login_failures(key).await;
+    // A session the browser already held ends here.
+    if let Some(old) = session.cookie() {
+        state.db.sessions().destroy(old).await?;
+    }
+    let cookie = state.db.sessions().create(&op.id).await?;
     audit(
         &state.db,
         Some(&op.id),
         "auth.login",
         Some(&op.email),
-        audit_ip(None, Some(peer.0)).as_deref(),
+        ip.as_deref(),
     )
     .await;
-    Ok((StatusCode::OK, Json(OperatorOut::from_row(&op))))
+    Ok((
+        StatusCode::OK,
+        [(
+            header::SET_COOKIE,
+            set_cookie(&cookie, secure_cookies(&state.config.public_url)),
+        )],
+        Json(OperatorOut::from_row(&op)),
+    ))
 }
 
-/// Log out: destroy the session. Anonymous callers get 401 (checked first,
-//  so logout never leaks whether a session existed).
+/// Log out: destroy the session row and clear the cookie. Anonymous
+/// callers get 401.
 #[utoipa::path(
     post,
     path = "/api/v1/auth/logout",
@@ -129,22 +130,27 @@ pub async fn login(
 pub async fn logout(
     State(state): State<AppState>,
     session: Session,
-    peer: ConnectInfo<SocketAddr>,
+    ip: ClientIp,
 ) -> Result<impl IntoResponse, AppError> {
-    let op = current_operator(&session, &state.db).await?;
-    session.delete().await.map_err(|e| {
-        tracing::error!("session delete failed: {e}");
-        AppError::internal()
-    })?;
+    let op = current_operator(&session).await?;
+    if let Some(cookie) = session.cookie() {
+        state.db.sessions().destroy(cookie).await?;
+    }
     audit(
         &state.db,
         Some(&op.id),
         "auth.logout",
         Some(&op.email),
-        audit_ip(None, Some(peer.0)).as_deref(),
+        ip.as_deref(),
     )
     .await;
-    Ok(StatusCode::NO_CONTENT)
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(
+            header::SET_COOKIE,
+            clear_cookie(secure_cookies(&state.config.public_url)),
+        )],
+    ))
 }
 
 /// The current operator, or 401 when anonymous.
@@ -156,10 +162,7 @@ pub async fn logout(
         (status = 401, body = super::ErrorBody),
     )
 )]
-pub async fn me(
-    State(state): State<AppState>,
-    session: Session,
-) -> Result<impl IntoResponse, AppError> {
-    let op = current_operator(&session, &state.db).await?;
+pub async fn me(session: Session) -> Result<impl IntoResponse, AppError> {
+    let op = current_operator(&session).await?;
     Ok(Json(OperatorOut::from_row(&op)))
 }

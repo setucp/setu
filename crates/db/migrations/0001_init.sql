@@ -47,7 +47,11 @@ CREATE TABLE servers (
     last_seen_at TIMESTAMPTZ,
     cordoned BOOLEAN NOT NULL DEFAULT FALSE,
     is_control_plane BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Load figures of the latest heartbeat (shown on the servers page).
+    load1 DOUBLE PRECISION,
+    mem_free_mb BIGINT,
+    disk_free_mb BIGINT
 );
 
 CREATE TABLE apps (

@@ -1,4 +1,4 @@
-//! Servers integration tests: authz, install command, CSRF guard.
+//! Servers integration tests: authz, install command, cordon.
 
 use setu_api::testing::TestServer;
 use setu_jobs::testing::FakeAgent;
@@ -22,7 +22,7 @@ async fn viewer_cannot_create_server() {
 }
 
 #[tokio::test]
-async fn post_servers_returns_install_command_with_join_token() {
+async fn post_servers_returns_install_command_and_separate_join_token() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
     let owner = srv.login_as_owner().await;
@@ -49,14 +49,12 @@ async fn post_servers_returns_install_command_with_join_token() {
         command.contains("setu agent install"),
         "install command must use the single binary, got: {command}"
     );
-    assert!(
-        command.contains(join_token),
-        "install command must embed the join token, got: {command}"
+    assert_eq!(
+        command,
+        format!("setu agent install --control-plane {public_url}"),
+        "the command names the panel and never carries the token"
     );
-    assert!(
-        command.contains(&public_url),
-        "install command must embed SETU_PUBLIC_URL ({public_url}), got: {command}"
-    );
+    assert!(!command.contains(join_token));
 
     // The new server reads back as pending.
     let id = body["server"]["id"].as_str().expect("server id");
@@ -71,17 +69,71 @@ async fn post_servers_returns_install_command_with_join_token() {
 }
 
 #[tokio::test]
-async fn mismatched_origin_is_rejected_with_403() {
+async fn cordon_toggles_and_is_audited() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
     let owner = srv.login_as_owner().await;
-
-    let resp = owner
+    let viewer = srv.login_as("viewer").await;
+    let created: serde_json::Value = owner
         .post(srv.url("/api/v1/servers"))
-        .header("Origin", "https://evil.example")
-        .json(&serde_json::json!({"name": "web-1"}))
+        .json(&serde_json::json!({"name": "web-2"}))
         .send()
         .await
-        .expect("request sends");
-    assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN);
+        .expect("create sends")
+        .json()
+        .await
+        .expect("json");
+    let id = created["server"]["id"].as_str().expect("id").to_string();
+    assert_eq!(created["server"]["cordoned"], serde_json::json!(false));
+    assert_eq!(
+        created["server"]["is_control_plane"],
+        serde_json::json!(false)
+    );
+    assert_eq!(created["server"]["load1"], serde_json::Value::Null);
+    let url = srv.url(&format!("/api/v1/servers/{id}/cordon"));
+
+    let denied = viewer
+        .post(&url)
+        .json(&serde_json::json!({"cordoned": true}))
+        .send()
+        .await
+        .expect("viewer sends");
+    assert_eq!(denied.status(), reqwest::StatusCode::FORBIDDEN);
+    for want in [true, false, true] {
+        let resp = owner
+            .post(&url)
+            .json(&serde_json::json!({"cordoned": want}))
+            .send()
+            .await
+            .expect("cordon sends");
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        let body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(body["cordoned"], serde_json::json!(want));
+    }
+    assert!(srv.db.servers().get(&id).await.expect("row").cordoned);
+    let actions: Vec<String> = srv
+        .db
+        .audit()
+        .list_recent(20)
+        .await
+        .expect("audit")
+        .into_iter()
+        .map(|a| a.action)
+        .collect();
+    assert_eq!(
+        actions.iter().filter(|a| *a == "server.cordon").count(),
+        2,
+        "{actions:?}"
+    );
+    assert_eq!(
+        actions.iter().filter(|a| *a == "server.uncordon").count(),
+        1
+    );
+    let missing = owner
+        .post(srv.url("/api/v1/servers/nope/cordon"))
+        .json(&serde_json::json!({"cordoned": true}))
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
 }

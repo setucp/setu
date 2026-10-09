@@ -14,7 +14,7 @@ pub mod sites;
 pub use apps::{App, AppVersion, Apps};
 pub use audit::{Audit, AuditEntry};
 pub use backups::{Backup, Backups};
-pub use commands::{AgentCommand, Commands, WaitError};
+pub use commands::{AgentCommand, Commands, WaitError, NOTIFY_CHANNEL};
 pub use jobs::{Job, Jobs};
 pub use metrics::{LatestMetric, Metrics};
 pub use operators::{Operator, Operators};
@@ -23,7 +23,7 @@ pub use servers::{
     HeartbeatInput, HeartbeatOutcome, JoinError, JoinInput, Server, ServerStatus, Servers,
 };
 pub use sessions::{Session, Sessions};
-pub use settings::Settings;
+pub use settings::{Settings, SETUP_TOKEN_HASH, TLS_INTERNAL};
 pub use sites::{Allocation, CreateError, NewSite, Site, Sites};
 
 /// `Duration` → seconds as `f64` for `make_interval(secs => $n)`.
@@ -53,4 +53,10 @@ pub(crate) fn random_32() -> [u8; 32] {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     bytes
+}
+
+/// Byte equality whose time does not depend on where the inputs differ
+/// (lengths are not secret here: both sides are SHA-256 hex).
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }

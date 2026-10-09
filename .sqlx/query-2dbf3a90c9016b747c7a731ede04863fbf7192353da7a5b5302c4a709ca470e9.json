@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, short_id, name, hostname, public_ip, token_hash, join_token_hash,\n                    join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,\n                    boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,\n                    is_control_plane, created_at FROM servers WHERE token_hash = $1",
+  "query": "UPDATE servers SET\n                     token_hash = $2, join_nonce = $3, join_token_sealed = $4,\n                     joined_at = now(), last_seen_at = now(),\n                     hostname = $5, public_ip = $6, arch = $7, os = $8,\n                     cpu_cores = $9, memory_mb = $10, disk_mb = $11\n                 WHERE id = $1\n                 RETURNING id, short_id, name, hostname, public_ip, token_hash, join_token_hash,\n                    join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,\n                    boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,\n                    is_control_plane, created_at, load1, mem_free_mb, disk_free_mb",
   "describe": {
     "columns": [
       {
@@ -244,11 +244,54 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "ordinal": 22,
+        "name": "load1",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "load1"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "mem_free_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "mem_free_mb"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "disk_free_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "disk_free_mb"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
-        "Text"
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
@@ -273,8 +316,11 @@
       true,
       false,
       false,
-      false
+      false,
+      true,
+      true,
+      true
     ]
   },
-  "hash": "026096ce09b4c4fce284bc6084a0be76512847f1acc86828d8b5410f6aad4c59"
+  "hash": "2dbf3a90c9016b747c7a731ede04863fbf7192353da7a5b5302c4a709ca470e9"
 }

@@ -11,7 +11,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use axum::{
-    extract::{ConnectInfo, Path, State},
+    extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -19,10 +19,9 @@ use axum::{
 use futures::StreamExt as _;
 use serde::{Deserialize, Serialize};
 use setu_common::AppError;
-use tower_sessions::Session;
 use utoipa::ToSchema;
 
-use crate::auth::{audit, audit_ip, require_role, Role};
+use crate::auth::{audit, require_role, ClientIp, Role, Session};
 use crate::state::AppState;
 
 use super::ApiJson;
@@ -102,7 +101,7 @@ pub async fn list(
     State(state): State<AppState>,
     session: Session,
 ) -> Result<impl IntoResponse, AppError> {
-    require_role(&session, &state.db, Role::Viewer).await?;
+    require_role(&session, Role::Viewer).await?;
     let apps = state.db.apps().list().await?;
     Ok(Json(AppListOut {
         apps: apps
@@ -129,11 +128,10 @@ pub async fn list(
     )
 )]
 pub async fn validate(
-    State(state): State<AppState>,
     session: Session,
     ApiJson(body): ApiJson<ValidateRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_role(&session, &state.db, Role::Operator).await?;
+    require_role(&session, Role::Operator).await?;
     Ok(Json(validate_toml(&body.toml)))
 }
 
@@ -152,10 +150,10 @@ pub async fn validate(
 pub async fn publish(
     State(state): State<AppState>,
     session: Session,
-    peer: ConnectInfo<SocketAddr>,
+    ip: ClientIp,
     ApiJson(body): ApiJson<PublishRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let caller = require_role(&session, &state.db, Role::Operator).await?;
+    let caller = require_role(&session, Role::Operator).await?;
     let src = match (body.toml, body.url) {
         (Some(toml), None) => toml,
         (None, Some(url)) => fetch_manifest_url(&url).await?,
@@ -178,7 +176,7 @@ pub async fn publish(
         Some(&caller.id),
         "app.publish",
         Some(&format!("{}/{}", row.app_id, row.version)),
-        audit_ip(None, Some(peer.0)).as_deref(),
+        ip.as_deref(),
     )
     .await;
     Ok((
@@ -216,7 +214,7 @@ pub async fn versions(
     session: Session,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_role(&session, &state.db, Role::Viewer).await?;
+    require_role(&session, Role::Viewer).await?;
     state.db.apps().get(&id).await?;
     let rows = state.db.apps().versions(&id).await?;
     Ok(Json(AppVersionListOut {

@@ -1,9 +1,13 @@
-//! OpenAPI document (utoipa) served at `/api/openapi.json` and browsable
-//! at `/api/docs`. `setu openapi` writes these exact bytes to the
-//! checked-in `openapi.json` at the workspace root; the snapshot test
-//! enforces equality (`UPDATE=1` rewrites).
+//! OpenAPI document (utoipa), served at `GET /api/v1/openapi.json` to
+//! a logged-in operator (no Swagger UI, spec §7). `setu openapi` writes
+//! these exact bytes to the checked-in `openapi.json` at the workspace
+//! root; the snapshot test enforces equality (`UPDATE=1` rewrites).
 
+use axum::{http::header, response::IntoResponse};
+use setu_common::AppError;
 use utoipa::OpenApi;
+
+use crate::auth::{require_role, Role, Session};
 
 use super::apps::{
     AppListOut, AppOut, AppVersionListOut, AppVersionOut, ManifestErrorOut, PublishRequest,
@@ -12,13 +16,16 @@ use super::apps::{
 use super::auth::{LoginRequest, OperatorOut};
 use super::backups::{BackupJobResponse, BackupListOut, BackupOut};
 use super::jobs::{AuditEntryOut, AuditListOut, AuditQuery, JobListOut, JobsQuery};
-use super::operators::{CreateOperatorRequest, OperatorListOut};
+use super::operators::{CreateOperatorRequest, OperatorListOut, SetPasswordRequest};
 use super::plans::{CreatePlanRequest, PlanLimitsIn, PlanListOut, PlanOut, UpdatePlanRequest};
-use super::servers::{CreateServerRequest, CreateServerResponse, ServerListOut, ServerOut};
+use super::servers::{
+    CordonRequest, CreateServerRequest, CreateServerResponse, ServerListOut, ServerOut,
+};
 use super::setup::{LocalServerRequest, LocalServerResponse, SetupRequest, SetupStatusOut};
 use super::sites::{
     CreateSiteRequest, CreateSiteResponse, EnvEntryOut, EnvGetOut, EnvPutRequest, JobOut,
-    SiteJobResponse, SiteListOut, SiteOut, UpdateSiteRequest,
+    JobResponse, RevealOut, RevealRequest, SiteDetailOut, SiteJobResponse, SiteListOut,
+    SiteMetricOut, SiteOut, UpdateSiteRequest,
 };
 use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
 
@@ -37,6 +44,7 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::auth::me,
         super::operators::list,
         super::operators::create,
+        super::operators::set_password,
         super::setup::status,
         super::setup::create_owner,
         super::setup::local_server,
@@ -44,6 +52,7 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::servers::create,
         super::servers::get,
         super::servers::delete,
+        super::servers::cordon,
         super::apps::list,
         super::apps::validate,
         super::apps::publish,
@@ -63,14 +72,17 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::sites::delete,
         super::sites::env_get,
         super::sites::env_put,
+        super::sites::env_reveal,
         super::sites::logs,
         super::backups::list,
         super::backups::create,
         super::backups::restore,
+        super::backups::delete,
         super::jobs::list,
         super::jobs::get,
         super::jobs::log,
         super::jobs::audit_list,
+        openapi_json,
         super::agent::join,
         super::agent::commands,
         super::agent::result,
@@ -85,10 +97,12 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         OperatorOut,
         OperatorListOut,
         CreateOperatorRequest,
+        SetPasswordRequest,
         ServerOut,
         ServerListOut,
         CreateServerRequest,
         CreateServerResponse,
+        CordonRequest,
         SetupStatusOut,
         SetupRequest,
         LocalServerRequest,
@@ -109,7 +123,12 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         UpdatePlanRequest,
         SiteOut,
         SiteListOut,
+        SiteDetailOut,
+        SiteMetricOut,
         JobOut,
+        JobResponse,
+        RevealRequest,
+        RevealOut,
         CreateSiteRequest,
         CreateSiteResponse,
         UpdateSiteRequest,
@@ -151,4 +170,21 @@ pub fn openapi_json_string() -> String {
             .to_pretty_json()
             .expect("openapi serialises")
     )
+}
+
+/// The OpenAPI document (viewer and above).
+#[utoipa::path(
+    get,
+    path = "/api/v1/openapi.json",
+    responses(
+        (status = 200, description = "This API's OpenAPI 3.1 document"),
+        (status = 401, body = super::ErrorBody),
+    )
+)]
+pub async fn openapi_json(session: Session) -> Result<impl IntoResponse, AppError> {
+    require_role(&session, Role::Viewer).await?;
+    Ok((
+        [(header::CONTENT_TYPE, "application/json")],
+        openapi_json_string(),
+    ))
 }

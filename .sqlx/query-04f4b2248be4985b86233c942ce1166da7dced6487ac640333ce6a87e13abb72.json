@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, short_id, name, hostname, public_ip, token_hash, join_token_hash,\n                    join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,\n                    boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,\n                    is_control_plane, created_at FROM servers ORDER BY name, id",
+  "query": "SELECT id, short_id, name, hostname, public_ip, token_hash, join_token_hash,\n                    join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,\n                    boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,\n                    is_control_plane, created_at, load1, mem_free_mb, disk_free_mb FROM servers WHERE token_hash = $1",
   "describe": {
     "columns": [
       {
@@ -244,10 +244,45 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "ordinal": 22,
+        "name": "load1",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "load1"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "mem_free_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "mem_free_mb"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "disk_free_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "disk_free_mb"
+          }
+        }
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Text"
+      ]
     },
     "nullable": [
       false,
@@ -271,8 +306,11 @@
       true,
       false,
       false,
-      false
+      false,
+      true,
+      true,
+      true
     ]
   },
-  "hash": "ca449dea921b4844440e54960cd077c1b145798d04cb887631e7a5e5b1b81b18"
+  "hash": "04f4b2248be4985b86233c942ce1166da7dced6487ac640333ce6a87e13abb72"
 }

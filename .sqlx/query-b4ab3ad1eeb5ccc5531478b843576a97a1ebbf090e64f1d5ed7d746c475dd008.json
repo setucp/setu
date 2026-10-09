@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO servers\n                     (id, short_id, name, join_token_hash, join_expires_at, is_control_plane)\n                 VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5), $6)\n                 RETURNING id, short_id, name, hostname, public_ip, token_hash, join_token_hash,\n                    join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,\n                    boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,\n                    is_control_plane, created_at",
+  "query": "INSERT INTO servers\n                     (id, short_id, name, join_token_hash, join_expires_at, is_control_plane)\n                 VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5), $6)\n                 RETURNING id, short_id, name, hostname, public_ip, token_hash, join_token_hash,\n                    join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,\n                    boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,\n                    is_control_plane, created_at, load1, mem_free_mb, disk_free_mb",
   "describe": {
     "columns": [
       {
@@ -244,6 +244,39 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "ordinal": 22,
+        "name": "load1",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "load1"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "mem_free_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "mem_free_mb"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "disk_free_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "disk_free_mb"
+          }
+        }
       }
     ],
     "parameters": {
@@ -278,8 +311,11 @@
       true,
       false,
       false,
-      false
+      false,
+      true,
+      true,
+      true
     ]
   },
-  "hash": "7fef37f3fd1d323d190b637d06c27da089766e0d0620916fbc7b7db02835f245"
+  "hash": "b4ab3ad1eeb5ccc5531478b843576a97a1ebbf090e64f1d5ed7d746c475dd008"
 }

@@ -34,11 +34,8 @@ url.workspace = true
 clap.workspace = true
 argon2.workspace = true
 utoipa.workspace = true
-utoipa-swagger-ui.workspace = true
 reqwest.workspace = true
-tower-sessions.workspace = true
 sha2.workspace = true
-time.workspace = true
 futures.workspace = true
 hostname.workspace = true
 sqlx.workspace = true
@@ -46,6 +43,10 @@ rust-embed.workspace = true
 async-trait.workspace = true
 rand.workspace = true
 hex.workspace = true
+base64.workspace = true
+ipnet.workspace = true
+nix.workspace = true
+tempfile.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 setu-common = { path = "../common" }
@@ -59,3 +60,6 @@ setu-testkit = { path = "../testkit" }
 [dev-dependencies]
 setu-testkit = { path = "../testkit" }
 tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
