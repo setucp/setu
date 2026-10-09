@@ -5,7 +5,7 @@ tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 
 You implement exactly one UI task. Read `CLAUDE.md`, the brief, and the
-screen description in the spec (§6). Conventions match Vyasa's `admin/`:
+screen description in the spec (§7). Conventions match Vyasa's `admin/`:
 file-based TanStack routes, Query hooks in `src/lib/api.ts`, generated
 types from `openapi.json` via `pnpm -C ui gen:api` (never from a
 server), shadcn/ui primitives in `src/components/ui`, Tailwind classes,
