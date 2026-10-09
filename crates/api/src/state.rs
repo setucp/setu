@@ -17,6 +17,13 @@ const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// Hard cap on tracked IPs so a distributed scan cannot grow the map
 /// without bound; the oldest entry is evicted first.
 const MAX_LOGIN_IPS: usize = 10_000;
+/// Long-poll ceiling per server on `GET /agent/v1/commands` (spec §7).
+/// A well-behaved agent holds one `?wait=30` request open at a time
+/// (~2 polls/min); 600/min only bites a spinning client, which gets 429.
+const MAX_AGENT_POLLS: usize = 600;
+const AGENT_RATE_WINDOW: Duration = Duration::from_secs(60);
+/// Hard cap on tracked servers, same eviction policy as the login table.
+const MAX_AGENT_SERVERS: usize = 10_000;
 
 /// State shared by every handler. `Clone` is cheap (all `Arc` inside bar
 /// `Config`, which is small); `Debug` redacts the sealer and secret key
@@ -28,6 +35,8 @@ pub struct AppState {
     pub config: Config,
     pub agent: Arc<dyn AgentClient>,
     login_failures: Arc<tokio::sync::Mutex<HashMap<IpAddr, Vec<Instant>>>>,
+    agent_polls: Arc<tokio::sync::Mutex<HashMap<String, Vec<Instant>>>>,
+    agent_poll_limit: usize,
 }
 
 impl std::fmt::Debug for AppState {
@@ -49,7 +58,16 @@ impl AppState {
             config,
             agent,
             login_failures: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            agent_polls: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            agent_poll_limit: MAX_AGENT_POLLS,
         }
+    }
+
+    /// Override the per-server poll ceiling (tests set a tiny limit to
+    /// exercise the 429 path without issuing 600 requests).
+    pub fn with_agent_poll_limit(mut self, limit: usize) -> Self {
+        self.agent_poll_limit = limit;
+        self
     }
 
     /// Reject the login when this IP already failed [`MAX_LOGIN_FAILURES`]
@@ -93,6 +111,37 @@ impl AppState {
         let mut table = self.login_failures.lock().await;
         table.remove(&ip);
     }
+
+    /// Count one `GET /agent/v1/commands` poll for the server, rejecting
+    /// with 429 past the per-state poll limit (default [`MAX_AGENT_POLLS`])
+    /// per [`AGENT_RATE_WINDOW`]. Check and record are one atomic step
+    /// (every poll counts, not just failures); stale entries prune first
+    /// and the oldest server evicts past [`MAX_AGENT_SERVERS`].
+    pub async fn check_agent_rate(&self, server_id: &str) -> Result<(), AppError> {
+        let mut table = self.agent_polls.lock().await;
+        let now = Instant::now();
+        prune_agent_table(&mut table, now);
+        let entry = table.entry(server_id.to_string()).or_default();
+        if entry.len() >= self.agent_poll_limit {
+            return Err(AppError::rate_limited(
+                "too many agent polls; back off and retry",
+            ));
+        }
+        entry.push(now);
+        while table.len() > MAX_AGENT_SERVERS {
+            let oldest = table
+                .iter()
+                .min_by_key(|(_, hits)| hits.iter().max().copied())
+                .map(|(id, _)| id.clone());
+            match oldest {
+                Some(id) => {
+                    table.remove(&id);
+                }
+                None => break,
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Drop timestamps outside the rate-limit window, then drop IPs with no
@@ -100,6 +149,14 @@ impl AppState {
 fn prune_login_table(table: &mut HashMap<IpAddr, Vec<Instant>>, now: Instant) {
     table.retain(|_, hits| {
         hits.retain(|t| now.duration_since(*t) < RATE_LIMIT_WINDOW);
+        !hits.is_empty()
+    });
+}
+
+/// Same pruning for the per-server agent poll table (1-minute window).
+fn prune_agent_table(table: &mut HashMap<String, Vec<Instant>>, now: Instant) {
+    table.retain(|_, hits| {
+        hits.retain(|t| now.duration_since(*t) < AGENT_RATE_WINDOW);
         !hits.is_empty()
     });
 }

@@ -191,12 +191,18 @@ impl<'a> Servers<'a> {
     }
 
     /// Record a heartbeat: the server is `online`, capacity-adjacent
-    /// fields refresh, and the metrics batch is upserted.
+    /// fields refresh, and the metrics batch is upserted — server update
+    /// and metrics insert commit in one transaction, so a crash cannot
+    /// leave `last_seen_at` fresh with the batch lost (or vice versa).
+    /// Metrics whose `site_id` does not belong to this server (foreign or
+    /// unknown) are ignored, so a compromised agent cannot inject metrics
+    /// for another server's sites.
     pub async fn heartbeat(
         &self,
         id: &str,
         hb: &setu_proto::Heartbeat,
     ) -> Result<Server, AppError> {
+        let mut tx = self.pool.begin().await.map_err(map_db_error)?;
         let row = sqlx::query_as!(
             ServerRow,
             "UPDATE servers SET
@@ -215,12 +221,31 @@ impl<'a> Servers<'a> {
             hb.mem_free_mb as i64,
             hb.disk_free_mb as i64,
         )
-        .fetch_optional(self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(map_db_error)?
         .map(|r| r.into_server())
         .ok_or_else(|| AppError::not_found("server not found"))?;
-        crate::repo::metrics::insert_metrics(self.pool, &hb.metrics).await?;
+        if !hb.metrics.is_empty() {
+            let owned = sqlx::query!("SELECT id FROM sites WHERE server_id = $1", id)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(map_db_error)?;
+            let owned_ids: std::collections::HashSet<&str> =
+                owned.iter().map(|r| r.id.as_str()).collect();
+            let own_metrics: Vec<setu_proto::SiteMetric> = hb
+                .metrics
+                .iter()
+                .filter(|m| owned_ids.contains(m.site_id.as_str()))
+                .cloned()
+                .collect();
+            let skipped = hb.metrics.len() - own_metrics.len();
+            if skipped > 0 {
+                tracing::debug!(server_id = %id, skipped, "heartbeat ignored foreign metrics");
+            }
+            crate::repo::metrics::insert_metrics_tx(&mut tx, &own_metrics).await?;
+        }
+        tx.commit().await.map_err(map_db_error)?;
         Ok(row)
     }
 

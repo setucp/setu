@@ -1,5 +1,6 @@
 //! `/api/v1` handlers: auth, operators, servers, apps, plans (spec §6).
 
+pub mod agent;
 pub mod apps;
 pub mod auth;
 pub mod docs;
@@ -90,6 +91,15 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn(authn::csrf_middleware))
         .with_state(state.clone());
 
+    // Agent protocol (spec §4): bearer tokens, never sessions, so these
+    // routes sit outside the CSRF layer above.
+    let agent_api = Router::new()
+        .route("/join", post(agent::join))
+        .route("/commands", get(agent::commands))
+        .route("/commands/{id}/result", post(agent::result))
+        .route("/heartbeat", post(agent::heartbeat))
+        .with_state(state.clone());
+
     let store = PgSessionStore::new(state.db.pool().clone());
     let secure = use_secure_cookies(&state.config.public_url);
     let session_layer = SessionManagerLayer::new(store)
@@ -102,6 +112,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .nest("/api/v1", api)
+        .nest("/agent/v1", agent_api)
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", docs::ApiDoc::openapi()))
         .fallback(fallback)
         .layer(session_layer)

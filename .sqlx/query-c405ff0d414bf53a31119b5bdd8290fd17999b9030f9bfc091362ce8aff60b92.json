@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE agent_commands SET completed_at = now(), result = $2\n              WHERE id = $1 AND server_id = $3 AND completed_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c405ff0d414bf53a31119b5bdd8290fd17999b9030f9bfc091362ce8aff60b92"
+}

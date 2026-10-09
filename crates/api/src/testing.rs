@@ -43,7 +43,7 @@ impl TestServer {
     /// client. The server's `SETU_PUBLIC_URL` is `http://<addr>`, so the
     /// install-command test can assert on it.
     pub async fn spawn(test_db: TestDb, agent: FakeAgent) -> Self {
-        Self::boot(test_db, agent, None).await
+        Self::boot(test_db, agent, None, None).await
     }
 
     /// Boot like [`TestServer::spawn`] but with an explicit `public_url`
@@ -54,10 +54,25 @@ impl TestServer {
         agent: FakeAgent,
         public_url: url::Url,
     ) -> Self {
-        Self::boot(test_db, agent, Some(public_url)).await
+        Self::boot(test_db, agent, Some(public_url), None).await
     }
 
-    async fn boot(test_db: TestDb, agent: FakeAgent, public_url: Option<url::Url>) -> Self {
+    /// Boot like [`TestServer::spawn`] but with a tiny agent poll ceiling
+    /// so the 429 test needs only a handful of requests.
+    pub async fn spawn_with_agent_poll_limit(
+        test_db: TestDb,
+        agent: FakeAgent,
+        limit: usize,
+    ) -> Self {
+        Self::boot(test_db, agent, None, Some(limit)).await
+    }
+
+    async fn boot(
+        test_db: TestDb,
+        agent: FakeAgent,
+        public_url: Option<url::Url>,
+        agent_poll_limit: Option<usize>,
+    ) -> Self {
         let pool = test_db.pool.clone();
         let db = Db::new(pool.clone());
         // The seeded Default plan exists for convenience (site tests later).
@@ -78,12 +93,15 @@ impl TestServer {
             public_url,
             data_dir: std::env::temp_dir().join(format!("setu-test-{}", addr.port())),
         };
-        let state = crate::AppState::new(
+        let mut state = crate::AppState::new(
             db.clone(),
             Sealer::new(&secret),
             config,
             Arc::new(agent.clone()),
         );
+        if let Some(limit) = agent_poll_limit {
+            state = state.with_agent_poll_limit(limit);
+        }
         let app = crate::rest::router(state);
         tokio::spawn(async move {
             axum::serve(

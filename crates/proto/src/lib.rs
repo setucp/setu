@@ -13,10 +13,11 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// Resource limits for one site (mirrors the manifest `limits.default`;
 /// kept local so the agent needs no manifest dependency).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Limits {
     pub memory_mb: u32,
     pub cpu_percent: u32,
@@ -24,7 +25,7 @@ pub struct Limits {
 }
 
 /// One downloadable binary release.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct BinaryRef {
     pub url: String,
     pub sha256: String,
@@ -33,7 +34,7 @@ pub struct BinaryRef {
 }
 
 /// One concrete env var to write into the site env file.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct EnvVar {
     pub name: String,
     pub value: String,
@@ -55,16 +56,20 @@ impl fmt::Debug for EnvVar {
 }
 
 /// Everything the agent needs to materialise one site.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct SiteSpec {
     pub site_id: String,
     pub short_id: String,
     pub user: String,
+    #[schema(value_type = String)]
     pub data_dir: PathBuf,
+    #[schema(value_type = String)]
     pub run_dir: PathBuf,
     pub port: u16,
+    #[schema(value_type = String)]
     pub exec: PathBuf,
     pub args: Vec<String>,
+    #[schema(value_type = String)]
     pub env_file: PathBuf,
     pub limits: Limits,
     pub health_path: String,
@@ -72,7 +77,7 @@ pub struct SiteSpec {
 }
 
 /// Idempotent agent commands, JSON-tagged by `kind` (snake_case).
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Command {
     CreateDatabase {
@@ -123,11 +128,13 @@ pub enum Command {
         site: SiteSpec,
         db: String,
         dirs: Vec<String>,
+        #[schema(value_type = String)]
         dest: PathBuf,
     },
     Restore {
         site: SiteSpec,
         db: String,
+        #[schema(value_type = String)]
         src: PathBuf,
     },
     Remove {
@@ -233,15 +240,18 @@ impl fmt::Debug for Command {
 }
 
 /// A command in flight: stable `id` so redelivery is idempotent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// `attempts` counts deliveries (`next_for` bumps it; `requeue_stale`
+/// only resets `delivered_at`), so the agent can tell a retry apart.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct CommandEnvelope {
     pub id: String,
     pub created_at: DateTime<Utc>,
     pub command: Command,
+    pub attempts: i32,
 }
 
 /// The agent's report for one command id.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct CommandResult {
     pub id: String,
     pub ok: bool,
@@ -251,7 +261,7 @@ pub struct CommandResult {
 }
 
 /// One systemd unit's state as observed by the agent.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct UnitState {
     pub site_id: String,
     pub active: bool,
@@ -260,7 +270,7 @@ pub struct UnitState {
 }
 
 /// One per-site metrics sample.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct SiteMetric {
     pub site_id: String,
     pub at: DateTime<Utc>,
@@ -270,7 +280,7 @@ pub struct SiteMetric {
 }
 
 /// Agent heartbeat posted every 15 s.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Heartbeat {
     pub agent_version: String,
     pub load1: f64,
@@ -281,7 +291,7 @@ pub struct Heartbeat {
 }
 
 /// First contact: the agent redeems a single-use join token.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct JoinRequest {
     pub join_token: String,
     pub hostname: String,
@@ -307,7 +317,7 @@ impl fmt::Debug for JoinRequest {
 }
 
 /// Control-plane answer to a join: the long-lived server identity.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct JoinResponse {
     pub server_id: String,
     pub server_token: String,
@@ -500,6 +510,7 @@ mod tests {
             command: Command::Status {
                 site_id: "01J0000000000000000000001".to_string(),
             },
+            attempts: 1,
         };
         let v = serde_json::to_value(&envelope).unwrap();
         assert_eq!(
@@ -612,6 +623,7 @@ mod tests {
             id: "01J0000000000000000000002".to_string(),
             created_at: Utc.with_ymd_and_hms(2026, 10, 9, 12, 0, 0).unwrap(),
             command: create,
+            attempts: 1,
         };
         let dbg = format!("{envelope:?}");
         assert!(!dbg.contains("SECRET-abc-123"), "envelope leaked: {dbg}");

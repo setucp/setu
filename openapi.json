@@ -10,6 +10,231 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/agent/v1/commands": {
+      "get": {
+        "tags": [
+          "super::agent"
+        ],
+        "summary": "The next undelivered command for this server (200), or 204 when none\narrives within the wait window. Delivery marks the command delivered\nand counts the attempt; agents are idempotent, so the control plane\nmay redeliver after `requeue_stale`. Polled per server at 600/min\n(spec §7); past that the poll is 429.",
+        "operationId": "commands",
+        "parameters": [
+          {
+            "name": "wait",
+            "in": "query",
+            "description": "Long-poll ceiling in seconds, default/cap 30",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Next undelivered command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandEnvelope"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No command within the wait window"
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent/v1/commands/{id}/result": {
+      "post": {
+        "tags": [
+          "super::agent"
+        ],
+        "summary": "Report a command result; unblocks the `DbAgentClient::call` waiting on\nit. Scoped to the authed server: a command owned by another server is\n404, so agents cannot complete each other's commands. Unknown ids are\n404; a body id that disagrees with the path is a 400 (the path is\nauthoritative). Repeat posts are an ok idempotent no-op (first writer\nwins, no overwrite — see `complete_for`).",
+        "operationId": "result",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Command id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandResult"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Result recorded"
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent/v1/heartbeat": {
+      "post": {
+        "tags": [
+          "super::agent"
+        ],
+        "summary": "Heartbeat: marks the server `online` and stores the metrics batch\n(the repo upserts both atomically).",
+        "operationId": "heartbeat",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Heartbeat"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Heartbeat recorded"
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent/v1/join": {
+      "post": {
+        "tags": [
+          "super::agent"
+        ],
+        "summary": "Redeem a single-use join token (`JoinRequest` → `JoinResponse`). A\nspent, unknown or expired token is 401 from the repo; the join marks\nthe server `online`.",
+        "operationId": "join",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/apps": {
       "get": {
         "tags": [
@@ -988,6 +1213,483 @@
           }
         }
       },
+      "BinaryRef": {
+        "type": "object",
+        "description": "One downloadable binary release.",
+        "required": [
+          "url",
+          "sha256",
+          "exec",
+          "version"
+        ],
+        "properties": {
+          "exec": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "Command": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "db",
+              "role",
+              "password",
+              "kind"
+            ],
+            "properties": {
+              "db": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "create_database"
+                ]
+              },
+              "password": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "db",
+              "role",
+              "kind"
+            ],
+            "properties": {
+              "db": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "drop_database"
+                ]
+              },
+              "role": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "install"
+                ]
+              },
+              "site": {
+                "$ref": "#/components/schemas/SiteSpec"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "write_unit"
+                ]
+              },
+              "site": {
+                "$ref": "#/components/schemas/SiteSpec"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "env",
+              "kind"
+            ],
+            "properties": {
+              "env": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/EnvVar"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "write_env"
+                ]
+              },
+              "site": {
+                "$ref": "#/components/schemas/SiteSpec"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "start"
+                ]
+              },
+              "site_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "stop"
+                ]
+              },
+              "site_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "restart"
+                ]
+              },
+              "site_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "status"
+                ]
+              },
+              "site_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site_id",
+              "port",
+              "path",
+              "timeout_s",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "health"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "site_id": {
+                "type": "string"
+              },
+              "timeout_s": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "domain",
+              "port",
+              "kind"
+            ],
+            "properties": {
+              "domain": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "set_route"
+                ]
+              },
+              "port": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "domain",
+              "kind"
+            ],
+            "properties": {
+              "domain": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "remove_route"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "db",
+              "dirs",
+              "dest",
+              "kind"
+            ],
+            "properties": {
+              "db": {
+                "type": "string"
+              },
+              "dest": {
+                "type": "string"
+              },
+              "dirs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "backup"
+                ]
+              },
+              "site": {
+                "$ref": "#/components/schemas/SiteSpec"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "db",
+              "src",
+              "kind"
+            ],
+            "properties": {
+              "db": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "restore"
+                ]
+              },
+              "site": {
+                "$ref": "#/components/schemas/SiteSpec"
+              },
+              "src": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "remove"
+                ]
+              },
+              "site": {
+                "$ref": "#/components/schemas/SiteSpec"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site_id",
+              "version",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "switch_version"
+                ]
+              },
+              "site_id": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site_id",
+              "lines",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "fetch_logs"
+                ]
+              },
+              "lines": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "site_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "inventory"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Idempotent agent commands, JSON-tagged by `kind` (snake_case)."
+      },
+      "CommandEnvelope": {
+        "type": "object",
+        "description": "A command in flight: stable `id` so redelivery is idempotent.\n`attempts` counts deliveries (`next_for` bumps it; `requeue_stale`\nonly resets `delivered_at`), so the agent can tell a retry apart.",
+        "required": [
+          "id",
+          "created_at",
+          "command",
+          "attempts"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "command": {
+            "$ref": "#/components/schemas/Command"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "CommandResult": {
+        "type": "object",
+        "description": "The agent's report for one command id.",
+        "required": [
+          "id",
+          "ok",
+          "output",
+          "log"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "log": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "output": {}
+        }
+      },
       "CreateOperatorRequest": {
         "type": "object",
         "required": [
@@ -1063,6 +1765,30 @@
           }
         }
       },
+      "EnvVar": {
+        "type": "object",
+        "description": "One concrete env var to write into the site env file.",
+        "required": [
+          "name",
+          "value",
+          "secret",
+          "once"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "once": {
+            "type": "boolean"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
       "ErrorBody": {
         "type": "object",
         "description": "`{ \"error\": { \"code\": \"...\", \"message\": \"...\" } }` (spec §6).",
@@ -1098,6 +1824,133 @@
         "properties": {
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "Heartbeat": {
+        "type": "object",
+        "description": "Agent heartbeat posted every 15 s.",
+        "required": [
+          "agent_version",
+          "load1",
+          "mem_free_mb",
+          "disk_free_mb",
+          "units",
+          "metrics"
+        ],
+        "properties": {
+          "agent_version": {
+            "type": "string"
+          },
+          "disk_free_mb": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "load1": {
+            "type": "number",
+            "format": "double"
+          },
+          "mem_free_mb": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SiteMetric"
+            }
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnitState"
+            }
+          }
+        }
+      },
+      "JoinRequest": {
+        "type": "object",
+        "description": "First contact: the agent redeems a single-use join token.",
+        "required": [
+          "join_token",
+          "hostname",
+          "arch",
+          "os",
+          "cpu_cores",
+          "memory_mb",
+          "disk_mb"
+        ],
+        "properties": {
+          "arch": {
+            "type": "string"
+          },
+          "cpu_cores": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "disk_mb": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "join_token": {
+            "type": "string"
+          },
+          "memory_mb": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "os": {
+            "type": "string"
+          }
+        }
+      },
+      "JoinResponse": {
+        "type": "object",
+        "description": "Control-plane answer to a join: the long-lived server identity.",
+        "required": [
+          "server_id",
+          "server_token"
+        ],
+        "properties": {
+          "server_id": {
+            "type": "string"
+          },
+          "server_token": {
+            "type": "string"
+          }
+        }
+      },
+      "Limits": {
+        "type": "object",
+        "description": "Resource limits for one site (mirrors the manifest `limits.default`;\nkept local so the agent needs no manifest dependency).",
+        "required": [
+          "memory_mb",
+          "cpu_percent",
+          "disk_mb"
+        ],
+        "properties": {
+          "cpu_percent": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "disk_mb": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "memory_mb": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -1407,6 +2260,135 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "SiteMetric": {
+        "type": "object",
+        "description": "One per-site metrics sample.",
+        "required": [
+          "site_id",
+          "at",
+          "cpu_seconds",
+          "memory_bytes",
+          "disk_bytes"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cpu_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "disk_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "site_id": {
+            "type": "string"
+          }
+        }
+      },
+      "SiteSpec": {
+        "type": "object",
+        "description": "Everything the agent needs to materialise one site.",
+        "required": [
+          "site_id",
+          "short_id",
+          "user",
+          "data_dir",
+          "run_dir",
+          "port",
+          "exec",
+          "args",
+          "env_file",
+          "limits",
+          "health_path"
+        ],
+        "properties": {
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "binary": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BinaryRef"
+              }
+            ]
+          },
+          "data_dir": {
+            "type": "string"
+          },
+          "env_file": {
+            "type": "string"
+          },
+          "exec": {
+            "type": "string"
+          },
+          "health_path": {
+            "type": "string"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/Limits"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "run_dir": {
+            "type": "string"
+          },
+          "short_id": {
+            "type": "string"
+          },
+          "site_id": {
+            "type": "string"
+          },
+          "user": {
+            "type": "string"
+          }
+        }
+      },
+      "UnitState": {
+        "type": "object",
+        "description": "One systemd unit's state as observed by the agent.",
+        "required": [
+          "site_id",
+          "active",
+          "sub"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "pid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "site_id": {
+            "type": "string"
+          },
+          "sub": {
+            "type": "string"
           }
         }
       },

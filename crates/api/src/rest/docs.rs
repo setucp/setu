@@ -42,6 +42,10 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::plans::create,
         super::plans::get,
         super::plans::update,
+        super::agent::join,
+        super::agent::commands,
+        super::agent::result,
+        super::agent::heartbeat,
     ),
     components(schemas(
         HealthOut,
@@ -70,6 +74,18 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         PlanLimitsIn,
         CreatePlanRequest,
         UpdatePlanRequest,
+        setu_proto::JoinRequest,
+        setu_proto::JoinResponse,
+        setu_proto::Command,
+        setu_proto::CommandEnvelope,
+        setu_proto::CommandResult,
+        setu_proto::Heartbeat,
+        setu_proto::SiteSpec,
+        setu_proto::SiteMetric,
+        setu_proto::UnitState,
+        setu_proto::EnvVar,
+        setu_proto::Limits,
+        setu_proto::BinaryRef,
     ))
 )]
 pub struct ApiDoc;

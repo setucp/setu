@@ -47,6 +47,17 @@ pub(crate) async fn insert_metrics(
         return Ok(0);
     }
     let mut tx = pool.begin().await.map_err(map_db_error)?;
+    let count = insert_metrics_tx(&mut tx, metrics).await?;
+    tx.commit().await.map_err(map_db_error)?;
+    Ok(count)
+}
+
+/// Insert a batch inside the caller's transaction (the heartbeat path
+/// commits the server update and the metrics together atomically).
+pub(crate) async fn insert_metrics_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    metrics: &[setu_proto::SiteMetric],
+) -> Result<u64, AppError> {
     let mut count = 0u64;
     for m in metrics {
         sqlx::query!(
@@ -62,11 +73,10 @@ pub(crate) async fn insert_metrics(
             m.memory_bytes as i64,
             m.disk_bytes as i64,
         )
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await
         .map_err(map_db_error)?;
         count += 1;
     }
-    tx.commit().await.map_err(map_db_error)?;
     Ok(count)
 }

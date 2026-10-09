@@ -79,12 +79,14 @@ impl<'a> AgentCommands<'a> {
             id,
             created_at,
             command: command.clone(),
+            attempts: 0,
         })
     }
 
     /// Oldest command for the server that was never delivered (stale
     /// deliveries are reset to undelivered by `requeue_stale`, so this
-    /// only looks at `delivered_at IS NULL`). Marks the row delivered.
+    /// only looks at `delivered_at IS NULL`). Marks the row delivered and
+    /// counts the delivery in `attempts`.
     pub async fn next_for(
         &self,
         server_id: &str,
@@ -102,7 +104,7 @@ impl<'a> AgentCommands<'a> {
                  FOR UPDATE SKIP LOCKED
                  LIMIT 1
              )
-             RETURNING id, command, created_at",
+              RETURNING id, command, created_at, attempts",
             server_id,
         )
         .fetch_optional(self.pool)
@@ -121,8 +123,13 @@ impl<'a> AgentCommands<'a> {
             tracing::error!(error = %e, "command result is not serializable");
             AppError::internal()
         })?;
+        // Idempotence ruling: `AND completed_at IS NULL` makes the first
+        // writer win; a repeat post for an already-completed command is an
+        // ok no-op (no overwrite), while a truly unknown id is 404. The
+        // follow-up SELECT distinguishes the two.
         let n = sqlx::query!(
-            "UPDATE agent_commands SET completed_at = now(), result = $2 WHERE id = $1",
+            "UPDATE agent_commands SET completed_at = now(), result = $2
+              WHERE id = $1 AND completed_at IS NULL",
             id,
             value,
         )
@@ -131,6 +138,57 @@ impl<'a> AgentCommands<'a> {
         .map_err(map_db_error)?
         .rows_affected();
         if n == 0 {
+            let exists = sqlx::query!("SELECT id FROM agent_commands WHERE id = $1", id)
+                .fetch_optional(self.pool)
+                .await
+                .map_err(map_db_error)?;
+            if exists.is_some() {
+                return Ok(());
+            }
+            return Err(AppError::not_found("command not found"));
+        }
+        Ok(())
+    }
+
+    /// Scoped completion for the agent protocol: only the server the
+    /// command was enqueued for may complete it (`WHERE id = $1 AND
+    /// server_id = $2`). A command owned by another server — or an unknown
+    /// id — is 404, so server A cannot complete server B's commands.
+    /// Idempotence matches [`Self::complete`]: the first writer wins via
+    /// `AND completed_at IS NULL`; a repeat post is an ok no-op.
+    pub async fn complete_for(
+        &self,
+        server_id: &str,
+        id: &str,
+        result: &setu_proto::CommandResult,
+    ) -> Result<(), AppError> {
+        let value = serde_json::to_value(result).map_err(|e| {
+            tracing::error!(error = %e, "command result is not serializable");
+            AppError::internal()
+        })?;
+        let n = sqlx::query!(
+            "UPDATE agent_commands SET completed_at = now(), result = $2
+              WHERE id = $1 AND server_id = $3 AND completed_at IS NULL",
+            id,
+            value,
+            server_id,
+        )
+        .execute(self.pool)
+        .await
+        .map_err(map_db_error)?
+        .rows_affected();
+        if n == 0 {
+            let exists = sqlx::query!(
+                "SELECT id FROM agent_commands WHERE id = $1 AND server_id = $2",
+                id,
+                server_id,
+            )
+            .fetch_optional(self.pool)
+            .await
+            .map_err(map_db_error)?;
+            if exists.is_some() {
+                return Ok(());
+            }
             return Err(AppError::not_found("command not found"));
         }
         Ok(())
@@ -172,14 +230,17 @@ impl<'a> AgentCommands<'a> {
     }
 
     /// Reset deliveries older than `older_than` that never completed so
-    /// `next_for` picks them up again. Returns the number reset.
+    /// `next_for` picks them up again. Only `delivered_at` is cleared:
+    /// `attempts` already counts deliveries (bumped by `next_for`), so a
+    /// command delivered once then requeued reads `attempts = 1` until its
+    /// redelivery bumps it to 2. Returns the number reset.
     pub async fn requeue_stale(&self, older_than: Duration) -> Result<u64, AppError> {
         let cutoff = Utc::now()
             - chrono::Duration::from_std(older_than)
                 .map_err(|_| AppError::validation("requeue window out of range"))?;
         let n = sqlx::query!(
             "UPDATE agent_commands
-             SET delivered_at = NULL, attempts = attempts + 1
+             SET delivered_at = NULL
              WHERE delivered_at IS NOT NULL
                AND completed_at IS NULL
                AND delivered_at < $1",
@@ -198,6 +259,7 @@ struct DeliveredRow {
     id: String,
     command: Value,
     created_at: DateTime<Utc>,
+    attempts: i32,
 }
 
 impl DeliveredRow {
@@ -210,6 +272,7 @@ impl DeliveredRow {
             id: self.id,
             created_at: self.created_at,
             command,
+            attempts: self.attempts,
         })
     }
 }
