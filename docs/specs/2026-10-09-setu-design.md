@@ -33,21 +33,32 @@ Node, Python: never — apps needing an interpreter ship as an image).
 
 ## 1. Shape
 
-Three binaries from one Cargo workspace, one repository `setu`:
+One binary, `setu`, from one Cargo workspace and one repository, with
+three roles selected by subcommand (the k3s model: `k3s server` /
+`k3s agent`):
 
-- **`setu`** — the control plane. One process: REST API, embedded web
-  UI (rust-embed), job runner, Postgres for its own state. Runs under
-  systemd on any box, usually its own small one. Listens on
-  `127.0.0.1:7000` by default; a Caddy in front terminates TLS.
-- **`setu-agent`** — one per managed server. Supervises sites as
-  systemd units, manages the local Postgres, writes Caddy's config
-  through its admin API, streams logs and metrics. Stateless beyond a
-  small `state.json`; the control plane is the source of truth. Talks
-  outbound to the control plane over HTTPS with a per-server token
-  (mTLS later). The control plane never SSHes.
-- **`setu-cli`** — thin client over the REST API for scripting and
-  the installer (`setu-cli server join`, `site create` …). Optional
-  for the MVP; the installer can use `curl`.
+- **`setu serve`** — the control plane. One process: REST API,
+  embedded web UI (rust-embed), job runner, Postgres for its own
+  state. Runs under systemd (`setu.service`) on any box, usually its
+  own small one. Listens on `127.0.0.1:7000` by default; a Caddy in
+  front terminates TLS.
+- **`setu agent run|install|join|doctor`** — one per managed server
+  (`setu-agent.service`). Supervises sites as systemd units, manages
+  the local Postgres, writes Caddy's config through its admin API,
+  streams logs and metrics. Stateless beyond a small `state.json`; the
+  control plane is the source of truth. Talks outbound to the control
+  plane over HTTPS with a per-server token (mTLS later). The control
+  plane never SSHes.
+- **`setu site|server|app|plan|job …`** — thin client over the REST
+  API for scripting and the installer. Optional for the MVP; the
+  installer can use `curl`.
+
+Why one binary: the roles share most dependencies, the installer
+downloads one archive, every server runs one version, and the single-
+node case is `setu serve` plus `setu agent install` on the same file.
+The cost is ~15 MB of unused control-plane code on each agent host.
+The privileged file writer stays a fixed subcommand (`setu helper
+write-file`) pinned by path in sudoers.
 
 Why native systemd and not Docker: half the memory per site, instant
 start, cgroups give CPU/memory/IO limits and accounting for free,
@@ -191,11 +202,11 @@ control plane may retry freely. The agent keeps `/var/lib/setu/
 state.json` (sites it knows, ports, db names) and on start reconciles
 systemd and Postgres against it, then reports a full inventory.
 
-Agent install (`setu-agent install`, run by root once): create user
+Agent install (`setu agent install`, run by root once): create user
 `setu`, directories `/var/lib/setu`, `/srv/setu/sites`, write
 `/etc/sudoers.d/setu` allowing exactly `systemctl {start,stop,restart,
 status,daemon-reload} setu-site@*`, `systemd-run`, and the unit-file
-write path through a tiny setuid-free helper (`setu-agent helper
+write path through a tiny setuid-free helper (`setu agent helper
 write-unit`, invoked via sudo with a fixed path), ensure Postgres and
 Caddy are installed (apt) with Caddy's admin API on
 `127.0.0.1:2019`, write the agent's own systemd unit, join the control
@@ -307,7 +318,7 @@ endpoint. No telemetry.
 ## 8. Operations of Setu itself
 
 `setu serve`, `setu migrate`, `setu operator create`, `setu backup`
-(its own database), `setu-agent install|join|run|doctor`. Config via
+(its own database), `setu agent install|join|run|doctor`. Config via
 `setu.toml` and `SETU_*` env (bind addr, database URL, secret key,
 public URL). `/healthz`, `/readyz`. Logs via tracing to journald.
 Install script mirrors Vyasa's: downloads the checked archive for the
