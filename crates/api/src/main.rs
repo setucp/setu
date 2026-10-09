@@ -135,7 +135,17 @@ async fn serve() -> Result<(), String> {
         }
     });
     let app = setu_api::rest::router(state);
-    let addr: SocketAddr = config.bind_addr;
+    // Unix-socket serving (behind Caddy) arrives with the listen module
+    // (rev3 WS8); until then only TCP is served.
+    let addr: SocketAddr = match &config.listen {
+        setu_common::Listen::Tcp(addr) => *addr,
+        setu_common::Listen::Unix(path) => {
+            return Err(format!(
+                "listen = unix:{} is not supported by this build yet",
+                path.display()
+            ))
+        }
+    };
     tracing::info!("setu serve listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr)
         .await

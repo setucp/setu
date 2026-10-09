@@ -63,3 +63,6 @@ url = { version = "2" }
 tower-sessions = { version = "0.15" }
 rmp-serde = { version = "1" }
 time = { version = "0.3" }
+regex = { version = "1" }
+idna = { version = "1" }
+ipnet = { version = "2", features = ["serde"] }

@@ -34,7 +34,7 @@ arm64 Linux runners there), like Vyasa's release workflow.
 
 `Dockerfile` runs the musl `setu` binary as a non-root user,
 `CMD ["serve"]`. It needs `SETU_DATABASE_URL`, `SETU_SECRET_KEY`,
-`SETU_PUBLIC_URL` at runtime (and `SETU_BIND_ADDR=0.0.0.0:7000` when
+`SETU_PUBLIC_URL` at runtime (and `SETU_LISTEN=0.0.0.0:7000` when
 the port must leave the container):
 
 ```sh

@@ -44,8 +44,10 @@ install.
 2. Provide a Postgres 16+ database and three env vars (or a
    `setu.toml` in the working directory):
    `SETU_DATABASE_URL`, `SETU_SECRET_KEY` (64 hex chars),
-   `SETU_PUBLIC_URL`. Optional: `SETU_BIND_ADDR` (default
-   `127.0.0.1:7000`), `SETU_DATA_DIR` (default `/srv/setu`).
+   `SETU_PUBLIC_URL`. Optional: `SETU_LISTEN` (`<ip>:<port>`, default
+   `127.0.0.1:7000`; `unix:<path>` arrives with the installer),
+   `SETU_TRUSTED_PROXIES` (comma-separated IPs/CIDRs, default
+   `127.0.0.1`), `SETU_DATA_DIR` (default `/var/lib/setu`).
 3. `setu migrate`, then `setu serve` (systemd unit in
    E2E.md style: `User=setu`,
    `WorkingDirectory=/etc/setu`, `ExecStart=/opt/setu/setu serve`).

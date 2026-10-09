@@ -4,9 +4,46 @@
 //! current directory when present, then `SETU_*` environment variables.
 //! Environment always wins over the file.
 
-use std::{net::SocketAddr, path::PathBuf, str::FromStr};
+use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr};
 
+use ipnet::IpNet;
 use url::Url;
+
+/// Where `setu serve` listens: a unix socket (behind Caddy) or TCP.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Listen {
+    Unix(PathBuf),
+    Tcp(SocketAddr),
+}
+
+impl FromStr for Listen {
+    type Err = ConfigError;
+
+    /// `unix:<absolute path>` or `<ip>:<port>`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        let bad = |why: &str| ConfigError::InvalidListen(s.to_string(), why.to_string());
+        if let Some(path) = s.strip_prefix("unix:") {
+            let path = PathBuf::from(path);
+            if !path.is_absolute() {
+                return Err(bad("unix socket path must be absolute"));
+            }
+            return Ok(Listen::Unix(path));
+        }
+        SocketAddr::from_str(s)
+            .map(Listen::Tcp)
+            .map_err(|_| bad("expected unix:<path> or <ip>:<port>"))
+    }
+}
+
+impl fmt::Display for Listen {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Listen::Unix(p) => write!(f, "unix:{}", p.display()),
+            Listen::Tcp(a) => write!(f, "{a}"),
+        }
+    }
+}
 
 /// 32-byte secret used for sealing. Never logged.
 #[derive(Clone)]
@@ -52,20 +89,23 @@ impl std::fmt::Debug for SecretKey {
 /// Control-plane configuration.
 #[derive(Clone)]
 pub struct Config {
-    pub bind_addr: SocketAddr,
+    pub listen: Listen,
     pub database_url: String,
     pub secret_key: SecretKey,
     pub public_url: Url,
+    /// Peers whose `X-Forwarded-For` is believed on a TCP listener.
+    pub trusted_proxies: Vec<IpNet>,
     pub data_dir: PathBuf,
 }
 
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")
-            .field("bind_addr", &self.bind_addr)
+            .field("listen", &self.listen)
             .field("database_url", &"<redacted>")
             .field("secret_key", &self.secret_key)
             .field("public_url", &self.public_url.as_str())
+            .field("trusted_proxies", &self.trusted_proxies)
             .field("data_dir", &self.data_dir)
             .finish()
     }
@@ -78,8 +118,10 @@ pub enum ConfigError {
     Missing(&'static str),
     #[error("invalid SETU_SECRET_KEY: {0}")]
     InvalidSecretKey(String),
-    #[error("invalid bind address {0}: {1}")]
-    InvalidBindAddr(String, String),
+    #[error("invalid listen {0}: {1}")]
+    InvalidListen(String, String),
+    #[error("invalid trusted_proxies entry {0}: expected an IP or CIDR")]
+    InvalidTrustedProxy(String),
     #[error("invalid public URL {0}: {1}")]
     InvalidPublicUrl(String, String),
     #[error("config load failed: {0}")]
@@ -90,13 +132,13 @@ impl Config {
     /// Load from `setu.toml` (if present) with `SETU_*` env overriding.
     pub fn load() -> Result<Self, ConfigError> {
         let cfg = config::Config::builder()
-            .set_default("bind_addr", "127.0.0.1:7000")
+            .set_default("listen", "127.0.0.1:7000")
             .map_err(|e| ConfigError::Load(e.to_string()))?
-            // Site dirs are addressed on AGENTS as `<data_dir>/sites/<id>`
-            // (see `POST /sites`): the default must land inside the agent
-            // helper allowlist (`/srv/setu/sites`), not the agent's own
-            // state dir (`/var/lib/setu`, which holds state.json/backups).
-            .set_default("data_dir", "/srv/setu")
+            .set_default("trusted_proxies", vec!["127.0.0.1/32"])
+            .map_err(|e| ConfigError::Load(e.to_string()))?
+            // Ruling R47: the control plane's own state; agents derive
+            // site paths from the short id, never from this.
+            .set_default("data_dir", "/var/lib/setu")
             .map_err(|e| ConfigError::Load(e.to_string()))?
             .add_source(config::File::with_name("setu").required(false))
             .add_source(
@@ -127,12 +169,31 @@ impl Config {
             ConfigError::InvalidPublicUrl(public_raw.trim().to_string(), e.to_string())
         })?;
 
-        let bind_raw = cfg
-            .get_string("bind_addr")
-            .map_err(|_| ConfigError::Load("bind_addr default missing".to_string()))?;
-        let bind_addr = SocketAddr::from_str(bind_raw.trim()).map_err(|e| {
-            ConfigError::InvalidBindAddr(bind_raw.trim().to_string(), e.to_string())
-        })?;
+        let listen_raw = cfg
+            .get_string("listen")
+            .map_err(|_| ConfigError::Load("listen default missing".to_string()))?;
+        let listen = Listen::from_str(&listen_raw)?;
+
+        // A list in `setu.toml`, a comma-separated string from the env.
+        let proxies_raw: Vec<String> = match cfg.get_array("trusted_proxies") {
+            Ok(values) => values
+                .into_iter()
+                .map(|v| v.into_string())
+                .collect::<Result<_, _>>()
+                .map_err(|e| ConfigError::Load(e.to_string()))?,
+            Err(_) => cfg
+                .get_string("trusted_proxies")
+                .map_err(|e| ConfigError::Load(e.to_string()))?
+                .split(',')
+                .map(str::to_string)
+                .collect(),
+        };
+        let trusted_proxies = proxies_raw
+            .iter()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(parse_proxy)
+            .collect::<Result<Vec<_>, _>>()?;
 
         let data_raw = cfg
             .get_string("data_dir")
@@ -140,13 +201,21 @@ impl Config {
         let data_dir = PathBuf::from(data_raw.trim());
 
         Ok(Self {
-            bind_addr,
+            listen,
             database_url: database_url.trim().to_string(),
             secret_key,
             public_url,
+            trusted_proxies,
             data_dir,
         })
     }
+}
+
+/// `10.0.0.0/8` or a bare address (`127.0.0.1` → `/32`, `::1` → `/128`).
+fn parse_proxy(s: &str) -> Result<IpNet, ConfigError> {
+    s.parse::<IpNet>()
+        .or_else(|_| s.parse::<std::net::IpAddr>().map(IpNet::from))
+        .map_err(|_| ConfigError::InvalidTrustedProxy(s.to_string()))
 }
 
 #[cfg(test)]
@@ -155,45 +224,55 @@ mod tests {
     use serial_test::serial;
     use std::env;
 
+    const KEYS: &[&str] = &[
+        "SETU_LISTEN",
+        "SETU_DATABASE_URL",
+        "SETU_SECRET_KEY",
+        "SETU_PUBLIC_URL",
+        "SETU_DATA_DIR",
+        "SETU_TRUSTED_PROXIES",
+    ];
+
     fn clear_setu_env() {
-        for key in [
-            "SETU_BIND_ADDR",
-            "SETU_DATABASE_URL",
-            "SETU_SECRET_KEY",
-            "SETU_PUBLIC_URL",
-            "SETU_DATA_DIR",
-        ] {
+        for key in KEYS {
             // Tests are #[serial] so no concurrent env access.
             env::remove_var(key);
         }
     }
 
+    /// Load with the required keys from env and `extra` set, in an empty
+    /// temp cwd (no `setu.toml`), restoring cwd and env afterwards.
+    fn load_with(extra: &[(&str, &str)]) -> Result<Config, ConfigError> {
+        clear_setu_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let orig_dir = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(dir.path()).expect("chdir to tempdir");
+        env::set_var("SETU_DATABASE_URL", "postgres://localhost/db");
+        env::set_var("SETU_SECRET_KEY", "ab".repeat(32));
+        env::set_var("SETU_PUBLIC_URL", "https://panel.example.com");
+        for (k, v) in extra {
+            env::set_var(k, v);
+        }
+        let loaded = Config::load();
+        std::env::set_current_dir(orig_dir).expect("restore cwd");
+        clear_setu_env();
+        loaded
+    }
+
     #[test]
     #[serial]
-    fn secret_key_must_be_32_bytes_hex() {
-        clear_setu_env();
+    fn secret_key_must_be_64_hex() {
         // 63 hex chars: one short of the required 64.
         let short = "ab".repeat(31) + "a";
-        assert_eq!(short.len(), 63);
         let err = SecretKey::from_hex(&short).expect_err("63 chars must fail");
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("SETU_SECRET_KEY"),
-            "error must name SETU_SECRET_KEY, got: {msg}"
-        );
-
-        // Non-hex of the right length must also fail naming the key.
-        let non_hex = "zz".repeat(32);
-        let err = SecretKey::from_hex(&non_hex).expect_err("non-hex must fail");
         assert!(format!("{err}").contains("SETU_SECRET_KEY"));
-
-        // 64 valid hex chars parse.
+        let err = SecretKey::from_hex(&"zz".repeat(32)).expect_err("non-hex must fail");
+        assert!(format!("{err}").contains("SETU_SECRET_KEY"));
         let ok = SecretKey::from_hex(&"ab".repeat(32)).expect("64 hex must parse");
         assert_eq!(ok.bytes().len(), 32);
-
-        // Debug must not leak key material.
-        let dbg = format!("{ok:?}");
-        assert!(!dbg.contains("ab"), "debug must redact: {dbg}");
+        assert!(!format!("{ok:?}").contains("ab"));
+        let err = load_with(&[("SETU_SECRET_KEY", "abc")]).expect_err("short key");
+        assert!(format!("{err}").contains("SETU_SECRET_KEY"));
     }
 
     #[test]
@@ -201,11 +280,10 @@ mod tests {
     fn env_overrides_file() {
         clear_setu_env();
         let dir = tempfile::tempdir().expect("tempdir");
-        let file_path = dir.path().join("setu.toml");
         std::fs::write(
-            &file_path,
+            dir.path().join("setu.toml"),
             format!(
-                "database_url = \"postgres://file/db\"\nsecret_key = \"{}\"\npublic_url = \"http://file.example/\"\n",
+                "database_url = \"postgres://file/db\"\nsecret_key = \"{}\"\npublic_url = \"http://file.example/\"\nlisten = \"127.0.0.1:7100\"\n",
                 "ab".repeat(32),
             ),
         )
@@ -213,21 +291,52 @@ mod tests {
         let orig_dir = std::env::current_dir().expect("cwd");
         std::env::set_current_dir(dir.path()).expect("chdir to tempdir");
         env::set_var("SETU_DATABASE_URL", "postgres://env/db");
-        env::set_var("SETU_SECRET_KEY", "ab".repeat(32));
-        env::set_var("SETU_PUBLIC_URL", "http://127.0.0.1:7000");
         let loaded = Config::load();
         std::env::set_current_dir(orig_dir).expect("restore cwd");
         clear_setu_env();
         let cfg = loaded.expect("config must load");
         assert_eq!(cfg.database_url, "postgres://env/db");
+        assert_eq!(cfg.public_url.as_str(), "http://file.example/");
+        assert_eq!(cfg.listen, Listen::Tcp("127.0.0.1:7100".parse().unwrap()));
+    }
+
+    #[test]
+    #[serial]
+    fn prefix_separator_is_single_underscore() {
+        // `SETU_DATA_DIR` → `data_dir` (prefix `_`, nested `__`): a double
+        // underscore after the prefix would not be read.
+        let cfg = load_with(&[("SETU_DATA_DIR", "/tmp/setu-data")]).expect("load");
+        assert_eq!(cfg.data_dir, PathBuf::from("/tmp/setu-data"));
+        let cfg = load_with(&[("SETU__DATA_DIR", "/nope")]).expect("load");
+        env::remove_var("SETU__DATA_DIR");
+        assert_eq!(cfg.data_dir, PathBuf::from("/var/lib/setu"));
+    }
+
+    #[test]
+    #[serial]
+    fn defaults_listen_proxies_and_data_dir() {
+        let cfg = load_with(&[]).expect("load");
+        assert_eq!(cfg.listen, Listen::Tcp("127.0.0.1:7000".parse().unwrap()));
+        assert_eq!(
+            cfg.trusted_proxies,
+            vec!["127.0.0.1/32".parse::<IpNet>().unwrap()]
+        );
+        assert_eq!(cfg.data_dir, PathBuf::from("/var/lib/setu"));
+        let cfg =
+            load_with(&[("SETU_TRUSTED_PROXIES", "10.0.0.0/8, 192.168.1.7,::1")]).expect("load");
+        let want: Vec<IpNet> = vec![
+            "10.0.0.0/8".parse().unwrap(),
+            "192.168.1.7/32".parse().unwrap(),
+            "::1/128".parse().unwrap(),
+        ];
+        assert_eq!(cfg.trusted_proxies, want);
+        assert!(load_with(&[("SETU_TRUSTED_PROXIES", "not-an-ip")]).is_err());
     }
 
     #[test]
     #[serial]
     fn missing_database_url_is_an_error() {
         clear_setu_env();
-        // Provide everything except the database URL. Use a temp cwd with no
-        // setu.toml so the file cannot supply it.
         let dir = tempfile::tempdir().expect("tempdir");
         let orig_dir = std::env::current_dir().expect("cwd");
         std::env::set_current_dir(dir.path()).expect("chdir to tempdir");
@@ -236,33 +345,39 @@ mod tests {
         let err = Config::load().expect_err("missing database url must fail");
         std::env::set_current_dir(orig_dir).expect("restore cwd");
         clear_setu_env();
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("DATABASE_URL") || msg.contains("database_url"),
-            "error must mention database url, got: {msg}"
+        assert!(format!("{err}").contains("DATABASE_URL"));
+    }
+
+    #[test]
+    fn listen_parses_unix_and_tcp() {
+        assert_eq!(
+            "unix:/run/setu/http.sock".parse::<Listen>().unwrap(),
+            Listen::Unix(PathBuf::from("/run/setu/http.sock"))
+        );
+        assert_eq!(
+            "127.0.0.1:7000".parse::<Listen>().unwrap(),
+            Listen::Tcp("127.0.0.1:7000".parse().unwrap())
+        );
+        assert_eq!(
+            "[::1]:7000".parse::<Listen>().unwrap(),
+            Listen::Tcp("[::1]:7000".parse().unwrap())
+        );
+        for bad in ["unix:", "unix:relative.sock", "localhost:7000", "7000", ""] {
+            assert!(bad.parse::<Listen>().is_err(), "{bad:?} must fail");
+        }
+        assert_eq!(
+            Listen::Unix(PathBuf::from("/run/x.sock")).to_string(),
+            "unix:/run/x.sock"
         );
     }
 
     #[test]
     #[serial]
-    fn default_data_dir_points_at_agent_sites_root() {
-        // `POST /sites` stores `<data_dir>/sites/<id>` and the agent only
-        // writes under `/srv/setu/sites` (helper allowlist): the default
-        // must agree, or every provision fails at write_env (found by e2e).
-        clear_setu_env();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let orig_dir = std::env::current_dir().expect("cwd");
-        std::env::set_current_dir(dir.path()).expect("chdir to tempdir");
-        env::set_var("SETU_DATABASE_URL", "postgres://localhost/db");
-        env::set_var("SETU_SECRET_KEY", "ab".repeat(32));
-        env::set_var("SETU_PUBLIC_URL", "http://127.0.0.1:7000");
-        let loaded = Config::load();
-        std::env::set_current_dir(orig_dir).expect("restore cwd");
-        clear_setu_env();
-        let cfg = loaded.expect("config must load");
-        assert_eq!(
-            cfg.data_dir.join("sites"),
-            std::path::PathBuf::from("/srv/setu/sites")
-        );
+    fn config_debug_redacts_database_url() {
+        let cfg = load_with(&[("SETU_DATABASE_URL", "postgres://u:hunter2@db/x")]).expect("load");
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains("hunter2"), "debug leaked: {dbg}");
+        assert!(!dbg.contains(&"ab".repeat(32)), "debug leaked key: {dbg}");
+        assert!(dbg.contains("listen"));
     }
 }

@@ -1,8 +1,12 @@
-//! Sealing with ChaCha20-Poly1305 (`v1:` scheme).
+//! Sealing with ChaCha20-Poly1305 (KeyVault scheme, spec §3).
 //!
-//! [`Sealer::seal`] produces `v1:<base64 nonce12 || ciphertext>` with a fresh
-//! random 12-byte nonce. [`Sealer::open`] decrypts `v1:` values and returns
-//! anything without the prefix as-is (plain values are never sealed).
+//! Every stored value carries a prefix. [`Sealer::seal`] produces
+//! `v1:<base64 nonce12 || ciphertext>` with a fresh random nonce under the
+//! key SHA-256(`"setu-seal-v1"` || secret key). [`Sealer::seal_plain`]
+//! produces `plain:<value>` for values that are deliberately not secret.
+//! [`Sealer::open`] decrypts `v1:`, strips `plain:`, and refuses anything
+//! else with [`SealError::Unrecognised`], so an unprefixed value can never
+//! be mistaken for either.
 
 // chacha20poly1305 0.10 pulls generic-array 0.14, whose build script marks the
 // crate deprecated to nudge to 1.x. We stay on 0.10 per the MVP plan, so allow
@@ -16,8 +20,12 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Key, Nonce,
 };
 use rand::TryRngCore;
+use sha2::{Digest, Sha256};
 
 use crate::config::SecretKey;
+
+/// Key-derivation label (domain separation from other uses of the key).
+const SEAL_LABEL: &[u8] = b"setu-seal-v1";
 
 /// Encrypts and decrypts secret values.
 #[derive(Clone)]
@@ -42,13 +50,18 @@ pub enum SealError {
     DecryptionFailed,
     #[error("decrypted value is not valid UTF-8")]
     InvalidUtf8,
+    #[error("stored value has no recognised prefix")]
+    Unrecognised,
 }
 
 impl Sealer {
     pub fn new(secret: &SecretKey) -> Self {
-        let key = Key::from_slice(secret.bytes());
+        let mut hasher = Sha256::new();
+        hasher.update(SEAL_LABEL);
+        hasher.update(secret.bytes());
+        let derived = hasher.finalize();
         Self {
-            cipher: ChaCha20Poly1305::new(key),
+            cipher: ChaCha20Poly1305::new(Key::from_slice(&derived)),
         }
     }
 
@@ -73,10 +86,27 @@ impl Sealer {
         format!("v1:{}", BASE64_STANDARD.encode(&combined))
     }
 
-    /// Open a sealed value, or return plain values unchanged.
+    /// Store a deliberately non-secret value as `plain:<value>`.
+    pub fn seal_plain(&self, plain: &str) -> String {
+        format!("plain:{plain}")
+    }
+
+    /// `seal` when `secret`, else `seal_plain`.
+    pub fn store(&self, value: &str, secret: bool) -> String {
+        if secret {
+            self.seal(value)
+        } else {
+            self.seal_plain(value)
+        }
+    }
+
+    /// Open a stored value: decrypt `v1:`, strip `plain:`, refuse the rest.
     pub fn open(&self, s: &str) -> Result<String, SealError> {
+        if let Some(plain) = s.strip_prefix("plain:") {
+            return Ok(plain.to_string());
+        }
         let Some(b64) = s.strip_prefix("v1:") else {
-            return Ok(s.to_string());
+            return Err(SealError::Unrecognised);
         };
         let raw = BASE64_STANDARD
             .decode(b64)
@@ -115,7 +145,7 @@ mod tests {
     }
 
     #[test]
-    fn open_rejects_tampered_ciphertext() {
+    fn open_rejects_tampered() {
         let sealer = Sealer::new(&test_key());
         let sealed = sealer.seal("tamper-me");
         // Flip the last base64 char to corrupt the ciphertext.
@@ -127,16 +157,41 @@ mod tests {
         let err = sealer
             .open(&tampered)
             .expect_err("tampered value must fail");
-        let msg = format!("{err}");
-        assert!(!msg.is_empty());
+        assert!(!format!("{err}").is_empty());
     }
 
     #[test]
-    fn open_passes_plain_values_through() {
+    fn open_strips_plain_prefix() {
         let sealer = Sealer::new(&test_key());
-        let plain = "postgres://plain-value";
-        let opened = sealer.open(plain).expect("plain must pass through");
-        assert_eq!(opened, plain);
+        let stored = sealer.seal_plain("https://example.com");
+        assert_eq!(stored, "plain:https://example.com");
+        assert_eq!(sealer.open(&stored).unwrap(), "https://example.com");
+        assert_eq!(sealer.open("plain:").unwrap(), "");
+    }
+
+    #[test]
+    fn open_rejects_unprefixed() {
+        let sealer = Sealer::new(&test_key());
+        for raw in ["postgres://plain-value", "", "v2:abc", "V1:abc"] {
+            assert!(
+                matches!(sealer.open(raw), Err(SealError::Unrecognised)),
+                "{raw:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn key_is_derived_with_label() {
+        // The cipher key is SHA-256("setu-seal-v1" || key), never the raw
+        // key: a cipher over the raw bytes must not open our output.
+        let key = test_key();
+        let sealed = Sealer::new(&key).seal("derived");
+        let raw = ChaCha20Poly1305::new(Key::from_slice(key.bytes()));
+        let bytes = BASE64_STANDARD
+            .decode(sealed.strip_prefix("v1:").unwrap())
+            .unwrap();
+        let (nonce, ct) = bytes.split_at(12);
+        assert!(raw.decrypt(Nonce::from_slice(nonce), ct).is_err());
     }
 
     #[test]

@@ -202,7 +202,7 @@ GW=$(docker network inspect bridge -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}
   | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 [ -n "$GW" ] || fail "bridge gateway" "empty gateway for bridge network"
 export SETU_PUBLIC_URL="http://${GW}:${SERVE_PORT}"
-export SETU_BIND_ADDR="0.0.0.0:${SERVE_PORT}"
+export SETU_LISTEN="0.0.0.0:${SERVE_PORT}"
 echo "  bridge gateway: $GW"
 
 "$SETU_BIN" migrate

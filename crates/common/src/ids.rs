@@ -1,7 +1,7 @@
 //! ULID identifiers.
 //!
 //! IDs are lowercase ULID strings. [`short_id`] is the last 8 chars, used in
-//! Postgres `site_<short>` names.
+//! user, unit, database and path names; [`is_short_id`] checks one.
 
 /// New random lowercase ULID.
 pub fn new_id() -> String {
@@ -25,6 +25,13 @@ pub fn short_id(id: &str) -> String {
     }
 }
 
+/// `^[a-z0-9]{8}$`: the only site handle that crosses the sudo boundary.
+pub fn is_short_id(s: &str) -> bool {
+    s.len() == 8
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -39,6 +46,16 @@ mod tests {
             "unexpected char in {id}"
         );
         assert_ne!(new_id(), new_id(), "ids must be unique");
+    }
+
+    #[test]
+    fn is_short_id_checks_eight_lowercase_alnum() {
+        assert!(is_short_id("abcd1234"));
+        assert!(is_short_id(&short_id(&new_id())));
+        assert!(!is_short_id("ABCD1234"));
+        assert!(!is_short_id("abcd123"));
+        assert!(!is_short_id("abcd12345"));
+        assert!(!is_short_id("../abcde"));
     }
 
     #[test]

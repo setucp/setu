@@ -92,10 +92,11 @@ impl TestServer {
         let public_url = public_url
             .unwrap_or_else(|| format!("http://{addr}").parse().expect("test public url"));
         let config = Config {
-            bind_addr: addr,
+            listen: setu_common::Listen::Tcp(addr),
             database_url: test_db.url.clone(),
             secret_key: secret.clone(),
             public_url,
+            trusted_proxies: vec!["127.0.0.1/32".parse().expect("loopback net")],
             data_dir: std::env::temp_dir().join(format!("setu-test-{}", addr.port())),
         };
         let sealer = Sealer::new(&secret);
