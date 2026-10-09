@@ -1,0 +1,16 @@
+[Unit]
+Description=Setu server agent
+After=network.target postgresql.service caddy.service
+
+[Service]
+Type=simple
+User=setu
+ExecStart=/opt/setu/setu agent run
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/setu /srv/setu/sites
+
+[Install]
+WantedBy=multi-user.target

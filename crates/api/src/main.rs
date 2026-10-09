@@ -1,6 +1,7 @@
 //! The one `setu` binary (spec §8): `serve` is the control plane,
-//! `agent …` the per-server agent (Task 10 — stubbed here with a
-//! not-implemented error), plus operator management and OpenAPI export.
+//! `agent …` the per-server agent and `helper …` its privileged writer
+//! (both from the `setu-agent` library crate), plus operator management
+//! and OpenAPI export.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -40,16 +41,15 @@ enum Cmd {
         #[arg(long, default_value = "openapi.json")]
         out: std::path::PathBuf,
     },
-    /// Per-server agent (Task 10; not implemented yet).
+    /// Per-server agent (library crate `setu-agent`).
     Agent {
-        /// Agent subcommand and flags, passed through to the Task 10 CLI.
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        #[command(subcommand)]
+        cmd: setu_agent::cli::AgentCmd,
     },
-    /// Privileged file writer (Task 10; not implemented yet).
+    /// Privileged file writer (library crate `setu-agent`).
     Helper {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        #[command(subcommand)]
+        cmd: setu_agent::cli::HelperCmd,
     },
 }
 
@@ -80,12 +80,12 @@ async fn main() {
             } => operator_create(&email, &password, &role).await,
         },
         Cmd::Openapi { out } => openapi(&out).await,
-        Cmd::Agent { .. } => {
-            Err("setu agent: not implemented in this version (coming in Task 10)".to_string())
-        }
-        Cmd::Helper { .. } => {
-            Err("setu helper: not implemented in this version (coming in Task 10)".to_string())
-        }
+        Cmd::Agent { cmd } => setu_agent::cli::run_agent(cmd)
+            .await
+            .map_err(|e| e.to_string()),
+        Cmd::Helper { cmd } => setu_agent::cli::run_helper(cmd)
+            .await
+            .map_err(|e| e.to_string()),
     };
     if let Err(msg) = result {
         eprintln!("setu: {msg}");

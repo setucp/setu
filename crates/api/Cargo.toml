@@ -44,6 +44,7 @@ setu-db = { path = "../db" }
 setu-jobs = { path = "../jobs" }
 setu-manifest = { path = "../manifest" }
 setu-proto = { path = "../proto" }
+setu-agent = { path = "../agent" }
 setu-testkit = { path = "../testkit" }
 
 [dev-dependencies]
