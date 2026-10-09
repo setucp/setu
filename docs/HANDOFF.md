@@ -3,11 +3,11 @@
 Everything a fresh Claude Code session needs to build the Setu MVP
 without this conversation.
 
-- Spec: `specs/2026-10-09-setu-design.md`, revision 2 after an
-  independent review; the findings and resolutions are in
+- Spec: `specs/2026-10-09-setu-design.md`, revision 3 after two
+  independent review passes; the findings and resolutions are in
   `specs/2026-10-09-setu-review.md`. Open questions in §12 are the owner's.
 - Roadmap for phases 2–4: `ROADMAP.md` (scope only; plans are written per phase).
-- Plan: `plans/2026-10-09-setu-mvp.md` revision 2 (Tasks 0–15 with
+- Plan: `plans/2026-10-09-setu-mvp.md` revision 3 (Tasks 0–15 with
   10a–10d, TDD, subagent-driven). Ledger goes to
   `plans/2026-10-09-setu-mvp.ledger.md`.
 - The repo root holds `CLAUDE.md`, `.claude/agents/` (rust-implementer,

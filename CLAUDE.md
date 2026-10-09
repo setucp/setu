@@ -3,9 +3,9 @@
 Setu is a control panel for single-binary web apps (and, from phase 2,
 container images): one binary `setu`: `setu serve` is the control plane, `setu agent run` the per-server agent, React
 UI embedded in the control-plane binary. Read `docs/HANDOFF.md`, then the spec
-`docs/specs/2026-10-09-setu-design.md` (revision 2), the review record
+`docs/specs/2026-10-09-setu-design.md` (revision 3), the review record
 `docs/specs/2026-10-09-setu-review.md` and the plan
-`docs/plans/2026-10-09-setu-mvp.md` (revision 2).
+`docs/plans/2026-10-09-setu-mvp.md` (revision 3).
 The spec is the authority; the plan argues from it; disagreements are
 rulings recorded in the plan's ledger.
 
@@ -25,7 +25,10 @@ rulings recorded in the plan's ledger.
 - Never print secrets (tokens, env values, keys). Structs holding them
   get a manual `Debug` that redacts. Nothing path-like, no mode and no
   owner ever crosses the sudo boundary: the helper takes a short id and
-  typed JSON only (spec §4).
+  typed JSON only, re-validates version/exec/args/dirs itself, streams
+  archives over stdin/stdout, and `--root` exists only under the
+  `test-root` feature and never under sudo (spec §4). Passwords never
+  on argv.
 - UI codegen (`pnpm -C ui gen:api`) reads `openapi.json` from the repo,
   never a running server.
 
@@ -35,8 +38,8 @@ rulings recorded in the plan's ledger.
   subagent-driven-development (or executing-plans) → requesting-code-
   review → finishing-a-development-branch. TDD on every task: a test you
   watched fail, then the code.
-- Work in a worktree (`../setu-work-<n>`), one branch per plan. Squash-
-  merge to `main` locally until a remote exists.
+- Work in a worktree (`../setu-work-<n>`), one branch per plan; PRs
+  against `origin/main`.
 - Repo agents in `.claude/agents/` (`rust-implementer`, `ui-implementer`,
   `code-reviewer`, `e2e-verifier`) and skills in `.claude/skills/`
   (`setu-testing`, `setu-e2e`, `setu-conventions`) — use them.
@@ -49,15 +52,16 @@ rulings recorded in the plan's ledger.
 ## Layout
 
 ```
-crates/common    config, sealing (v1: ChaCha20-Poly1305), ids, error envelope
+crates/common    config, sealing (v1:/plain:, KeyVault scheme), ids, domain, shared validation regexes, error envelope, TestDb
 crates/manifest  app manifest schema, validator corpus, env resolution
 crates/proto     agent command/result/heartbeat types
-crates/db        sqlx repos + migrations
+crates/db        sqlx repos (incl. sessions, command queue with leases) + migrations
 crates/jobs      provision/update/backup/restore/delete state machines over AgentClient
 crates/api       axum control plane, utoipa, embedded UI; the one binary `setu` (serve | agent | cli)
 crates/agent     Runtime trait, NativeRuntime, typed privileged helper (`setu helper`), Postgres/Caddy adapters, reconcile (lib; `setu agent …`)
-crates/testkit   TestDb, TestServer, FakeAgent helpers
+                 (TestServer lives in crates/api/tests/common; FakeAgent in crates/jobs::testing)
+
 apps/hello       tiny Axum app used by tests and the e2e
 ui/              Vite + React + TanStack + Tailwind + shadcn/ui
-scripts/         test.sh, test-pg.sh, e2e.sh, build-ui.sh, sqlx-prepare.sh, check-sudoers.sh
+scripts/         test.sh, test-pg.sh, e2e.sh, test-install.sh, build-ui.sh, sqlx-prepare.sh, check-sudoers.sh
 ```

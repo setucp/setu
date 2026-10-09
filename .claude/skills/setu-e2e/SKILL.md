@@ -10,8 +10,10 @@ description: Running and debugging the end-to-end test (control plane + agent in
 `$SCRATCH` is this session's scratchpad directory. The script writes
 PIDs (`serve.pid`, `httpd.pid`) and container names into `SETU_E2E_DIR`.
 
-What it does: builds the binaries, starts a control-plane Postgres
-(port 55441) and `setu serve` on 127.0.0.1:7010, starts
+What it does: builds `setu` (musl, features `test-root,e2e-hooks`) and
+`hello`, creates Docker network `setu-e2e-net`, starts a control-plane
+Postgres on it and `setu serve` on the host's address on that network
+(port 7010), starts
 `jrei/systemd-ubuntu:24.04` as `setu-e2e` with `--privileged
 --cgroupns=private` (NEVER bind-mount the host's /sys/fs/cgroup and
 NEVER `--network host`: production services run on this host), installs
@@ -19,12 +21,13 @@ the agent with `--tls internal --insecure`, joins, provisions
 `apps/hello`, asserts TLS, firewall, Caddy admin closed, limits,
 metrics, backup/restore, update, rollback with database restore,
 deterministic agent exit mid-provision, delete, real Vyasa 0.2.0, and
-survival of a container restart. TAP output, 12 assertions.
+survival of a container restart. TAP output, 14 assertions. `scripts/test-install.sh` is the sibling
+for `install.sh` (`INSTALL PASS`).
 
 Debugging: `docker exec setu-e2e systemctl status setu-agent
 'setu-site@*'`; `docker exec setu-e2e journalctl -u setu-agent -n 200`;
 `docker exec setu-e2e cat /var/lib/setu/state.json`; `docker exec
-setu-e2e curl -s localhost:2019/config/`; control-plane job log via
+setu-e2e curl -s --unix-socket /run/caddy/admin.sock http://localhost/config/`; control-plane job log via
 `GET /api/v1/jobs/<id>`. Fix the code, never the assertion.
 
 Cleanup is in the script's trap; if it died hard: `docker rm -f

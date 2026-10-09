@@ -13,13 +13,15 @@ person, not by whether the spec mentions the input.
 Look especially for: non-idempotent, non-deduped or non-expiring agent
 command handling; secrets in logs, `Debug` output, `agent_commands`,
 API responses or error messages, or on argv; any sudo surface beyond
-the golden `assets/sudoers`; any helper verb accepting a path, mode or
-owner from its caller, or following symlinks; archives with traversal
+the golden `assets/sudoers`; any helper verb accepting a path, mode, owner, raw `exec`/`args`/
+`version` or `--root` from its caller, following symlinks, or
+extracting into a user-owned live tree; archives with traversal
 or special bits; Caddy reachable other than through the group-owned
-unix socket; apps reachable on their port from outside; port, domain or
+unix socket, or programmed with `PUT`; the panel reachable by hosted
+apps other than through Caddy; apps reachable on their port from outside; port, domain or
 capacity races outside the `sites.create` transaction; jobs without a
-renewed lease or a step cursor; rollback that does not restore the
-database; UI that reveals secrets without password re-auth; tests that
+renewed lease or a step cursor; rollback that does not replace the
+database or rewrite env and unit; UI that reveals secrets without password re-auth; tests that
 pass without the implementation (assert on the transcript, not just on
 `ok`). Run the lints and `scripts/test.sh` yourself unless the
 dispatcher says a build is already running (one heavy cargo job at a

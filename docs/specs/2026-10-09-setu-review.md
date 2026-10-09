@@ -72,3 +72,49 @@ CLI, audit UI page, metric charts, fleet rollout batches,
 | musl build of rustls | use the `ring` provider (no cmake) | pinned in the Tech Stack line |
 | Caddy config persistence | the apt package ships `caddy-api.service` (`caddy run --environ --resume`) for API-driven config | agent install uses it with `--config /etc/caddy/setu.json --resume`; e2e assertion 12 covers restart and autosave loss |
 | 60-second provisioning on real hardware | unverified | e2e prints the time; Task 15 records it on a Hetzner box if the owner provides one |
+
+## Second pass (revision 2 → revision 3)
+
+A second independent reviewer checked revision 2 against the first
+pass's claimed resolutions and found the gaps below. All are resolved
+in spec revision 3 and plan revision 3.
+
+| # | Finding | Resolution (rev 3) |
+|---|---|---|
+| 2-C1 | Update never wrote the new version's env; e2e versions differed only by env | `env` step (`resolve::merge`) and `write_env` in the update path; old env and spec sealed in the job payload; transcript test |
+| 2-C2 | Rollback proof broken: `pg_restore --clean` keeps objects the failed version created; hello's failing version added no migration | Restore **replaces** the database (`DROP … WITH (FORCE)` → create → `pg_restore`); dirs restored by staging and swap; hello 0.1.2 migrates (`notes_v3`) then fails, 0.1.1 refuses to boot if `notes_v3` exists |
+| 2-C3 | Helper still accepted path-like input (`dest`, `src`, `version`, `url`, raw `exec` into `ExecStart`), `--root` reachable via sudo, `install-system` sudo-reachable | Verb table rewritten: backup/restore stream tar over stdout/stdin; `install {version, sha256}` reads a derived download path; helper validates version/exec/args/dirs with the shared regexes and systemd-escapes; `--root` only under feature `test-root` and refused with `SUDO_UID`; `install_system` is a library function run as real root, not a `helper` verb |
+| 2-C4 | Postgres password on argv (`-v pw=`) | `\set pw '…'` as the first stdin line; `pg_dump` via `PGPASSWORD`; installer writes the password into the config file via heredoc |
+| 2-I5 | Restore extracted as root into a user-owned, possibly live tree; backup files under a setu-owned dir could be symlinks | Restore requires the unit inactive, extracts into root-owned staging with the same entry rules as install, then swaps; helper reads archives with `O_NOFOLLOW` and requires regular files |
+| 2-I6 | Join retry by hostname let a bystander hijack the server | Agent nonce; same nonce → same sealed token within 60 s; different nonce refused |
+| 2-I7 | Caddy `PUT /id/…` inserts a duplicate | `PATCH` for existing, `POST …/routes` for new; fake rejects `PUT` |
+| 2-I8 | `caddy-api.service` needs `RuntimeDirectory`, `Group`, `ExecStart=` reset; `caddy.service` must be stopped; `--resume` ignores base changes on reinstall; panel route not reconciled | All in spec §4 Caddy and Task 10b assets; re-run applies the base via `POST /load` merged with current routes; panel route in `agent.toml`, id `setu-panel`, reconciled |
+| 2-I9 | Single-node join under `tls internal` fails (internal CA, name resolution) | `--control-plane http://127.0.0.1:<port>` on TCP installs; loopback http allowed without `--insecure`; `--ca` for the internal CA on unix-socket installs; test-install adds `setu.test` to the container's hosts |
+| 2-I10 | Serial agent loop | Spawn per command with per-site FIFO; read-only commands take no slot; test |
+| 2-I11 | Backups: 2-minute TTL, no file deletion, `pre_restore` missing, paths keyed by timestamp | 60-minute TTL; `DeleteBackup` command and `delete_backup` jobs from the scheduler; `pre_restore` kind; directories keyed by `backup_id` |
+| 2-I12 | Secrets survive cancel/expire/requeue; `Join*`/`Config` printable | Redact on cancel, expiry and prune; redacting `Debug` on `JoinRequest`, `JoinResponse`, `Config`, agent config; app-log caveat documented |
+| 2-I13 | Vyasa `workdir = "bin"` is the archive root, not the binary's directory | `workdir = "exec_dir"` (default) |
+| 2-I14 | Hosted apps could forge `X-Forwarded-For` to the panel on 127.0.0.1 | Panel listens on a group-owned unix socket behind local Caddy; forwarded headers trusted from unix peers only; Vyasa cross-site caveat in SECURITY.md |
+| 2-I15 | e2e assertions vacuous or looping (firewall, agent exit drop-in, feature flag, dedupe semantics, reconcile knob) | Assertion 4 uses a `0.0.0.0` listener; the exit hook is a cargo feature; the drop-in is removed before restart; dedupe semantics fixed (persist before post, cached result on redelivery); `SETU_AGENT_RECONCILE_SECS` in Task 10d |
+| 2-I16 | Helper tests asserted ownership unprivileged | `Ownership` and `Users` traits with recording fakes; e2e asserts real `stat` output |
+| 2-I17 | Sessions table unowned and in the wrong crate | `sessions` in migration 0001 with repo in `db`; purge by the scheduler; cascade and delete-on-password-change |
+| 2-I18 | Consumed-but-unproduced interfaces (disk bytes, dirs at site-create, control-plane flag, setup token producer, notifier, systemd trait, site metrics, env job kind) | `unit show` returns `data_bytes`; `site-create {dirs}`; `servers.is_control_plane`; `serve` generates the setup token; notifier in Task 8; reconcile uses the helper; `GET /sites/{id}` includes metrics; `env_update` job |
+| 2-I19 | nftables persistence; `flush ruleset` danger; host port check | `setu-nftables.service` loading only `table inet setu`; port-free check in `validate` |
+| 2-I20 | LISTEN/NOTIFY: dropping test DBs with open listeners, subscribe-before-check, reconnect gaps, stale compiled migrations | `DROP … WITH (FORCE)`; subscribe before `next_for`; 5 s fallback re-check; `build.rs` rerun-if-changed |
+| 2-I21 | Capacity formula left no OS headroom; retry double-counted | 85 % cap; "other sites" + this site |
+
+Minors from the second pass applied: setuid entries refuse the whole
+install; `Health{site}` only; reveal audited per call; alphanumeric
+`password20`; once/health app contract documented; lock literal
+`0x5e7a`; install semaphore tested; agent unit without
+`NoNewPrivileges`; apt installs `sudo gnupg`; every task has a run
+command and an expected count; scheduler and join tests use an
+injected clock or a direct `UPDATE`; e2e on a dedicated Docker
+network; Vyasa provisioning held to 60 s; CLAUDE.md remote and layout
+lines corrected; ui-implementer points at §7; skills corrected.
+
+Still unverified (for the implementing session): Vyasa 0.2.0's login
+route and any Origin requirement (e2e assertion 12 sends `Origin`);
+`visudo -cf` ownership checks on a non-root-owned file (Task 10b
+ledgers the outcome); Caddy admin `Host` handling over a unix socket;
+GitHub-runner behaviour with `--cgroupns=private`.

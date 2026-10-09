@@ -8,7 +8,7 @@ description: Setu code conventions — error envelope, ids, sealing, idempotent 
 - IDs: ULID strings; `short_id` = 8 chars, unique per server, used in
   every name: user `setu-site-<short>`, unit `setu-site@<short>.service`,
   db and role `site_<short>`, dir `/srv/setu/sites/<short>`.
-- Errors: `AppError { code, message, status }` → `{ "error": { code, message } }`.
+- Errors: `AppError { code, message }` → `{ "error": { code, message } }` (status derived from the code).
   Codes: validation 400, unauthorized 401, forbidden 403, not_found 404,
   conflict 409, agent_unreachable 502, internal 500. Never leak internal
   error text for `internal`; log it with `tracing::error!` instead.
@@ -24,7 +24,10 @@ description: Setu code conventions — error envelope, ids, sealing, idempotent 
   privileged action is a typed `setu helper <verb> --site <short>` with
   JSON on stdin; paths derive from the short id only; no free paths,
   modes or owners ever cross the sudo boundary. Postgres passwords go
-  to psql as `-v` variables on stdin, never argv. Caddy only via the
+  to psql as a `\set pw '…'` line on stdin, never argv; `pg_dump` gets
+  `PGPASSWORD` in its environment. The helper re-validates version,
+  exec, args and dir names; archives stream over stdin/stdout; `--root`
+  only under the `test-root` feature and never under sudo. Caddy only via the
   unix socket.
 - Jobs: named steps with a stored cursor, each logs `step <name>:
   ok|error …`; leases (`locked_until`) renewed while running; a failure
