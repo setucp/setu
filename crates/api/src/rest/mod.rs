@@ -25,6 +25,7 @@ use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
 use super::auth as authn;
+use super::embed;
 use super::session_store::PgSessionStore;
 use super::state::AppState;
 
@@ -67,12 +68,6 @@ where
 /// the session cookie.
 pub(crate) fn use_secure_cookies(public_url: &url::Url) -> bool {
     public_url.scheme() == "https"
-}
-
-/// Unknown routes render the `not_found` envelope instead of axum's
-/// default plain-text 404.
-async fn fallback() -> AppError {
-    AppError::not_found("route not found")
 }
 
 /// Assemble the full control-plane router: health probes, `/api/v1`, the
@@ -135,7 +130,14 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/v1", api)
         .nest("/agent/v1", agent_api)
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", docs::ApiDoc::openapi()))
-        .fallback(fallback)
+        // Embedded UI (plan Task 12): `/` is the SPA shell, `/assets/*`
+        // the fingerprinted bundle, everything else client-side routing.
+        // The API nests above win over these, and unknown `/api/*` or
+        // `/agent/*` paths keep the JSON `not_found` envelope via the
+        // fallback in `embed`.
+        .route("/", get(embed::index))
+        .route("/assets/{*path}", get(embed::asset))
+        .fallback(embed::fallback)
         .layer(session_layer)
         .with_state(state)
 }

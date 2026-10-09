@@ -51,6 +51,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.99"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Build UI (embeds into setu-api)
+        run: bash scripts/build-ui.sh
       - name: Rust tests
         run: bash scripts/test.sh
       - name: UI lint

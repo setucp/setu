@@ -2208,6 +2208,7 @@ dependencies = [
  "rand 0.9.5",
  "reqwest",
  "rmp-serde",
+ "rust-embed",
  "serde",
  "serde_json",
  "setu-agent",

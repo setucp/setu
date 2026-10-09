@@ -34,6 +34,7 @@ rmp-serde.workspace = true
 time.workspace = true
 futures.workspace = true
 sqlx.workspace = true
+rust-embed.workspace = true
 async-trait.workspace = true
 rand.workspace = true
 hex.workspace = true

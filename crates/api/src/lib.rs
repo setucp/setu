@@ -6,6 +6,7 @@
 //! a throwaway database for integration tests.
 
 pub mod auth;
+pub mod embed;
 pub mod rest;
 pub mod session_store;
 pub mod state;
