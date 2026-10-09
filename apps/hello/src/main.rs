@@ -10,6 +10,9 @@
 //!   `POST /notes {"text": …}` inserts one and, when `HELLO_UPLOADS_DIR`
 //!   is set, writes `note-<id>.txt` there so a restore of the site's dirs
 //!   is observable; `GET /uploads` lists that directory.
+//! - At boot, when `HELLO_STATE_DIR` is set, writes `last-boot` (the
+//!   version) there: the site's data directory is never empty, so its
+//!   measured `disk_bytes` is observable (that dir is not backed up).
 //! - Boot migrations by `HELLO_VERSION` ([`plan_for`]): every version
 //!   creates `notes`; `0.1.1` creates `notes_v2` and **refuses to boot**
 //!   when `notes_v3` exists (a rollback that did not restore the database
@@ -32,6 +35,7 @@ struct AppConfig {
     version: String,
     fail: bool,
     uploads: Option<PathBuf>,
+    state: Option<PathBuf>,
 }
 
 impl AppConfig {
@@ -42,6 +46,7 @@ impl AppConfig {
             version: var("HELLO_VERSION").unwrap_or_else(|| "0.1.0".to_string()),
             fail: var("HELLO_FAIL").as_deref() == Some("1"),
             uploads: var("HELLO_UPLOADS_DIR").map(PathBuf::from),
+            state: var("HELLO_STATE_DIR").map(PathBuf::from),
         }
     }
 }
@@ -238,6 +243,11 @@ async fn main() {
         }
         _ => None,
     };
+    if let Some(dir) = &cfg.state {
+        if std::fs::write(dir.join("last-boot"), format!("{}\n", cfg.version)).is_err() {
+            eprintln!("hello: cannot write last-boot in HELLO_STATE_DIR");
+        }
+    }
     let addr = listen_addr(
         std::env::var("HELLO_BIND").ok().as_deref(),
         std::env::var("PORT").ok().as_deref(),
@@ -324,6 +334,7 @@ mod tests {
             version: "0.1.0".to_string(),
             fail,
             uploads: None,
+            state: None,
         }
     }
 

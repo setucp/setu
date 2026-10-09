@@ -32,12 +32,13 @@ exec = "hello"
 
 [needs]
 postgres = ">=16"
-dirs = ["uploads"]
+dirs = ["uploads", "state"]
 
 [env]
 HELLO_BIND = { from = "bind_addr" }
 DATABASE_URL = { from = "postgres_url" }
 HELLO_UPLOADS_DIR = { from = "dir", dir = "uploads" }
+HELLO_STATE_DIR = { from = "dir", dir = "state" }
 HELLO_NAME = { value = "e2e" }
 HELLO_VERSION = { value = "__VERSION__" }
 __EXTRA_ENV__
