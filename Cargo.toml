@@ -53,3 +53,4 @@ futures = { version = "0.3" }
 semver = { version = "1" }
 tempfile = { version = "3" }
 serial_test = { version = "3" }
+url = { version = "2" }
