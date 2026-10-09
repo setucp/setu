@@ -202,7 +202,7 @@ async fn ensure_user() -> Result<(), InstallError> {
 }
 
 async fn ensure_dirs() -> Result<(), InstallError> {
-    for dir in ["/var/lib/setu", "/srv/setu/sites", "/etc/setu"] {
+    for dir in ["/var/lib/setu", "/var/lib/setu/downloads", "/etc/setu"] {
         run(
             "install",
             &["-d", "-o", "setu", "-g", "setu", "-m", "0755", dir],
@@ -210,6 +210,23 @@ async fn ensure_dirs() -> Result<(), InstallError> {
         )
         .await?;
     }
+    // Sites live under a root-owned tree: the helper's no-follow walk
+    // relies on every parent above a site dir being root's (spec §4).
+    run(
+        "install",
+        &[
+            "-d",
+            "-o",
+            "root",
+            "-g",
+            "root",
+            "-m",
+            "0755",
+            "/srv/setu/sites",
+        ],
+        "dirs",
+    )
+    .await?;
     // Backup leaves are `setu:postgres/0770` (see `backup_site`): the
     // agent (setu) manages them while `pg_dump`/`pg_restore` (postgres)
     // read and write inside. Setgid inherits the group; 2770 keeps other
@@ -515,57 +532,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sudoers_asset_has_required_entries() {
-        // The whole root surface is the pinned helper. A bare `helper`
-        // entry matches argv-exactly (sudo compares the full command
-        // line), so the rule carries a trailing ` *` and the helper
-        // allowlists verbs/units/paths itself. Postgres admin is
-        // per-binary, postgres user.
-        for needle in [
-            "setu ALL=(root) NOPASSWD: /opt/setu/setu helper *",
-            "setu ALL=(postgres) NOPASSWD: /usr/bin/psql",
-            "setu ALL=(postgres) NOPASSWD: /usr/bin/pg_dump",
-            "setu ALL=(postgres) NOPASSWD: /usr/bin/pg_restore",
-        ] {
-            assert!(
-                SUDOERS_ASSET.contains(needle),
-                "sudoers asset must pin `{needle}`"
-            );
-        }
-        // Exactly one wildcard form is allowed: the helper rule's
-        // trailing ` *` (its subcommands vary per call and are validated
-        // in `helper.rs`, unit-tested). Anywhere else a wildcard is a
-        // sign of an overbroad rule. Likewise no blanket shell/editor/
-        // package access or direct systemctl and journalctl rules (those
-        // go through the helper). Comments are prose; only rule lines
-        // count.
-        let rules: Vec<&str> = SUDOERS_ASSET
-            .lines()
-            .filter(|l| {
-                let t = l.trim();
-                !t.is_empty() && !t.starts_with('#')
-            })
-            .collect();
-        for rule in &rules {
-            let scoped = rule.replace("/opt/setu/setu helper *", "HELPER_RULE");
-            for bad in [
-                "*",
-                "/bin/sh",
-                "/bin/bash",
-                "/usr/bin/apt",
-                "systemctl",
-                "journalctl",
-                "rm ",
-            ] {
-                assert!(
-                    !scoped.contains(bad),
-                    "sudoers rules must not contain `{bad}`"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn site_template_uses_instance_specifiers() {
         assert!(SITE_TEMPLATE_ASSET.contains("setu-site-%i"));
         assert!(SITE_TEMPLATE_ASSET.contains("/srv/setu/sites/%i"));
@@ -584,19 +550,16 @@ mod tests {
                 .any(|l| l.trim_start().starts_with("NoNewPrivileges=")),
             "agent unit must not set NoNewPrivileges"
         );
-        // `strict` mounts /etc read-only and breaks drop-in writes and
-        // useradd (`cannot lock /etc/passwd` in the e2e); `true` keeps
-        // /usr+/boot read-only while the agent manages /etc. Sites keep
-        // `strict`.
-        assert!(
-            AGENT_UNIT_ASSET
-                .lines()
-                .any(|l| l.trim() == "ProtectSystem=true"),
-            "agent unit must set ProtectSystem=true, not strict"
-        );
-        // sudo needs its timestamp dir under the sandbox
-        // (`ProtectSystem=strict` leaves /run read-only for the unit).
-        assert!(AGENT_UNIT_ASSET.contains("RuntimeDirectory=sudo"));
+        // spec §4: `full` (not `strict`), writable `/var/lib/setu`; `/etc`
+        // stays writable because sudo children share the unit's mount
+        // namespace and the helper writes drop-ins and runs useradd
+        // (ledger R62).
+        assert!(AGENT_UNIT_ASSET
+            .lines()
+            .any(|l| l.trim() == "ProtectSystem=full"));
+        assert!(AGENT_UNIT_ASSET
+            .lines()
+            .any(|l| l.trim() == "ReadWritePaths=/var/lib/setu /etc"));
     }
 
     #[test]

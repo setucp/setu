@@ -58,6 +58,10 @@ tempfile = { version = "3" }
 serial_test = { version = "3" }
 tar = { version = "0.4" }
 flate2 = { version = "1" }
+zstd = { version = "0.13" }
+# 0.31, not the plan's 0.29: its `openat` returns `OwnedFd`, so the
+# helper's fd walk needs no `unsafe` (workspace forbids it). Ledger R60.
+nix = { version = "0.31", default-features = false, features = ["fs", "dir", "user"] }
 hostname = { version = "0.4" }
 url = { version = "2" }
 tower-sessions = { version = "0.15" }

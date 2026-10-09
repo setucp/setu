@@ -8,6 +8,11 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# `setu helper --root <dir>` and `SudoHelper::with_program`: tests only,
+# never in release builds; `--root` is refused when `SUDO_UID` is set.
+test-root = []
+
 [dependencies]
 tokio.workspace = true
 serde.workspace = true
@@ -26,9 +31,15 @@ tar.workspace = true
 flate2.workspace = true
 toml.workspace = true
 futures.workspace = true
+zstd.workspace = true
+nix.workspace = true
+url.workspace = true
+setu-common = { path = "../common" }
 setu-proto = { path = "../proto" }
 
 [dev-dependencies]
+# Self dev-dependency: integration tests drive the `--root` CLI path.
+setu-agent = { path = ".", features = ["test-root"] }
 axum.workspace = true
 tokio.workspace = true
 tempfile.workspace = true

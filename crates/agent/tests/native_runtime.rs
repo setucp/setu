@@ -1,23 +1,29 @@
-//! `NativeRuntime` behaviour against `FakeSystemd`/`FakePostgres`/`FakeCaddy`.
-//!
-//! No root, no systemd, no Postgres, no Caddy: everything is a trait fake
-//! plus tempdirs and a local axum server for downloads.
+//! `NativeRuntime` over the helper trait: `FakeHelper` for the exact
+//! verbs and inputs, `LocalHelper` (the real helper code on a tempdir
+//! root with fakes) for end-to-end effects. No root, systemd, Postgres
+//! or Caddy.
 
 use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use setu_agent::{AgentConfig, CaddyFake, FakePostgres, FakeSystemd, NativeRuntime, Runtime};
+use serde_json::json;
+use setu_agent::helper::{Ctx, Verb};
+use setu_agent::{
+    AgentConfig, CaddyFake, FakeHelper, FakePostgres, LocalHelper, NativeRuntime, Paths, Runtime,
+    StateFile,
+};
 use setu_proto::{BinaryRef, Limits, SiteSpec};
 
-fn test_site(sites_root: &Path, port: u16) -> SiteSpec {
-    let id = "01jtestsite00000000000001";
-    let dir = sites_root.join(id);
+const ID: &str = "01jtestsite00000000000001";
+const SHORT: &str = "00000001";
+
+fn test_site(root: &Path, port: u16) -> SiteSpec {
+    let dir = root.join("srv/setu/sites").join(SHORT);
     SiteSpec {
-        site_id: id.to_string(),
-        short_id: "00000001".to_string(),
-        // Production form: the short id (usernames cap at 32 chars).
-        user: format!("setu-site-{}", &id[id.len() - 8..]),
+        site_id: ID.to_string(),
+        short_id: SHORT.to_string(),
+        user: format!("setu-site-{SHORT}"),
         data_dir: dir.join("data"),
         run_dir: dir.join("run"),
         port,
@@ -34,22 +40,31 @@ fn test_site(sites_root: &Path, port: u16) -> SiteSpec {
     }
 }
 
-fn test_runtime(
-    systemd: FakeSystemd,
-    sites_root: &Path,
-    state_path: &Path,
-) -> NativeRuntime<FakeSystemd, FakePostgres, CaddyFake> {
-    let cfg = AgentConfig {
-        sites_root: sites_root.to_path_buf(),
-        state_path: state_path.to_path_buf(),
-        chown_files: false,
-        use_sudo_helper: false,
+fn config(root: &Path) -> AgentConfig {
+    let p = Paths::new(Some(root.to_path_buf()));
+    AgentConfig {
+        state_path: p.state(),
+        sites_root: p.sites(),
+        downloads_dir: p.downloads(),
+        backups_root: p.backups(),
         ..AgentConfig::default()
-    };
-    NativeRuntime::new(systemd, FakePostgres::new(), CaddyFake::new(), cfg)
+    }
 }
 
-/// Build a tiny tar.gz in memory containing one executable file `name`.
+fn fake_rt(root: &Path, helper: FakeHelper) -> NativeRuntime<FakeHelper, FakePostgres, CaddyFake> {
+    NativeRuntime::new(helper, FakePostgres::new(), CaddyFake::new(), config(root))
+}
+
+fn local_rt(root: &Path) -> NativeRuntime<LocalHelper, FakePostgres, CaddyFake> {
+    NativeRuntime::new(
+        LocalHelper::new(Ctx::fake(root)),
+        FakePostgres::new(),
+        CaddyFake::new(),
+        config(root),
+    )
+}
+
+/// A tiny tar.gz with one executable file `name`.
 fn make_tarball(name: &str, contents: &[u8]) -> Vec<u8> {
     let mut tar_data = Vec::new();
     {
@@ -65,10 +80,8 @@ fn make_tarball(name: &str, contents: &[u8]) -> Vec<u8> {
     }
     let mut gz = Vec::new();
     {
-        use flate2::write::GzEncoder;
-        use flate2::Compression;
         use std::io::Write;
-        let mut enc = GzEncoder::new(&mut gz, Compression::default());
+        let mut enc = flate2::write::GzEncoder::new(&mut gz, flate2::Compression::default());
         enc.write_all(&tar_data).expect("gzip");
         enc.finish().expect("gzip finish");
     }
@@ -80,18 +93,12 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-/// Serve `tarball` at `/app.tar.gz` on an ephemeral port; returns the URL.
 async fn serve_tarball(tarball: Vec<u8>) -> String {
     let app = axum::Router::new().route(
         "/app.tar.gz",
         axum::routing::get(move || {
             let body = tarball.clone();
-            async move {
-                (
-                    [(axum::http::header::CONTENT_TYPE, "application/gzip")],
-                    axum::body::Body::from(body),
-                )
-            }
+            async move { axum::body::Body::from(body) }
         }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -105,171 +112,116 @@ async fn serve_tarball(tarball: Vec<u8>) -> String {
 }
 
 #[tokio::test]
-async fn write_unit_ensures_site_user_before_dropin() {
+async fn install_downloads_then_calls_helper_install_with_version_and_sha() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let systemd = FakeSystemd::new();
-    let rt = test_runtime(
-        systemd.clone(),
-        &dir.path().join("sites"),
-        &dir.path().join("state.json"),
-    );
-    let site = test_site(&dir.path().join("sites"), 20001);
-
-    rt.write_unit(&site).await.expect("write_unit");
-
-    // The site user must exist before the drop-in (which names it) and
-    // the env file (which is chowned to it) land.
-    let calls = systemd.calls();
-    let user_at = calls
-        .iter()
-        .position(|c| c == "ensure-user setu-site-00000001")
-        .expect("ensure-user must be recorded");
-    let dropin_at = calls
-        .iter()
-        .position(|c| c.starts_with("write-dropin"))
-        .expect("drop-in must be recorded");
-    assert!(user_at < dropin_at, "user first: {calls:?}");
-}
-
-#[tokio::test]
-async fn remove_inner_deletes_user_and_dropin() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let systemd = FakeSystemd::new();
-    let rt = test_runtime(
-        systemd.clone(),
-        &dir.path().join("sites"),
-        &dir.path().join("state.json"),
-    );
-    let site = test_site(&dir.path().join("sites"), 20001);
-
-    rt.write_unit(&site).await.expect("write_unit");
-    rt.remove_inner(&site).await.expect("remove_inner");
-
-    let calls = systemd.calls();
-    assert!(
-        calls
-            .iter()
-            .any(|c| c == "remove-dropin setu-site@01jtestsite00000000000001.service"),
-        "drop-in removed: {calls:?}"
-    );
-    assert!(
-        calls.iter().any(|c| c == "remove-user setu-site-00000001"),
-        "site user removed: {calls:?}"
-    );
-}
-
-#[tokio::test]
-async fn write_unit_renders_limits_dropin() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let systemd = FakeSystemd::new();
-    let rt = test_runtime(
-        systemd.clone(),
-        &dir.path().join("sites"),
-        &dir.path().join("state.json"),
-    );
-    let site = test_site(&dir.path().join("sites"), 20001);
-
-    rt.write_unit(&site).await.expect("write_unit");
-
-    let unit = "setu-site@01jtestsite00000000000001.service";
-    let dropin = systemd
-        .dropin_contents(unit)
-        .expect("drop-in must be written");
-    let expected = "\
-# Setu-managed drop-in for site 01jtestsite00000000000001. Do not edit by hand.\n\
-[Service]\n\
-User=setu-site-00000001\n\
-WorkingDirectory=/SITES/01jtestsite00000000000001\n\
-EnvironmentFile=/SITES/01jtestsite00000000000001/env\n\
-ExecStart=\n\
-ExecStart=/SITES/01jtestsite00000000000001/bin/current/app serve\n\
-MemoryMax=512M\n\
-CPUQuota=100%\n";
-    let expected = expected.replace("/SITES", dir.path().join("sites").to_str().expect("utf8"));
-    assert_eq!(dropin, expected, "drop-in golden mismatch");
-}
-
-#[tokio::test]
-async fn install_verifies_checksum_and_switches_current() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let sites_root = dir.path().join("sites");
-    let systemd = FakeSystemd::new();
-    let rt = test_runtime(systemd, &sites_root, &dir.path().join("state.json"));
-
-    let tarball = make_tarball("app", b"#!/bin/sh\necho hello\n");
-    let url = serve_tarball(tarball.clone()).await;
-    let good_sha = sha256_hex(&tarball);
-
-    // Wrong sha: must fail before touching `current`.
-    let mut bad = test_site(&sites_root, 20002);
-    bad.site_id = "01jtestsite00000000000002".to_string();
-    let baddir = sites_root.join(&bad.site_id);
-    bad.data_dir = baddir.join("data");
-    bad.run_dir = baddir.join("run");
-    bad.exec = baddir.join("bin").join("current").join("app");
-    bad.env_file = baddir.join("env");
-    bad.binary = Some(BinaryRef {
-        url: url.clone(),
-        sha256: "0".repeat(64),
+    let helper = FakeHelper::new();
+    let rt = fake_rt(dir.path(), helper.clone());
+    let tarball = make_tarball("app", b"#!/bin/sh\necho hi\n");
+    let sha = sha256_hex(&tarball);
+    let mut site = test_site(dir.path(), 20001);
+    site.binary = Some(BinaryRef {
+        url: serve_tarball(tarball.clone()).await,
+        sha256: sha.to_uppercase(),
         exec: "app".to_string(),
         version: "0.1.0".to_string(),
     });
-    let err = rt.install(&bad).await.expect_err("bad sha must fail");
-    assert!(
-        err.to_string().contains("checksum"),
-        "error must name checksum, got: {err}"
+
+    rt.install(&site).await.expect("install");
+
+    let dl = dir
+        .path()
+        .join("var/lib/setu/downloads")
+        .join(format!("{sha}.tar.gz"));
+    assert_eq!(std::fs::read(&dl).expect("download"), tarball);
+    assert_eq!(
+        helper.verbs(),
+        [Verb::SiteCreate, Verb::Install, Verb::SwitchVersion]
     );
-    assert!(
-        !baddir.join("bin").join("current").exists(),
-        "failed install must not create current"
+    let call = &helper.calls_for(Verb::Install)[0];
+    assert_eq!(call.short, SHORT);
+    assert_eq!(call.input, json!({"version": "0.1.0", "sha256": sha}));
+    assert_eq!(
+        helper.calls_for(Verb::SwitchVersion)[0].input,
+        json!({"version": "0.1.0"})
     );
 
-    // Right sha: installs, exec bit set, `current` points at 0.1.0.
-    let mut good = test_site(&sites_root, 20003);
-    good.site_id = "01jtestsite00000000000003".to_string();
-    let gooddir = sites_root.join(&good.site_id);
-    good.data_dir = gooddir.join("data");
-    good.run_dir = gooddir.join("run");
-    good.exec = gooddir.join("bin").join("current").join("app");
-    good.env_file = gooddir.join("env");
-    good.binary = Some(BinaryRef {
-        url,
-        sha256: good_sha,
-        exec: "app".to_string(),
-        version: "0.1.0".to_string(),
-    });
-    rt.install(&good).await.expect("install");
-    let exe = gooddir.join("bin").join("0.1.0").join("app");
-    assert!(exe.is_file(), "extracted exec must exist");
-    let mode = std::fs::metadata(&exe).expect("meta").permissions().mode();
-    assert_ne!(mode & 0o111, 0, "exec must be executable");
-    let link = std::fs::read_link(gooddir.join("bin").join("current")).expect("readlink");
-    assert_eq!(link, PathBuf::from("0.1.0"), "current must point at 0.1.0");
+    // Wrong sha: the download fails, the helper is never asked to install.
+    let helper = FakeHelper::new();
+    let rt = fake_rt(dir.path(), helper.clone());
+    site.binary.as_mut().expect("binary").sha256 = "0".repeat(64);
+    let err = rt.install(&site).await.expect_err("bad sha");
+    assert!(err.to_string().contains("checksum"), "{err}");
+    assert!(!helper.verbs().contains(&Verb::Install));
+}
+
+#[tokio::test]
+async fn write_unit_sends_typed_input_without_paths() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let helper = FakeHelper::new();
+    let rt = fake_rt(dir.path(), helper.clone());
+    rt.write_unit(&test_site(dir.path(), 20001))
+        .await
+        .expect("write_unit");
+    let call = &helper.calls_for(Verb::WriteUnit)[0];
+    assert_eq!(call.short, SHORT);
+    assert_eq!(
+        call.input,
+        json!({
+            "short_id": SHORT, "version": "0", "exec": "app", "args": ["serve"],
+            "workdir": "exec_dir", "memory_mb": 512, "cpu_percent": 100
+        })
+    );
+    assert!(!call
+        .input
+        .to_string()
+        .contains(dir.path().to_str().expect("utf8")));
+}
+
+#[tokio::test]
+async fn status_maps_show_output_including_data_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let helper = FakeHelper::new();
+    helper.push_json(
+        Verb::Unit,
+        json!({
+            "ActiveState": "active", "SubState": "running", "MainPID": "4242",
+            "ControlGroup": "/system.slice/system-setu\\x2dsite.slice/setu-site@00000001.service",
+            "MemoryCurrent": "1048576", "CPUUsageNSec": "2000000000", "NRestarts": "3",
+            "data_bytes": 12345
+        }),
+    );
+    let rt = fake_rt(dir.path(), helper.clone());
+    let st = rt.status(ID.to_string()).await.expect("status");
+    assert!(st.active);
+    assert_eq!(st.sub, "running");
+    assert_eq!(st.pid, Some(4242));
+    assert_eq!(st.memory_bytes, Some(1048576));
+    assert_eq!(st.cpu_nsec, Some(2_000_000_000));
+    assert_eq!(st.n_restarts, 3);
+    assert_eq!(st.data_bytes, 12345);
+    assert_eq!(
+        setu_agent::metrics::cgroup_path(st.control_group.as_deref().expect("cg")).expect("path"),
+        PathBuf::from(
+            "/sys/fs/cgroup/system.slice/system-setu\\x2dsite.slice/setu-site@00000001.service"
+        )
+    );
+    assert_eq!(helper.calls_for(Verb::Unit)[0].input, json!({"op": "show"}));
+    // `[not set]` values map to None, not to an error.
+    let st = rt.status(ID.to_string()).await.expect("default show");
+    assert!(!st.active && st.memory_bytes.is_none() && st.pid.is_none());
 }
 
 #[tokio::test]
 async fn install_beside_old_keeps_recorded_version_until_switch() {
-    use setu_agent::StateFile;
-
     let dir = tempfile::tempdir().expect("tempdir");
-    let sites_root = dir.path().join("sites");
-    let state_path = dir.path().join("state.json");
-    let systemd = FakeSystemd::new();
-    let rt = test_runtime(systemd, &sites_root, &state_path);
-
+    let rt = local_rt(dir.path());
+    let state_path = dir.path().join("var/lib/setu/state.json");
     let tarball = make_tarball("app", b"#!/bin/sh\necho hello\n");
     let url = serve_tarball(tarball.clone()).await;
     let sha = sha256_hex(&tarball);
+    let sitedir = dir.path().join("srv/setu/sites").join(SHORT);
+    let mut site = test_site(dir.path(), 20005);
 
-    let mut site = test_site(&sites_root, 20005);
-    site.site_id = "01jversion0000000000000001".to_string();
-    let sitedir = sites_root.join(&site.site_id);
-    site.data_dir = sitedir.join("data");
-    site.run_dir = sitedir.join("run");
-    site.exec = sitedir.join("bin").join("current").join("app");
-    site.env_file = sitedir.join("env");
-
-    // Install 0.1.0: `current` points there and state records 0.1.0.
     site.binary = Some(BinaryRef {
         url: url.clone(),
         sha256: sha.clone(),
@@ -277,40 +229,39 @@ async fn install_beside_old_keeps_recorded_version_until_switch() {
         version: "0.1.0".to_string(),
     });
     rt.install(&site).await.expect("install 0.1.0");
+    let exe = sitedir.join("bin/0.1.0/app");
     assert_eq!(
-        StateFile::load(&state_path).expect("state").sites[&site.site_id].version,
-        "0.1.0"
+        std::fs::metadata(&exe).expect("meta").permissions().mode() & 0o777,
+        0o755
     );
-
-    // Install 0.1.1 beside it: extracted, but `current` and the recorded
-    // version stay on 0.1.0 until the explicit switch.
-    site.binary = Some(BinaryRef {
-        url,
-        sha256: sha,
-        exec: "app".to_string(),
-        version: "0.1.1".to_string(),
-    });
-    rt.install(&site).await.expect("install 0.1.1");
-    assert!(sitedir.join("bin").join("0.1.1").join("app").is_file());
     assert_eq!(
-        std::fs::read_link(sitedir.join("bin").join("current")).expect("readlink"),
+        std::fs::read_link(sitedir.join("bin/current")).expect("link"),
         PathBuf::from("0.1.0")
     );
     assert_eq!(
-        StateFile::load(&state_path).expect("state").sites[&site.site_id].version,
+        StateFile::load(&state_path).expect("state").sites[ID].version,
         "0.1.0"
     );
 
-    // Explicit switch moves both.
-    rt.switch_version_inner(&site.site_id, "0.1.1")
-        .await
-        .expect("switch");
+    site.binary.as_mut().expect("binary").version = "0.1.1".to_string();
+    rt.install(&site).await.expect("install 0.1.1");
+    assert!(sitedir.join("bin/0.1.1/app").is_file());
     assert_eq!(
-        std::fs::read_link(sitedir.join("bin").join("current")).expect("readlink"),
+        std::fs::read_link(sitedir.join("bin/current")).expect("link"),
+        PathBuf::from("0.1.0")
+    );
+    assert_eq!(
+        StateFile::load(&state_path).expect("state").sites[ID].version,
+        "0.1.0"
+    );
+
+    assert!(rt.switch_version_inner(ID, "0.1.1").await.expect("switch"));
+    assert_eq!(
+        std::fs::read_link(sitedir.join("bin/current")).expect("link"),
         PathBuf::from("0.1.1")
     );
     assert_eq!(
-        StateFile::load(&state_path).expect("state").sites[&site.site_id].version,
+        StateFile::load(&state_path).expect("state").sites[ID].version,
         "0.1.1"
     );
 }
@@ -318,25 +269,37 @@ async fn install_beside_old_keeps_recorded_version_until_switch() {
 #[tokio::test]
 async fn start_then_status_reports_active() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let systemd = FakeSystemd::new();
-    let rt = test_runtime(
-        systemd.clone(),
-        &dir.path().join("sites"),
-        &dir.path().join("state.json"),
-    );
-    let site = test_site(&dir.path().join("sites"), 20004);
-
-    let before = rt
-        .status(site.site_id.clone())
-        .await
-        .expect("status before start");
-    assert!(!before.active, "unit must start inactive");
-
-    rt.start(site.site_id.clone()).await.expect("start");
-    let after = rt.status(site.site_id.clone()).await.expect("status");
-    assert!(after.active, "unit must be active after start");
+    let rt = local_rt(dir.path());
+    assert!(!rt.status(ID.to_string()).await.expect("before").active);
+    rt.start(ID.to_string()).await.expect("start");
+    let after = rt.status(ID.to_string()).await.expect("after");
+    assert!(after.active);
     assert_eq!(after.sub, "running");
-    assert!(systemd
-        .calls()
-        .contains(&format!("start setu-site@{}.service", site.site_id)));
+    rt.stop(ID.to_string()).await.expect("stop");
+    assert!(!rt.status(ID.to_string()).await.expect("stopped").active);
+}
+
+#[tokio::test]
+async fn remove_runs_site_remove_and_forgets_state() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rt = local_rt(dir.path());
+    let site = test_site(dir.path(), 20006);
+    rt.write_unit(&site).await.expect("write_unit");
+    rt.write_env_inner(&site, &[]).await.expect("env");
+    assert!(dir
+        .path()
+        .join("srv/setu/sites")
+        .join(SHORT)
+        .join("env")
+        .is_file());
+    rt.remove(ID.to_string()).await.expect("remove");
+    assert!(!dir.path().join("srv/setu/sites").join(SHORT).exists());
+    assert!(!dir
+        .path()
+        .join("etc/systemd/system/setu-site@00000001.service.d")
+        .exists());
+    assert!(StateFile::load(&dir.path().join("var/lib/setu/state.json"))
+        .expect("state")
+        .sites
+        .is_empty());
 }

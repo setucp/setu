@@ -46,11 +46,9 @@ enum Cmd {
         #[command(subcommand)]
         cmd: setu_agent::cli::AgentCmd,
     },
-    /// Privileged file writer (library crate `setu-agent`).
-    Helper {
-        #[command(subcommand)]
-        cmd: setu_agent::cli::HelperCmd,
-    },
+    /// Privileged helper, run only through `sudo -n` by the agent:
+    /// `setu helper <verb> --site <short>` (library crate `setu-agent`).
+    Helper(setu_agent::helper::cli::HelperArgs),
 }
 
 #[derive(Subcommand)]
@@ -83,9 +81,7 @@ async fn main() {
         Cmd::Agent { cmd } => setu_agent::cli::run_agent(cmd)
             .await
             .map_err(|e| e.to_string()),
-        Cmd::Helper { cmd } => setu_agent::cli::run_helper(cmd)
-            .await
-            .map_err(|e| e.to_string()),
+        Cmd::Helper(args) => std::process::exit(setu_agent::helper::cli::main(args)),
     };
     if let Err(msg) = result {
         eprintln!("setu: {msg}");

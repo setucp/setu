@@ -47,24 +47,30 @@ at read time (`online` within 60 s, else `offline`).
 ## Privilege model
 
 The agent runs as `setu`; each site runs as its own
-`setu-site-<short>` user under `ProtectSystem=strict`,
-`NoNewPrivileges=yes`, with memory/CPU limits from the plan. The only
-root path is the pinned helper (`setu helper …` with a trailing ` *`:
-sudo compares the full command line, and per-site units vary per call,
-so the allowlist lives in the helper itself — verbs, units, paths and
-usernames, all unit-tested in `helper.rs`). Postgres admin is confined
-to `psql`, `pg_dump` and `pg_restore` as the `postgres` user. No
-shells, no editors, no package managers. The sudoers file is the golden
-asset (`crates/agent/assets/sudoers`); `scripts/check-sudoers.sh`
-asserts it matches and `visudo -cf` accepts it. The privileged file
-writer is `setu helper write-file --path --mode --owner`, and the path
-must be under `/srv/setu/sites/` or the `setu-site@` unit paths.
+`setu-site-<short>` user (uid 30000–39999) under
+`ProtectSystem=strict`, `NoNewPrivileges=yes`, with memory/CPU limits
+from the plan. The only root path is `sudo -n /opt/setu/setu helper
+<verb> --site <short>` with typed JSON on stdin (spec §4). The verbs are
+`site-create`, `write-unit`, `write-env`, `install`, `switch-version`,
+`unit`, `backup`, `restore` and `site-remove`. Nothing path-like, no
+mode and no owner crosses sudo: the helper derives every path from the
+short id, opens each component `O_NOFOLLOW`, writes temp-file-plus-
+rename, never sets special mode bits, and refuses archives containing
+links, devices, `..`, absolute names or setuid/setgid/sticky bits.
+Postgres admin is confined to `psql`, `pg_dump` and `pg_restore` as
+the `postgres` user. The sudoers file is the three-line golden asset
+`crates/agent/assets/sudoers`; `scripts/check-sudoers.sh` asserts it
+and runs `visudo -cf`. Logs are read with `journalctl` as `setu`
+(group `systemd-journal`), not through the helper.
 
 ## What a site looks like
 
-`setu-site@<site-id>.service`: `WorkingDirectory=/srv/setu/sites/%i`,
-`EnvironmentFile=…/env` (0600, owned by the site user),
-`ExecStart=…/bin/current/<exec> <args>`, `Restart=on-failure`, limits
-in a drop-in (`MemoryMax`, `CPUQuota`). Downloads stream to
-`bin/<version>/.tmp`, verify sha256, extract, atomic rename;
-`SwitchVersion` repoints the `bin/current` symlink.
+`setu-site@<short>.service` from the template unit, with
+`EnvironmentFile=/srv/setu/sites/<short>/env` (root:root 0600, read by
+PID 1) and a drop-in `setu-site@<short>.service.d/10-setu.conf` holding
+`ExecStart=…/bin/current/<exec> <args>` (systemd-quoted),
+`WorkingDirectory=`, `MemoryMax=` and `CPUQuota=`. The agent downloads
+to `/var/lib/setu/downloads/<sha256>.tar.gz` (verified); the helper
+re-hashes it and extracts into a staging dir renamed to
+`bin/<version>/`; `switch-version` swaps the `bin/current` symlink
+atomically.

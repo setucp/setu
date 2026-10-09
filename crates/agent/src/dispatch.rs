@@ -7,9 +7,10 @@
 use setu_proto::{Command, CommandResult};
 
 use crate::caddy::Caddy;
+use crate::helper::unit_name;
+use crate::helper_client::Helper;
 use crate::postgres::PostgresAdmin;
 use crate::runtime::NativeRuntime;
-use crate::systemd::{unit_name, Systemd};
 
 fn ok(id: &str, output: serde_json::Value, log: &str) -> CommandResult {
     CommandResult {
@@ -36,13 +37,13 @@ fn err(id: &str, log: &str, e: impl std::fmt::Display) -> CommandResult {
 
 /// Handle one command to a result. Covers every `Command` variant; there
 /// is no fallthrough arm, so adding a variant breaks compilation here.
-pub async fn handle<S, P, C>(
+pub async fn handle<H, P, C>(
     cmd_id: &str,
     cmd: &Command,
-    rt: &NativeRuntime<S, P, C>,
+    rt: &NativeRuntime<H, P, C>,
 ) -> CommandResult
 where
-    S: Systemd + Send + Sync,
+    H: Helper,
     P: PostgresAdmin + Send + Sync,
     C: Caddy + Send + Sync,
 {
@@ -60,9 +61,9 @@ where
             }
         }
         Command::Install { site } => match rt.install_version(site).await {
-            Ok(dest) => ok(
+            Ok(version) => ok(
                 cmd_id,
-                serde_json::json!({"version": site.binary.as_ref().map(|b| &b.version), "dir": dest}),
+                serde_json::json!({"version": version}),
                 "install ok",
             ),
             Err(e) => err(cmd_id, "install failed", e),
@@ -98,7 +99,13 @@ where
         Command::Status { site_id } => match rt.status_inner(site_id).await {
             Ok(st) => ok(
                 cmd_id,
-                serde_json::json!({"active": st.active, "sub": st.sub, "pid": st.pid}),
+                serde_json::json!({
+                    "active": st.active,
+                    "sub": st.sub,
+                    "pid": st.pid,
+                    "n_restarts": st.n_restarts,
+                    "data_bytes": st.data_bytes,
+                }),
                 "status ok",
             ),
             Err(e) => err(cmd_id, "status failed", e),
@@ -154,17 +161,17 @@ where
             db,
             dirs,
             dest,
-        } => match crate::backup::backup_site(rt.postgres(), site, db, dirs, dest).await {
-            Ok(()) => ok(cmd_id, serde_json::json!({"dest": dest}), "backup ok"),
+        } => match crate::backup::backup_site(rt, site, db, dirs, dest).await {
+            Ok(dir) => ok(cmd_id, serde_json::json!({"dest": dir}), "backup ok"),
             Err(e) => err(cmd_id, "backup failed", e),
         },
         Command::Restore { site, db, src } => {
-            match crate::backup::restore_site(rt.postgres(), site, db, src).await {
+            match crate::backup::restore_site(rt, site, db, src).await {
                 Ok(()) => ok(cmd_id, serde_json::json!({"src": src}), "restore ok"),
                 Err(e) => err(cmd_id, "restore failed", e),
             }
         }
-        Command::Remove { site } => match rt.remove_inner(site).await {
+        Command::Remove { site } => match rt.remove_inner(&site.site_id).await {
             Ok(()) => ok(cmd_id, serde_json::json!({}), "remove ok"),
             Err(e) => err(cmd_id, "remove failed", e),
         },
@@ -179,8 +186,12 @@ where
             }
         }
         Command::FetchLogs { site_id, lines } => {
-            match rt.logs_inner(site_id, (*lines).clamp(1, 5000)).await {
-                Ok(lines) => ok(cmd_id, serde_json::json!({"lines": lines}), "fetch_logs ok"),
+            match rt.logs_inner(site_id, None, (*lines).clamp(1, 5000)).await {
+                Ok(stream) => ok(
+                    cmd_id,
+                    serde_json::json!({"lines": stream.lines, "cursor": stream.next}),
+                    "fetch_logs ok",
+                ),
                 Err(e) => err(cmd_id, "fetch_logs failed", e),
             }
         }
@@ -192,7 +203,7 @@ where
                         .sites
                         .iter()
                         .map(|(id, e)| {
-                            let unit = unit_name(id);
+                            let unit = unit_name(&setu_common::short_id(id).to_lowercase());
                             serde_json::json!({
                                 "site_id": id,
                                 "unit": unit,

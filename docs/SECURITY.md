@@ -30,13 +30,14 @@ masks secret values.
 Each site runs as its own user with `ProtectSystem=strict`,
 `NoNewPrivileges=yes`, `PrivateTmp=yes`, memory and CPU limits from
 the plan; the agent never runs app code as `setu`. The agent's only
-root path is the pinned helper (`setu helper …` + trailing ` *`,
-since sudo matches argv-exactly and per-site units vary per call):
-verbs, units, paths and usernames are allowlisted inside the helper
-itself (unit-tested); Postgres admin is confined to
-`psql`/`pg_dump`/`pg_restore` as the `postgres` user. No shells, no
-editors, no package managers. `scripts/check-sudoers.sh` asserts the
-asset matches the golden file and `visudo -cf` accepts it.
+root path is `sudo -n /opt/setu/setu helper <verb> --site <short>`:
+typed JSON on stdin, no path, mode or owner across sudo, every path
+derived from the validated short id and opened `O_NOFOLLOW`, archives
+refused if they hold links, devices, `..`, absolute names or special
+mode bits. `--root` exists only in test builds and is refused under
+sudo. Postgres admin is confined to `psql`/`pg_dump`/`pg_restore` as
+the `postgres` user. `scripts/check-sudoers.sh` asserts the three-line
+asset and runs `visudo -cf`.
 
 ## Audit and limits
 

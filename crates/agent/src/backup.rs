@@ -1,180 +1,145 @@
-//! Backup and restore of one site: `pg_dump -Fc` plus a tar of the
-//! manifest's backup dirs, into `<backups_root>/<site>/<ts>/`.
+//! Backup and restore of one site into
+//! `/var/lib/setu/backups/<short>/<name>/{db.dump,dirs.tar.zst}`.
 //!
-//! Layout: `<dest>/db.dump` (custom format) + `<dest>/files.tar.gz`
-//! (relative paths under the site data dir). Restore is the inverse:
-//! stop (caller), `pg_restore`, extract over the data dir, start (caller).
+//! The agent writes and reads the archive itself; the helper streams the
+//! data dirs (`backup` on stdout, `restore` on stdin). Until WS5/WS6 move
+//! to `backup_id`, `<name>` is the last component of the control plane's
+//! `dest`/`src` path (validated); the rest of that path is ignored, so
+//! the control plane cannot steer where anything is written.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use setu_proto::SiteSpec;
 
+use crate::helper_client::Helper;
+use crate::paths::check_short;
 use crate::postgres::PostgresAdmin;
+use crate::runtime::NativeRuntime;
 
-/// Take a backup into `dest` (created as needed).
-///
-/// The leaf dir ends `0770`: the agent (owner) manages it while
-/// `pg_dump` (group `postgres`, inherited via the setgid backups root
-/// created by `install`) writes inside. Mode-only — no privilege needed.
-/// Other site users are blocked at the leaf (`o---`).
-pub async fn backup_site<P: PostgresAdmin>(
-    pg: &P,
+/// Data-dir archive name inside a backup dir.
+pub const DIRS_ARCHIVE: &str = "dirs.tar.zst";
+/// Database dump name inside a backup dir.
+pub const DB_DUMP: &str = "db.dump";
+
+/// `[A-Za-z0-9._-]{1,64}`, not `.`/`..`: the backup's directory name.
+pub fn backup_name(p: &Path) -> anyhow::Result<String> {
+    let name = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let ok = !name.is_empty()
+        && name.len() <= 64
+        && name != "."
+        && name != ".."
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
+    if ok {
+        Ok(name)
+    } else {
+        anyhow::bail!("invalid backup name")
+    }
+}
+
+/// `<backups_root>/<short>/<name>`.
+pub fn backup_dir(backups_root: &Path, short: &str, location: &Path) -> anyhow::Result<PathBuf> {
+    check_short(short)?;
+    Ok(backups_root.join(short).join(backup_name(location)?))
+}
+
+/// Distinct first components of a tar.zst's entries (validated dirs).
+pub fn top_level_dirs(archive: &[u8]) -> anyhow::Result<Vec<String>> {
+    let dec = zstd::stream::read::Decoder::new(archive)?;
+    let mut ar = tar::Archive::new(dec);
+    let mut dirs: Vec<String> = Vec::new();
+    for entry in ar.entries()? {
+        let entry = entry?;
+        let path = entry.path()?;
+        let Some(first) = path
+            .components()
+            .find(|c| !matches!(c, std::path::Component::CurDir))
+        else {
+            continue;
+        };
+        let name = first.as_os_str().to_string_lossy().into_owned();
+        if !setu_common::validate::dir(&name) {
+            anyhow::bail!("backup archive holds an invalid dir name");
+        }
+        if !dirs.contains(&name) {
+            dirs.push(name);
+        }
+    }
+    Ok(dirs)
+}
+
+/// Take a backup: `pg_dump` into `db.dump`, helper `backup` into
+/// `dirs.tar.zst`. Returns the backup dir.
+pub async fn backup_site<H: Helper, P: PostgresAdmin, C>(
+    rt: &NativeRuntime<H, P, C>,
     site: &SiteSpec,
     db: &str,
     dirs: &[String],
     dest: &Path,
-) -> anyhow::Result<()> {
-    std::fs::create_dir_all(dest)
-        .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", dest.display()))?;
-    #[cfg(unix)]
+) -> anyhow::Result<PathBuf> {
+    let short = &site.short_id;
+    let dir = backup_dir(&rt.config().backups_root, short, dest)?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", dir.display()))?;
+    // The leaf is 0770: `pg_dump` (group postgres, inherited from the
+    // setgid backups root) writes inside; other site users cannot.
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o770))
-            .map_err(|e| anyhow::anyhow!("cannot chmod {}: {e}", dest.display()))?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o770))
+            .map_err(|e| anyhow::anyhow!("cannot chmod {}: {e}", dir.display()))?;
     }
-    pg.dump(db, &dest.join("db.dump")).await?;
-    archive_dirs(&site.data_dir, dirs, &dest.join("files.tar.gz"))?;
-    Ok(())
+    rt.postgres().dump(db, &dir.join(DB_DUMP)).await?;
+    let archive = rt.backup_dirs(short, dirs).await?;
+    crate::config::atomic_write(&dir.join(DIRS_ARCHIVE), &archive)
+        .map_err(|e| anyhow::anyhow!("cannot write {DIRS_ARCHIVE}: {e}"))?;
+    Ok(dir)
 }
 
-/// Restore a backup from `src` (must hold `db.dump` + `files.tar.gz`).
-pub async fn restore_site<P: PostgresAdmin>(
-    pg: &P,
+/// Restore a backup (the caller stopped the site): `pg_restore` from
+/// `db.dump`, then helper `restore` of the dirs in `dirs.tar.zst`.
+pub async fn restore_site<H: Helper, P: PostgresAdmin, C>(
+    rt: &NativeRuntime<H, P, C>,
     site: &SiteSpec,
     db: &str,
     src: &Path,
 ) -> anyhow::Result<()> {
-    let dump = src.join("db.dump");
+    let short = &site.short_id;
+    let dir = backup_dir(&rt.config().backups_root, short, src)?;
+    let dump = dir.join(DB_DUMP);
     if !dump.is_file() {
-        anyhow::bail!("backup {} has no db.dump", src.display());
+        anyhow::bail!("backup has no {DB_DUMP}");
     }
-    pg.restore(db, &dump).await?;
-    let files = src.join("files.tar.gz");
-    if files.is_file() {
-        extract_archive(&files, &site.data_dir)?;
-    }
-    Ok(())
-}
-
-fn archive_dirs(data_dir: &Path, dirs: &[String], dest: &Path) -> anyhow::Result<()> {
-    let file = std::fs::File::create(dest)
-        .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", dest.display()))?;
-    let gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
-    let mut builder = tar::Builder::new(gz);
-    for dir in dirs {
-        // Skip missing dirs (e.g. never-created optional media): the dump
-        // is still a valid backup; the log names what was archived.
-        let full = data_dir.join(dir);
-        if full.is_dir() {
-            builder
-                .append_dir_all(dir, &full)
-                .map_err(|e| anyhow::anyhow!("cannot archive {}: {e}", full.display()))?;
+    rt.postgres().restore(db, &dump).await?;
+    let archive_path = dir.join(DIRS_ARCHIVE);
+    if archive_path.is_file() {
+        let archive = std::fs::read(&archive_path)
+            .map_err(|e| anyhow::anyhow!("cannot read {DIRS_ARCHIVE}: {e}"))?;
+        let dirs = top_level_dirs(&archive)?;
+        if !dirs.is_empty() {
+            rt.restore_dirs(short, &dirs, archive).await?;
         }
     }
-    let gz = builder
-        .into_inner()
-        .map_err(|e| anyhow::anyhow!("cannot finish {}: {e}", dest.display()))?;
-    gz.finish()
-        .map_err(|e| anyhow::anyhow!("cannot finish {}: {e}", dest.display()))?;
-    Ok(())
-}
-
-fn extract_archive(archive: &Path, data_dir: &Path) -> anyhow::Result<()> {
-    std::fs::create_dir_all(data_dir)
-        .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", data_dir.display()))?;
-    let file = std::fs::File::open(archive)
-        .map_err(|e| anyhow::anyhow!("cannot open {}: {e}", archive.display()))?;
-    let gz = flate2::read::GzDecoder::new(file);
-    let mut ar = tar::Archive::new(gz);
-    ar.unpack(data_dir)
-        .map_err(|e| anyhow::anyhow!("cannot extract {}: {e}", archive.display()))?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::postgres::FakePostgres;
 
-    #[tokio::test]
-    async fn backup_then_restore_round_trips() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let site_dir = dir.path().join("sites").join("s1");
-        let data = site_dir.join("data");
-        std::fs::create_dir_all(data.join("media")).expect("mkdir");
-        std::fs::write(data.join("media").join("a.txt"), b"hello").expect("write");
-        let site = SiteSpec {
-            site_id: "s1".to_string(),
-            short_id: "s1".to_string(),
-            user: "setu-site-s1".to_string(),
-            data_dir: data.clone(),
-            run_dir: site_dir.join("run"),
-            port: 20001,
-            exec: site_dir.join("bin").join("current").join("app"),
-            args: vec![],
-            env_file: site_dir.join("env"),
-            limits: setu_proto::Limits {
-                memory_mb: 512,
-                cpu_percent: 100,
-                disk_mb: 5120,
-            },
-            health_path: "/healthz".to_string(),
-            binary: None,
-        };
-        let pg = FakePostgres::new();
-        let dest = dir.path().join("backups").join("s1").join("ts");
-        backup_site(&pg, &site, "site_s1", &["media".to_string()], &dest)
-            .await
-            .expect("backup");
-        assert!(dest.join("db.dump").is_file());
-        assert!(dest.join("files.tar.gz").is_file());
-        // The leaf must admit the postgres group writer (real `pg_dump`
-        // runs as the postgres user; the fake writes as us).
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(&dest).expect("stat").permissions().mode() & 0o777,
-                0o770,
-                "backup leaf must be 0770"
-            );
-        }
-
-        // Delete the data, restore, expect it back.
-        std::fs::remove_dir_all(&data).expect("rm data");
-        restore_site(&pg, &site, "site_s1", &dest)
-            .await
-            .expect("restore");
+    #[test]
+    fn backup_names_are_one_safe_component() {
         assert_eq!(
-            std::fs::read(data.join("media").join("a.txt")).expect("read"),
-            b"hello"
+            backup_name(Path::new("/var/lib/setu/backups/x/manual-1700000000")).expect("ok"),
+            "manual-1700000000"
         );
-    }
-
-    #[tokio::test]
-    async fn restore_without_dump_fails() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let site = SiteSpec {
-            site_id: "s1".to_string(),
-            short_id: "s1".to_string(),
-            user: "setu-site-s1".to_string(),
-            data_dir: dir.path().join("data"),
-            run_dir: dir.path().join("run"),
-            port: 20001,
-            exec: dir.path().join("app"),
-            args: vec![],
-            env_file: dir.path().join("env"),
-            limits: setu_proto::Limits {
-                memory_mb: 512,
-                cpu_percent: 100,
-                disk_mb: 5120,
-            },
-            health_path: "/healthz".to_string(),
-            binary: None,
-        };
-        let pg = FakePostgres::new();
-        restore_site(&pg, &site, "site_s1", dir.path())
-            .await
-            .expect_err("missing dump must fail");
+        for bad in ["/", "..", "/a/..", "/a/b c", "/a/b\nc"] {
+            backup_name(Path::new(bad)).expect_err(bad);
+        }
+        backup_dir(Path::new("/b"), "../evil0", Path::new("/x/y")).expect_err("short");
     }
 }

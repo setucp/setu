@@ -41,6 +41,8 @@ impl PsqlCli {
 
     async fn psql(&self, sql: &str) -> anyhow::Result<String> {
         let out = tokio::process::Command::new("sudo")
+            // `-n`: never prompt (a missing rule fails, never hangs).
+            .arg("-n")
             .arg("-u")
             .arg("postgres")
             .arg("psql")
@@ -60,6 +62,8 @@ impl PsqlCli {
 
     async fn run_as_postgres(&self, prog: &str, args: &[&str]) -> anyhow::Result<()> {
         let out = tokio::process::Command::new("sudo")
+            // `-n`: never prompt (a missing rule fails, never hangs).
+            .arg("-n")
             .arg("-u")
             .arg("postgres")
             .arg(prog)

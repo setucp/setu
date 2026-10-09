@@ -1,16 +1,12 @@
 //! Agent command loop: long-poll the control plane, handle commands,
 //! post results, heartbeat every 15 s.
 //!
-//! Metrics sources (no new deps): `/proc/loadavg` (load1),
-//! `/proc/meminfo` (`MemAvailable`, fallback `MemFree`), per-unit cgroup
-//! files under `/sys/fs/cgroup/system.slice/setu-site@<id>.service/`
-//! (`memory.current`, `cpu.stat`), per-site disk via `du -sb` cached for
-//! 10 minutes. Host disk-free comes from `df -m` (a subprocess) rather
-//! than a `statvfs` binding — Decision: avoids adding `libc`/`nix` for one
-//! syscall; `df` output parsing isTotal-covered by a unit test.
+//! Metrics sources: `/proc/loadavg` (load1), `/proc/meminfo`
+//! (`MemAvailable`, fallback `MemFree`), per-site unit state, cgroup
+//! (from `ControlGroup`) and `data_bytes` through the helper's
+//! `unit show` (see `metrics`). Host disk-free comes from `df -m`.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use setu_proto::{CommandEnvelope, CommandResult, Heartbeat, SiteMetric, UnitState};
@@ -18,18 +14,18 @@ use setu_proto::{CommandEnvelope, CommandResult, Heartbeat, SiteMetric, UnitStat
 use crate::caddy::CaddyAdmin;
 use crate::config::AgentConfig;
 use crate::dispatch::handle;
+use crate::helper_client::{Helper, SudoHelper};
 use crate::postgres::PsqlCli;
 use crate::runtime::NativeRuntime;
 use crate::state::StateFile;
-use crate::systemd::{unit_name, SystemctlCli, Systemd};
 
 /// Production runtime wiring.
-pub type ProdRuntime = NativeRuntime<SystemctlCli, PsqlCli, CaddyAdmin>;
+pub type ProdRuntime = NativeRuntime<SudoHelper, PsqlCli, CaddyAdmin>;
 
 /// Build the production runtime from config.
 pub fn prod_runtime(config: &AgentConfig) -> ProdRuntime {
     NativeRuntime::new(
-        SystemctlCli::new(config.unit_dir.clone()),
+        SudoHelper::new(),
         PsqlCli::new(),
         CaddyAdmin::new(config.caddy_admin.clone()),
         config.clone(),
@@ -110,82 +106,11 @@ fn parse_df_avail(text: &str) -> u64 {
         .unwrap_or(0)
 }
 
-/// CPU seconds for a unit from `cpu.stat` (`usage_usec`), if present.
-pub fn read_cpu_seconds(cgroup: &Path) -> Option<f64> {
-    let text = std::fs::read_to_string(cgroup.join("cpu.stat")).ok()?;
-    for line in text.lines() {
-        if let Some(v) = line.strip_prefix("usage_usec") {
-            let usec: u64 = v.trim().parse().ok()?;
-            return Some(usec as f64 / 1_000_000.0);
-        }
-    }
-    None
-}
-
-/// Current memory bytes for a unit from `memory.current`, if present.
-pub fn read_memory_bytes(cgroup: &Path) -> Option<u64> {
-    std::fs::read_to_string(cgroup.join("memory.current"))
-        .ok()?
-        .trim()
-        .parse::<u64>()
-        .ok()
-}
-
-/// cgroup dir for a site unit:
-/// `/sys/fs/cgroup/system.slice/setu-site@<id>.service`.
-pub fn unit_cgroup_dir(site_id: &str) -> PathBuf {
-    PathBuf::from("/sys/fs/cgroup/system.slice").join(format!("{}.service", unit_name(site_id)))
-}
-
-/// Disk usage cache: `du -sb` per site, refreshed at most every 10 min.
-#[derive(Debug, Default)]
-pub struct DiskCache {
-    entries: HashMap<String, (u64, Instant)>,
-}
-
-impl DiskCache {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub async fn disk_bytes(&mut self, site_id: &str, data_dir: &Path) -> u64 {
-        if let Some((bytes, at)) = self.entries.get(site_id) {
-            if at.elapsed() < Duration::from_secs(600) {
-                return *bytes;
-            }
-        }
-        let bytes = du_bytes(data_dir).await.unwrap_or(0);
-        self.entries
-            .insert(site_id.to_string(), (bytes, Instant::now()));
-        bytes
-    }
-}
-
-async fn du_bytes(path: &Path) -> Option<u64> {
-    let out = tokio::process::Command::new("du")
-        .arg("-sb")
-        .arg(path)
-        .output()
-        .await
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .next()?
-        .parse::<u64>()
-        .ok()
-}
-
-/// Collect one heartbeat for `rt`: unit states from systemd, metrics from
-/// cgroups + cached `du`.
-pub async fn collect_heartbeat<S, P, C>(
-    rt: &NativeRuntime<S, P, C>,
-    disk_cache: &mut DiskCache,
-) -> Heartbeat
+/// Collect one heartbeat for `rt`: unit state and metrics per site from
+/// the helper's `unit show` plus the unit's cgroup files.
+pub async fn collect_heartbeat<H, P, C>(rt: &NativeRuntime<H, P, C>) -> Heartbeat
 where
-    S: Systemd + Send + Sync,
+    H: Helper,
     P: crate::postgres::PostgresAdmin + Send + Sync,
     C: crate::caddy::Caddy + Send + Sync,
 {
@@ -193,25 +118,26 @@ where
     let mut units = Vec::new();
     let mut metrics = Vec::new();
     for site_id in state.sites.keys() {
-        let unit = unit_name(site_id);
-        let (active, sub, pid) = match rt.systemd().show(&unit).await {
-            Ok(p) => (p.active, p.sub, p.pid),
-            Err(_) => (false, "unknown".to_string(), None),
+        let status = match rt.status_inner(site_id).await {
+            Ok(st) => st,
+            Err(_) => crate::runtime::RuntimeStatus {
+                sub: "unknown".to_string(),
+                ..Default::default()
+            },
         };
+        let m = crate::metrics::read_site_metric(&status);
         units.push(UnitState {
             site_id: site_id.clone(),
-            active,
-            sub,
-            pid,
+            active: status.active,
+            sub: status.sub,
+            pid: status.pid,
         });
-        let cg = unit_cgroup_dir(site_id);
-        let data_dir = rt.config().sites_root.join(site_id).join("data");
         metrics.push(SiteMetric {
             site_id: site_id.clone(),
             at: chrono::Utc::now(),
-            cpu_seconds: read_cpu_seconds(&cg).unwrap_or(0.0),
-            memory_bytes: read_memory_bytes(&cg).unwrap_or(0),
-            disk_bytes: disk_cache.disk_bytes(site_id, &data_dir).await,
+            cpu_seconds: m.cpu_seconds,
+            memory_bytes: m.memory_bytes,
+            disk_bytes: m.disk_bytes,
         });
     }
     Heartbeat {
@@ -229,8 +155,7 @@ where
 pub async fn run_forever(config: AgentConfig) -> anyhow::Result<()> {
     let rt = prod_runtime(&config);
     // Reconcile: report what we know; the control plane replays from there.
-    let mut disk_cache = DiskCache::new();
-    let hb = collect_heartbeat(&rt, &mut disk_cache).await;
+    let hb = collect_heartbeat(&rt).await;
     tracing::info!(
         units = hb.units.len(),
         load1 = hb.load1,
@@ -246,7 +171,7 @@ pub async fn run_forever(config: AgentConfig) -> anyhow::Result<()> {
     loop {
         // Heartbeat every `heartbeat_secs`, piggybacked on the loop.
         if last_heartbeat.elapsed() >= Duration::from_secs(config.heartbeat_secs.max(5)) {
-            let hb = collect_heartbeat(&rt, &mut disk_cache).await;
+            let hb = collect_heartbeat(&rt).await;
             if let Err(e) = post_heartbeat(&client, &base, &config, &hb).await {
                 tracing::warn!(error = %e, "heartbeat failed");
             } else {
@@ -366,18 +291,5 @@ mod tests {
     fn df_output_parses_last_number() {
         assert_eq!(parse_df_avail("Avail\n  123456\n"), 123456);
         assert_eq!(parse_df_avail("garbage"), 0);
-    }
-
-    #[test]
-    fn cgroup_files_parse() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            dir.path().join("cpu.stat"),
-            "usage_usec 2500000\nuser_usec 1\n",
-        )
-        .expect("write");
-        std::fs::write(dir.path().join("memory.current"), "134217728\n").expect("write");
-        assert_eq!(read_cpu_seconds(dir.path()), Some(2.5));
-        assert_eq!(read_memory_bytes(dir.path()), Some(134217728));
     }
 }

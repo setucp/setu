@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 /// Agent configuration. `server_token` is redacted in `Debug`.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct AgentConfig {
     /// Control-plane base URL, e.g. `https://panel.example.com`.
     pub control_plane_url: String,
@@ -18,8 +19,8 @@ pub struct AgentConfig {
     pub state_path: PathBuf,
     /// Parent dir of per-site dirs (`<sites_root>/<site_id>/…`).
     pub sites_root: PathBuf,
-    /// systemd unit dir (`/etc/systemd/system` in production).
-    pub unit_dir: PathBuf,
+    /// Verified downloads (`<sha256>.tar.gz`), read by the helper.
+    pub downloads_dir: PathBuf,
     /// Backup root (`<backups_root>/<site_id>/<ts>/…`).
     pub backups_root: PathBuf,
     /// Caddy admin API base URL.
@@ -31,30 +32,27 @@ pub struct AgentConfig {
     /// Reconnect backoff bounds (seconds) for the command loop.
     pub backoff_min_secs: u64,
     pub backoff_max_secs: u64,
-    /// chown site files to the site user (off in tests: users don't exist).
-    pub chown_files: bool,
-    /// Write privileged files through `sudo <exe> helper write-file`
-    /// (off in tests: no sudoers on the scratch host).
-    pub use_sudo_helper: bool,
+    /// Allow plain-http downloads to non-loopback hosts (`--insecure`).
+    pub insecure: bool,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
+        let paths = crate::paths::Paths::default();
         Self {
             control_plane_url: "http://127.0.0.1:7000".to_string(),
             server_token: String::new(),
             server_id: String::new(),
-            state_path: PathBuf::from("/var/lib/setu/state.json"),
-            sites_root: PathBuf::from("/srv/setu/sites"),
-            unit_dir: PathBuf::from("/etc/systemd/system"),
-            backups_root: PathBuf::from("/var/lib/setu/backups"),
+            state_path: paths.state(),
+            sites_root: paths.sites(),
+            downloads_dir: paths.downloads(),
+            backups_root: paths.backups(),
             caddy_admin: "http://127.0.0.1:2019".to_string(),
             poll_wait_secs: 30,
             heartbeat_secs: 15,
             backoff_min_secs: 1,
             backoff_max_secs: 30,
-            chown_files: true,
-            use_sudo_helper: true,
+            insecure: false,
         }
     }
 }
@@ -67,15 +65,14 @@ impl std::fmt::Debug for AgentConfig {
             .field("server_id", &self.server_id)
             .field("state_path", &self.state_path)
             .field("sites_root", &self.sites_root)
-            .field("unit_dir", &self.unit_dir)
+            .field("downloads_dir", &self.downloads_dir)
             .field("backups_root", &self.backups_root)
             .field("caddy_admin", &self.caddy_admin)
             .field("poll_wait_secs", &self.poll_wait_secs)
             .field("heartbeat_secs", &self.heartbeat_secs)
             .field("backoff_min_secs", &self.backoff_min_secs)
             .field("backoff_max_secs", &self.backoff_max_secs)
-            .field("chown_files", &self.chown_files)
-            .field("use_sudo_helper", &self.use_sudo_helper)
+            .field("insecure", &self.insecure)
             .finish()
     }
 }

@@ -1,18 +1,3 @@
-# Setu agent sudo rules (golden file).
-# Managed by `setu agent install`; verified by scripts/check-sudoers.sh
-# and the `install::tests::sudoers_asset_has_required_entries` unit test.
-#
-# Root access goes ONLY through the pinned helper (`setu helper …`),
-# which allowlists every verb, unit, path and username itself (see
-# crates/agent/src/helper.rs, whose gates are unit-tested). A bare
-# `… helper` entry would match ONLY argv-exactly (sudo compares the full
-# command line), so the rule carries a trailing ` *` to permit helper
-# subcommands — per-site units like `setu-site@<id>` can never be pinned
-# here because they vary per call, which is exactly why the helper
-# validates them instead.
-# Postgres admin is confined to the postgres target user and the three
-# binaries the agent needs. No shells, no editors, no package managers.
+Defaults:setu !requiretty, env_reset
 setu ALL=(root) NOPASSWD: /opt/setu/setu helper *
-setu ALL=(postgres) NOPASSWD: /usr/bin/psql
-setu ALL=(postgres) NOPASSWD: /usr/bin/pg_dump
-setu ALL=(postgres) NOPASSWD: /usr/bin/pg_restore
+setu ALL=(postgres) NOPASSWD: /usr/bin/psql, /usr/bin/pg_dump, /usr/bin/pg_restore

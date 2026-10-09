@@ -1,196 +1,227 @@
-//! Binary download: stream to a temp file, verify sha256, extract the
-//! tar.gz, chmod the exec bit, then atomically switch `bin/current`.
+//! Verified downloads into `/var/lib/setu/downloads/<sha256>.tar.gz`.
 //!
-//! Decision: the `tar` + `flate2` crates instead of shelling out to the
-//! system `tar` (no external dependency, staging dir keeps a failed
-//! extract from polluting the version dir).
+//! The agent (unprivileged) streams the archive to `<sha256>.part`,
+//! hashes while writing, and renames only on a match; a mismatch keeps
+//! nothing. The helper then re-opens the file `O_NOFOLLOW`, re-hashes it
+//! and extracts it as root (`install`).
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-/// Errors from download/install/switch.
+/// Errors from a verified download.
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
     #[error("download {0} failed: {1}")]
     Fetch(String, String),
     #[error("checksum mismatch for {0}: expected {1}, got {2}")]
     Checksum(String, String, String),
-    #[error("invalid sha256 {0}: must be 64 hex chars")]
-    BadSha(String),
-    #[error("extract {0} failed: {1}")]
-    Extract(String, String),
-    #[error("install I/O for {0}: {1}")]
+    #[error("invalid sha256: must be 64 hex chars")]
+    BadSha,
+    #[error("refusing {0}: plain http only to loopback (or with --insecure)")]
+    PlainHttp(String),
+    #[error("invalid url {0}")]
+    BadUrl(String),
+    #[error("download I/O for {0}: {1}")]
     Io(String, String),
 }
 
-/// Version dir for a site binary (`<sites_root>/<id>/bin/<version>`).
-pub fn version_dir(sites_root: &Path, site_id: &str, version: &str) -> PathBuf {
-    sites_root.join(site_id).join("bin").join(version)
+/// What a download may use. `insecure` (agent `--insecure`) allows
+/// plain http to any host; https is always allowed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DownloadPolicy {
+    pub insecure: bool,
 }
 
-/// `bin` dir holding versions plus the `current` symlink.
-pub fn bin_dir(sites_root: &Path, site_id: &str) -> PathBuf {
-    sites_root.join(site_id).join("bin")
-}
-
-/// Download `url`, verify `sha256_hex`, extract into
-/// `bin/<version>/`, make `exec` executable. Idempotent: when
-/// `bin/<version>/<exec>` already exists the download is skipped.
-pub async fn fetch_and_install(
-    url: &str,
-    sha256_hex: &str,
-    exec: &str,
-    sites_root: &Path,
-    site_id: &str,
-    version: &str,
-) -> Result<PathBuf, DownloadError> {
-    if sha256_hex.len() != 64 || hex::decode(sha256_hex).is_err() {
-        return Err(DownloadError::BadSha(sha256_hex.to_string()));
+/// Scheme/host check, before any network I/O.
+pub fn check_url(url: &str, policy: &DownloadPolicy) -> Result<(), DownloadError> {
+    let parsed = url::Url::parse(url).map_err(|_| DownloadError::BadUrl(url.to_string()))?;
+    match parsed.scheme() {
+        "https" => Ok(()),
+        "http" => {
+            let loopback = match parsed.host() {
+                Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+                None => false,
+            };
+            if loopback || policy.insecure {
+                Ok(())
+            } else {
+                Err(DownloadError::PlainHttp(url.to_string()))
+            }
+        }
+        _ => Err(DownloadError::BadUrl(url.to_string())),
     }
-    let dest = version_dir(sites_root, site_id, version);
-    if dest.join(exec).is_file() {
+}
+
+fn normalise_sha(sha256: &str) -> Result<String, DownloadError> {
+    let sha = sha256.to_ascii_lowercase();
+    if sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(sha)
+    } else {
+        Err(DownloadError::BadSha)
+    }
+}
+
+fn sha_of_file(path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut h = Sha256::new();
+    std::io::copy(&mut f, &mut h).ok()?;
+    Some(hex::encode(h.finalize()))
+}
+
+/// Download `url` into `<downloads_dir>/<sha256>.tar.gz`, verified.
+/// Idempotent: an existing file with the right hash is reused.
+pub async fn fetch_verified(
+    url: &str,
+    sha256: &str,
+    downloads_dir: &Path,
+    policy: &DownloadPolicy,
+) -> Result<PathBuf, DownloadError> {
+    let sha = normalise_sha(sha256)?;
+    check_url(url, policy)?;
+    let io =
+        |p: &Path, e: std::io::Error| DownloadError::Io(p.display().to_string(), e.to_string());
+    std::fs::create_dir_all(downloads_dir).map_err(|e| io(downloads_dir, e))?;
+    let dest = downloads_dir.join(format!("{sha}.tar.gz"));
+    if dest.is_file() && sha_of_file(&dest).as_deref() == Some(sha.as_str()) {
         return Ok(dest);
     }
-    let bin = bin_dir(sites_root, site_id);
-    std::fs::create_dir_all(&bin)
-        .map_err(|e| DownloadError::Io(bin.display().to_string(), e.to_string()))?;
-
-    let tmp = bin.join(format!(".tmp-{version}-{}", std::process::id()));
-    download_to(url, sha256_hex, &tmp).await?;
-
-    // Extract into a staging dir, then rename: a failed extract never
-    // leaves a half-written version dir behind.
-    let stage = bin.join(format!(".stage-{version}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&stage);
-    std::fs::create_dir_all(&stage)
-        .map_err(|e| DownloadError::Io(stage.display().to_string(), e.to_string()))?;
-    if let Err(e) = extract_tar_gz(&tmp, &stage) {
-        let _ = std::fs::remove_dir_all(&stage);
-        let _ = std::fs::remove_file(&tmp);
+    let part = downloads_dir.join(format!("{sha}.part"));
+    let result = stream_to(url, &sha, &part).await;
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&part);
         return Err(e);
     }
-    let _ = std::fs::remove_file(&tmp);
-
-    let exe = stage.join(exec);
-    if !exe.is_file() {
-        let _ = std::fs::remove_dir_all(&stage);
-        return Err(DownloadError::Extract(
-            url.to_string(),
-            format!("archive has no top-level {exec}"),
-        ));
-    }
-    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755))
-        .map_err(|e| DownloadError::Io(exe.display().to_string(), e.to_string()))?;
-
-    let _ = std::fs::remove_dir_all(&dest);
-    std::fs::rename(&stage, &dest)
-        .map_err(|e| DownloadError::Io(dest.display().to_string(), e.to_string()))?;
+    std::fs::rename(&part, &dest).map_err(|e| {
+        let _ = std::fs::remove_file(&part);
+        io(&dest, e)
+    })?;
     Ok(dest)
 }
 
-async fn download_to(url: &str, sha256_hex: &str, tmp: &Path) -> Result<(), DownloadError> {
+async fn stream_to(url: &str, sha: &str, part: &Path) -> Result<(), DownloadError> {
+    use futures::StreamExt;
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncWriteExt;
+    let fetch = |e: String| DownloadError::Fetch(url.to_string(), e);
     let resp = reqwest::Client::new()
         .get(url)
         .send()
         .await
-        .map_err(|e| DownloadError::Fetch(url.to_string(), e.to_string()))?;
+        .map_err(|e| fetch(e.to_string()))?;
     if !resp.status().is_success() {
-        return Err(DownloadError::Fetch(
-            url.to_string(),
-            format!("HTTP {}", resp.status()),
-        ));
+        return Err(fetch(format!("HTTP {}", resp.status())));
     }
-    use sha2::{Digest, Sha256};
-    use tokio::io::AsyncWriteExt;
+    let io = |e: std::io::Error| DownloadError::Io(part.display().to_string(), e.to_string());
+    let mut file = tokio::fs::File::create(part).await.map_err(io)?;
     let mut hasher = Sha256::new();
-    let mut file = tokio::fs::File::create(tmp)
-        .await
-        .map_err(|e| DownloadError::Io(tmp.display().to_string(), e.to_string()))?;
     let mut stream = resp.bytes_stream();
-    use futures::StreamExt;
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| DownloadError::Fetch(url.to_string(), e.to_string()))?;
+        let chunk = chunk.map_err(|e| fetch(e.to_string()))?;
         hasher.update(&chunk);
-        file.write_all(&chunk)
-            .await
-            .map_err(|e| DownloadError::Io(tmp.display().to_string(), e.to_string()))?;
+        file.write_all(&chunk).await.map_err(io)?;
     }
-    file.flush()
-        .await
-        .map_err(|e| DownloadError::Io(tmp.display().to_string(), e.to_string()))?;
-    drop(file);
+    file.flush().await.map_err(io)?;
+    file.sync_all().await.map_err(io)?;
     let got = hex::encode(hasher.finalize());
-    if got != sha256_hex.to_lowercase() {
-        let _ = std::fs::remove_file(tmp);
+    if got != sha {
         return Err(DownloadError::Checksum(
             url.to_string(),
-            sha256_hex.to_string(),
+            sha.to_string(),
             got,
         ));
     }
     Ok(())
 }
 
-fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<(), DownloadError> {
-    let file = std::fs::File::open(archive)
-        .map_err(|e| DownloadError::Io(archive.display().to_string(), e.to_string()))?;
-    let gz = flate2::read::GzDecoder::new(file);
-    let mut ar = tar::Archive::new(gz);
-    ar.unpack(dest)
-        .map_err(|e| DownloadError::Extract(archive.display().to_string(), e.to_string()))?;
-    Ok(())
-}
-
-/// Repoint `bin/current` at `version` atomically (symlink + rename).
-/// No-op when it already points there. Fails when the version dir is
-/// missing, so a bad update never stops the running site.
-pub fn switch_current(
-    sites_root: &Path,
-    site_id: &str,
-    version: &str,
-) -> Result<bool, DownloadError> {
-    let bin = bin_dir(sites_root, site_id);
-    let target = bin.join(version);
-    if !target.is_dir() {
-        return Err(DownloadError::Io(
-            target.display().to_string(),
-            "no such version dir".to_string(),
-        ));
-    }
-    let current = bin.join("current");
-    if std::fs::read_link(&current).is_ok_and(|l| l == Path::new(version)) {
-        return Ok(false);
-    }
-    let tmp_link = bin.join(format!(".current-{}-{}", version, std::process::id()));
-    let _ = std::fs::remove_file(&tmp_link);
-    std::os::unix::fs::symlink(version, &tmp_link)
-        .map_err(|e| DownloadError::Io(tmp_link.display().to_string(), e.to_string()))?;
-    std::fs::rename(&tmp_link, &current)
-        .map_err(|e| DownloadError::Io(current.display().to_string(), e.to_string()))?;
-    Ok(true)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn bad_sha_is_rejected_before_any_io() {
+    async fn serve(body: Vec<u8>) -> String {
+        let app = axum::Router::new().route(
+            "/a.tar.gz",
+            axum::routing::get(move || {
+                let b = body.clone();
+                async move { axum::body::Body::from(b) }
+            }),
+        );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = l.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(l, app).await.expect("serve") });
+        format!("http://{addr}/a.tar.gz")
+    }
+
+    fn sha(b: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(b))
+    }
+
+    #[tokio::test]
+    async fn fetch_verified_rejects_wrong_sha_and_keeps_nothing() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("rt");
-        let err = rt
-            .block_on(fetch_and_install(
-                "http://127.0.0.1:9/nope.tar.gz",
-                "zzz",
-                "app",
-                dir.path(),
-                "s",
-                "0.1.0",
-            ))
+        let url = serve(b"archive bytes".to_vec()).await;
+        let wrong = sha(b"something else");
+        let err = fetch_verified(&url, &wrong, dir.path(), &DownloadPolicy::default())
+            .await
+            .expect_err("mismatch");
+        assert!(matches!(err, DownloadError::Checksum(..)), "{err:?}");
+        let left: Vec<_> = std::fs::read_dir(dir.path()).expect("ls").collect();
+        assert!(left.is_empty(), "nothing kept: {left:?}");
+        fetch_verified(&url, "zz", dir.path(), &DownloadPolicy::default())
+            .await
             .expect_err("bad sha");
-        assert!(matches!(err, DownloadError::BadSha(_)), "got {err:?}");
+
+        let right = sha(b"archive bytes");
+        let path = fetch_verified(
+            &url,
+            &right.to_uppercase(),
+            dir.path(),
+            &DownloadPolicy::default(),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(path, dir.path().join(format!("{right}.tar.gz")));
+        assert_eq!(std::fs::read(&path).expect("read"), b"archive bytes");
+        assert!(!dir.path().join(format!("{right}.part")).exists());
+    }
+
+    #[tokio::test]
+    async fn fetch_verified_allows_plain_http_for_loopback_only() {
+        let strict = DownloadPolicy::default();
+        let insecure = DownloadPolicy { insecure: true };
+        check_url("http://127.0.0.1:8080/a", &strict).expect("v4 loopback");
+        check_url("http://127.9.9.9/a", &strict).expect("v4 loopback range");
+        check_url("http://[::1]:8080/a", &strict).expect("v6 loopback");
+        check_url("http://localhost/a", &strict).expect("localhost");
+        check_url("https://example.com/a", &strict).expect("https");
+        for bad in [
+            "http://example.com/a",
+            "http://10.0.0.1/a",
+            "http://127.0.0.1.evil.com/a",
+        ] {
+            assert!(
+                matches!(check_url(bad, &strict), Err(DownloadError::PlainHttp(_))),
+                "{bad}"
+            );
+            check_url(bad, &insecure).expect("insecure allows");
+        }
+        for bad in ["ftp://example.com/a", "file:///etc/passwd", "not a url"] {
+            assert!(
+                matches!(check_url(bad, &insecure), Err(DownloadError::BadUrl(_))),
+                "{bad}"
+            );
+        }
+        // The policy gates before any I/O: nothing is created.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("dl");
+        let err = fetch_verified("http://192.0.2.1/a", &"a".repeat(64), &target, &strict)
+            .await
+            .expect_err("refused");
+        assert!(matches!(err, DownloadError::PlainHttp(_)));
+        assert!(!target.exists());
     }
 }

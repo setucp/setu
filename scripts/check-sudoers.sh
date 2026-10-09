@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Assert the agent sudoers asset matches the golden rules and parses.
+# Golden check of the agent sudoers asset (spec §4) plus `visudo -cf`.
 #   bash /home/gopal/Desktop/wp/setu-work-1/scripts/check-sudoers.sh
-# The asset is embedded in the agent (`install::SUDOERS_ASSET`), so
-# `install` and this script can never disagree about its contents.
+# The asset is embedded in the agent (`install::SUDOERS_ASSET`) and
+# compared byte for byte in crates/agent/tests/golden.rs as well.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,46 +16,37 @@ fail() {
 
 [[ -f "${ASSET}" ]] || fail "missing ${ASSET}"
 
-# Required sudo surface (spec §4/§7): root only through the pinned
-# helper. A bare `… helper` entry would match argv-exactly (sudo compares
-# the full command line), so the rule carries a trailing ` *` and the
-# helper allowlists verbs/units/paths itself (unit-tested in helper.rs).
-# Postgres admin confined to the postgres user and the three binaries
-# the agent needs.
-required=(
-    "setu ALL=(root) NOPASSWD: /opt/setu/setu helper *"
-    "setu ALL=(postgres) NOPASSWD: /usr/bin/psql"
-    "setu ALL=(postgres) NOPASSWD: /usr/bin/pg_dump"
-    "setu ALL=(postgres) NOPASSWD: /usr/bin/pg_restore"
-)
-for needle in "${required[@]}"; do
-    grep -qF -- "${needle}" "${ASSET}" || fail "asset missing: ${needle}"
+EXPECTED='Defaults:setu !requiretty, env_reset
+setu ALL=(root) NOPASSWD: /opt/setu/setu helper *
+setu ALL=(postgres) NOPASSWD: /usr/bin/psql, /usr/bin/pg_dump, /usr/bin/pg_restore'
+[[ "$(cat "${ASSET}")" == "${EXPECTED}" ]] || fail "asset differs from the spec §4 golden text"
+
+# Prefer classic sudo's visudo (Ubuntu 24.04 ships it). Ubuntu >= 25.10
+# defaults to sudo-rs, whose visudo does not know `requiretty`; the
+# classic one stays installed as visudo.ws there.
+VISUDO=""
+for cand in visudo.ws visudo; do
+    if command -v "${cand}" >/dev/null 2>&1; then
+        VISUDO="$(command -v "${cand}")"
+        break
+    fi
 done
-
-# Exactly one wildcard form is allowed: the helper rule's trailing ` *`
-# (its subcommands vary per call and are validated inside the helper).
-# Anywhere else a wildcard signals an overbroad rule. No shells,
-# editors, package managers, or direct systemctl/journalctl entries
-# (those go through the helper, which validates verb and unit). Comments
-# are stripped before this check so prose cannot trip it.
-CODE_LINES="$(grep -v '^[[:space:]]*#' "${ASSET}" || true)"
-# Scope out exactly the documented exception (the helper rule's trailing
-# ` *`) before banning wildcards, so a second wildcard on that same line
-# is still caught.
-SCOPED="$(printf '%s\n' "${CODE_LINES}" | sed 's|/opt/setu/setu helper \*|HELPER_RULE|' || true)"
-for bad in "*" "/bin/sh" "/bin/bash" "/usr/bin/vim" "ALL=(ALL) NOPASSWD: ALL" "/usr/bin/apt" "systemctl" "journalctl"; do
-    printf '%s\n' "${SCOPED}" | grep -qF -- "${bad}" && fail "asset must not contain: ${bad}"
-done
-
-# Every non-comment line must be a rule for the agent user.
-awk 'NF && $1 !~ /^#/ && $1 != "setu" { print "bad user: " $0; exit 1 }' "${ASSET}" \
-    || fail "all rules must apply to user setu"
-
-test -s "${ASSET}" || fail "asset is empty"
-
-if command -v visudo >/dev/null 2>&1; then
-    visudo -cf "${ASSET}" || fail "visudo -cf rejected the asset"
-    echo "check-sudoers: ok (patterns + visudo -cf)"
-else
-    echo "check-sudoers: ok (patterns; visudo not available, skipped parse check)"
+if [[ -z "${VISUDO}" ]]; then
+    echo "check-sudoers: ok (golden text); SKIPPED visudo -cf: visudo is not installed"
+    exit 0
 fi
+if "${VISUDO}" --version 2>&1 | head -1 | grep -q 'visudo-rs'; then
+    echo "check-sudoers: ok (golden text); SKIPPED visudo -cf: only sudo-rs visudo found (no classic sudo); it rejects \`requiretty\`"
+    exit 0
+fi
+
+# visudo may insist on root ownership and 0440: check a copy with those
+# attributes when we can (root), else the 0440 copy as-is.
+TMP="$(mktemp -d)"
+trap 'rm -rf "${TMP}"' EXIT
+install -m 0440 "${ASSET}" "${TMP}/setu"
+if [[ "$(id -u)" == "0" ]]; then
+    chown root:root "${TMP}/setu"
+fi
+"${VISUDO}" -cf "${TMP}/setu" >/dev/null || fail "visudo -cf rejected the asset"
+echo "check-sudoers: ok (golden text + ${VISUDO} -cf)"

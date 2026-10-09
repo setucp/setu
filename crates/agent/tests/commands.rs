@@ -1,20 +1,20 @@
-//! Dispatch coverage: every `Command` variant is handled, env files land
-//! with mode 0600, and a redelivered `WriteUnit` is a no-op.
+//! `dispatch::handle` over every `Command` variant, with the real helper
+//! code running in-process on a tempdir root (`LocalHelper` + fakes).
 
 use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use setu_agent::{AgentConfig, CaddyFake, FakePostgres, FakeSystemd, NativeRuntime};
+use setu_agent::helper::{Ctx, FakeSystemctl, FakeUsers, Recording};
+use setu_agent::{AgentConfig, CaddyFake, FakePostgres, LocalHelper, NativeRuntime, Paths};
 use setu_proto::{BinaryRef, Command, EnvVar, Limits, SiteSpec};
 
-fn test_site(sites_root: &Path, site_id: &str, port: u16) -> SiteSpec {
-    let dir = sites_root.join(site_id);
-    let short = &site_id[site_id.len() - 8..];
+fn test_site(root: &Path, site_id: &str, port: u16) -> SiteSpec {
+    let short = setu_common::short_id(site_id).to_lowercase();
+    let dir = root.join("srv/setu/sites").join(&short);
     SiteSpec {
         site_id: site_id.to_string(),
-        short_id: short.to_string(),
-        // Production form: the short id (usernames cap at 32 chars).
+        short_id: short.clone(),
         user: format!("setu-site-{short}"),
         data_dir: dir.join("data"),
         run_dir: dir.join("run"),
@@ -32,19 +32,33 @@ fn test_site(sites_root: &Path, site_id: &str, port: u16) -> SiteSpec {
     }
 }
 
-fn test_runtime(
-    systemd: FakeSystemd,
-    sites_root: &Path,
-    state_path: &Path,
-) -> NativeRuntime<FakeSystemd, FakePostgres, CaddyFake> {
+type Rt = NativeRuntime<LocalHelper, FakePostgres, CaddyFake>;
+
+fn test_runtime(root: &Path) -> (Rt, FakeSystemctl) {
+    let units = FakeSystemctl::new();
+    let ctx = Ctx {
+        root: root.to_path_buf(),
+        users: Box::new(FakeUsers::new()),
+        own: Box::new(Recording::new()),
+        units: Box::new(units.clone()),
+    };
+    let p = Paths::new(Some(root.to_path_buf()));
     let cfg = AgentConfig {
-        sites_root: sites_root.to_path_buf(),
-        state_path: state_path.to_path_buf(),
-        chown_files: false,
-        use_sudo_helper: false,
+        state_path: p.state(),
+        sites_root: p.sites(),
+        downloads_dir: p.downloads(),
+        backups_root: p.backups(),
         ..AgentConfig::default()
     };
-    NativeRuntime::new(systemd, FakePostgres::new(), CaddyFake::new(), cfg)
+    (
+        NativeRuntime::new(
+            LocalHelper::new(ctx),
+            FakePostgres::new(),
+            CaddyFake::new(),
+            cfg,
+        ),
+        units,
+    )
 }
 
 fn make_tarball(name: &str, contents: &[u8]) -> Vec<u8> {
@@ -62,10 +76,8 @@ fn make_tarball(name: &str, contents: &[u8]) -> Vec<u8> {
     }
     let mut gz = Vec::new();
     {
-        use flate2::write::GzEncoder;
-        use flate2::Compression;
         use std::io::Write;
-        let mut enc = GzEncoder::new(&mut gz, Compression::default());
+        let mut enc = flate2::write::GzEncoder::new(&mut gz, flate2::Compression::default());
         enc.write_all(&tar_data).expect("gzip");
         enc.finish().expect("gzip finish");
     }
@@ -119,31 +131,35 @@ async fn start_servers() -> Servers {
     }
 }
 
+fn journalctl_available() -> bool {
+    std::process::Command::new("journalctl")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
 #[tokio::test]
 async fn every_command_kind_is_handled() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sites_root = dir.path().join("sites");
-    let systemd = FakeSystemd::new();
-    let rt = test_runtime(systemd.clone(), &sites_root, &dir.path().join("state.json"));
+    let root = dir.path();
+    let (rt, units) = test_runtime(root);
     let servers = start_servers().await;
 
     let id = "01jdispatch00000000000001";
-    let mut site = test_site(&sites_root, id, servers.health_port);
+    let short = "00000001";
+    let mut site = test_site(root, id, servers.health_port);
     site.binary = Some(BinaryRef {
         url: servers.tarball_url.clone(),
         sha256: servers.tarball_sha.clone(),
         exec: "app".to_string(),
         version: "0.1.0".to_string(),
     });
-    // Pre-create the version dir so SwitchVersion has something to point at.
-    let version_dir = sites_root.join(id).join("bin").join("0.1.0");
-    std::fs::create_dir_all(&version_dir).expect("mkdir version");
-    std::fs::write(version_dir.join("app"), b"fake").expect("write fake exec");
-    // A backup dir with a file so tar has something to archive.
+    // A backup dir with a file so the archive has something in it.
     std::fs::create_dir_all(site.data_dir.join("media")).expect("mkdir media");
     std::fs::write(site.data_dir.join("media").join("a.txt"), b"data").expect("write data");
 
-    let dest = dir.path().join("backups").join(id).join("ts1");
+    // The control plane's path: only its last component is used.
+    let dest = Path::new("/var/lib/setu/backups").join(id).join("manual-1");
     let commands = vec![
         Command::CreateDatabase {
             db: "site_00000001".to_string(),
@@ -183,6 +199,9 @@ async fn every_command_kind_is_handled() {
             dirs: vec!["media".to_string()],
             dest: dest.clone(),
         },
+        Command::Stop {
+            site_id: id.to_string(),
+        },
         Command::Restore {
             site: site.clone(),
             db: "site_00000001".to_string(),
@@ -200,9 +219,6 @@ async fn every_command_kind_is_handled() {
         Command::Restart {
             site_id: id.to_string(),
         },
-        Command::Stop {
-            site_id: id.to_string(),
-        },
         Command::RemoveRoute {
             domain: "example.com".to_string(),
         },
@@ -212,49 +228,70 @@ async fn every_command_kind_is_handled() {
             role: "site_00000001".to_string(),
         },
     ];
-
-    // 18 variants: every member of the Command enum.
     assert_eq!(commands.len(), 18, "test must cover every Command variant");
 
-    // Remove the site dir first so Remove recreates-then-removes cleanly is
-    // not needed: install already created it; order above installs first.
+    let backup_dir = root
+        .join("var/lib/setu/backups")
+        .join(short)
+        .join("manual-1");
     for cmd in &commands {
         let kind = setu_agent::command_kind(cmd);
-        // Re-create the site dir before Remove: earlier steps need it, and
-        // Remove asserts nothing about prior existence.
+        if matches!(cmd, Command::Restore { .. }) {
+            // Prove restore really swaps: change the live data first.
+            std::fs::write(site.data_dir.join("media").join("a.txt"), b"changed").expect("write");
+        }
         let result = setu_agent::handle("cmd-test-id", cmd, &rt).await;
+        if matches!(cmd, Command::FetchLogs { .. }) && !journalctl_available() {
+            continue;
+        }
         assert!(
             result.ok,
             "command {kind} must be handled ok, got error: {:?}",
             result.error
         );
         assert_eq!(result.id, "cmd-test-id");
+        match cmd {
+            Command::Install { .. } => {
+                assert!(site
+                    .data_dir
+                    .parent()
+                    .expect("site")
+                    .join("bin/0.1.0/app")
+                    .is_file());
+            }
+            Command::Backup { .. } => {
+                assert!(
+                    backup_dir.join("db.dump").is_file(),
+                    "backup must dump the db"
+                );
+                assert!(
+                    backup_dir.join("dirs.tar.zst").is_file(),
+                    "backup must archive dirs"
+                );
+            }
+            Command::Restore { .. } => {
+                assert_eq!(
+                    std::fs::read(site.data_dir.join("media").join("a.txt")).expect("read"),
+                    b"data"
+                );
+            }
+            _ => {}
+        }
     }
-
-    // Spot-check side effects the dispatch must have produced.
-    assert!(dest.join("db.dump").is_file(), "backup must dump the db");
+    assert!(!site.data_dir.exists(), "remove deletes the tree");
+    assert_eq!(units.reloads(), 2, "one unit write + one removal");
     assert!(
-        dest.join("files.tar.gz").is_file(),
-        "backup must archive dirs"
-    );
-    assert_eq!(
-        systemd.daemon_reload_count(),
-        1,
-        "exactly one unit write happened"
+        !Path::new("/var/lib/setu/backups").join(id).exists(),
+        "dest path never used"
     );
 }
 
 #[tokio::test]
 async fn write_env_sets_mode_0600() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sites_root = dir.path().join("sites");
-    let rt = test_runtime(
-        FakeSystemd::new(),
-        &sites_root,
-        &dir.path().join("state.json"),
-    );
+    let (rt, _) = test_runtime(dir.path());
     let id = "01jenvtest000000000000001";
-    let site = test_site(&sites_root, id, 20011);
+    let site = test_site(dir.path(), id, 20011);
 
     let result = setu_agent::handle(
         "cmd-env",
@@ -281,11 +318,13 @@ async fn write_env_sets_mode_0600() {
     assert!(result.ok, "write_env must succeed: {:?}", result.error);
 
     let contents = std::fs::read_to_string(&site.env_file).expect("read env");
-    assert!(contents.contains("APP_PORT="), "env must name vars");
-    assert!(contents.contains("APP_SECRET="), "env must name secrets");
     assert!(
-        contents.contains("s3cret-value"),
-        "file holds the real value (masking is an API-layer job)"
+        contents.contains("APP_PORT=\"20011\""),
+        "env must name vars"
+    );
+    assert!(
+        contents.contains("APP_SECRET=\"s3cret-value\""),
+        "file holds the real value"
     );
     let mode = std::fs::metadata(&site.env_file)
         .expect("meta")
@@ -293,39 +332,54 @@ async fn write_env_sets_mode_0600() {
         .mode()
         & 0o777;
     assert_eq!(mode, 0o600, "env file must be mode 0600, got {mode:o}");
-    // The result log must not leak the secret either.
     assert!(
         !result.log.contains("s3cret-value"),
         "handle log must not leak env values"
     );
+
+    // A newline in a value fails without echoing the value.
+    let bad = setu_agent::handle(
+        "cmd-env-bad",
+        &Command::WriteEnv {
+            site,
+            env: vec![EnvVar {
+                name: "A".to_string(),
+                value: "x\nLEAKED=1".to_string(),
+                secret: true,
+                once: false,
+            }],
+        },
+        &rt,
+    )
+    .await;
+    assert!(!bad.ok);
+    assert!(!bad.error.unwrap_or_default().contains("LEAKED"));
 }
 
 #[tokio::test]
 async fn redelivered_write_unit_is_a_noop_when_unchanged() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sites_root = dir.path().join("sites");
-    let systemd = FakeSystemd::new();
-    let rt = test_runtime(systemd.clone(), &sites_root, &dir.path().join("state.json"));
+    let (rt, units) = test_runtime(dir.path());
     let id = "01jredeliver0000000000001";
-    let site = test_site(&sites_root, id, 20012);
+    let site = test_site(dir.path(), id, 20012);
 
     let first = setu_agent::handle("cmd-1", &Command::WriteUnit { site: site.clone() }, &rt).await;
     assert!(first.ok, "first write_unit: {:?}", first.error);
-    assert_eq!(systemd.daemon_reload_count(), 1);
+    assert_eq!(first.output["changed"], true);
+    assert_eq!(units.reloads(), 1);
 
-    // Redelivery of the identical command: same bytes, no reload.
     let second = setu_agent::handle("cmd-1", &Command::WriteUnit { site: site.clone() }, &rt).await;
     assert!(second.ok, "redelivered write_unit: {:?}", second.error);
+    assert_eq!(second.output["changed"], false);
     assert_eq!(
-        systemd.daemon_reload_count(),
+        units.reloads(),
         1,
         "unchanged redelivery must skip daemon-reload"
     );
 
-    // A changed command (new limits) reloads exactly once more.
     let mut changed = site.clone();
     changed.limits.memory_mb = 1024;
     let third = setu_agent::handle("cmd-2", &Command::WriteUnit { site: changed }, &rt).await;
     assert!(third.ok, "changed write_unit: {:?}", third.error);
-    assert_eq!(systemd.daemon_reload_count(), 2);
+    assert_eq!(units.reloads(), 2);
 }
