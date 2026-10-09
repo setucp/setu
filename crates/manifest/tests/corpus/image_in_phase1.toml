@@ -1,0 +1,33 @@
+schema = 1
+
+[app]
+id = "hello"
+name = "Hello"
+version = "0.1.0"
+homepage = "https://example.com"
+health = "/healthz"
+port_env = "PORT"
+admin_path = "/"
+
+[run]
+kind = "image"
+
+[run.image]
+image = "ghcr.io/example/hello:0.1.0"
+
+[needs]
+dirs = []
+
+[env]
+HELLO_PORT = { from = "port" }
+
+[limits.default]
+memory_mb = 256
+cpu_percent = 50
+disk_mb = 1024
+
+[backup]
+postgres = false
+
+[update]
+strategy = "replace"

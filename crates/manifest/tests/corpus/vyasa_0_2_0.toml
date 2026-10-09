@@ -1,0 +1,44 @@
+schema = 1
+
+[app]
+id = "vyasa"
+name = "Vyasa"
+version = "0.2.0"
+homepage = "https://vyasa.site"
+health = "/readyz"
+port_env = "PORT"
+admin_path = "/admin"
+
+[run]
+kind = "binary"
+
+[run.binary]
+args = ["serve"]
+"x86_64-linux" = { url = "https://github.com/vyasa-cms/vyasa/releases/download/v0.2.0/vyasa-0.2.0-x86_64-unknown-linux-musl.tar.gz", sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", exec = "vyasa" }
+"aarch64-linux" = { url = "https://github.com/vyasa-cms/vyasa/releases/download/v0.2.0/vyasa-0.2.0-aarch64-unknown-linux-musl.tar.gz", sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", exec = "vyasa" }
+
+[needs]
+postgres = ">=16"
+dirs = ["media", "index"]
+
+[env]
+VYASA_SECRET_KEY = { generate = "hex32", secret = true }
+VYASA_DATABASE_URL = { from = "postgres_url" }
+VYASA_MEDIA_DIR = { from = "dir", dir = "media" }
+VYASA_INDEX_DIR = { from = "dir", dir = "index" }
+VYASA_RUN_DIR = { from = "run_dir" }
+VYASA_SITE_URL = { from = "site_url" }
+VYASA_ADMIN_EMAIL = { from = "owner_email" }
+VYASA_ADMIN_PASSWORD = { generate = "password20", secret = true, once = true }
+
+[limits.default]
+memory_mb = 512
+cpu_percent = 100
+disk_mb = 5120
+
+[backup]
+postgres = true
+dirs = ["media"]
+
+[update]
+strategy = "replace"
