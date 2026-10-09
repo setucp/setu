@@ -176,6 +176,9 @@ impl<S, P, C> NativeRuntime<S, P, C> {
         S: Systemd,
     {
         self.ensure_dirs(site)?;
+        // The drop-in runs the unit as `site.user` and the env write
+        // chowns to it: the user must exist before either lands.
+        self.systemd.ensure_user(&site.user).await?;
         let contents = systemd::render_dropin(site, &self.config.sites_root);
         let changed = self
             .systemd
@@ -287,6 +290,9 @@ impl<S, P, C> NativeRuntime<S, P, C> {
             std::fs::remove_dir_all(&dir)
                 .map_err(|e| anyhow::anyhow!("cannot remove {}: {e}", dir.display()))?;
         }
+        // After the unit is stopped no site processes remain, so the user
+        // owns nothing and `userdel` succeeds (missing user is a no-op).
+        self.systemd.remove_user(&site.user).await?;
         let mut state = self.load_state().map_err(|e| anyhow::anyhow!("{e}"))?;
         state
             .remove(&site.site_id, &self.config.state_path)

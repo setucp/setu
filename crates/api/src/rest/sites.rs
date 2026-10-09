@@ -1183,7 +1183,10 @@ fn env_site_spec(
     setu_proto::SiteSpec {
         site_id: site.id.clone(),
         short_id: setu_common::short_id(&site.id).to_lowercase(),
-        user: format!("setu-site-{}", site.id),
+        user: format!(
+            "setu-site-{}",
+            setu_common::short_id(&site.id).to_lowercase()
+        ),
         data_dir: data_dir.clone(),
         run_dir: site_dir.join("run"),
         port: site.port as u16,

@@ -16,7 +16,8 @@ fn test_site(sites_root: &Path, port: u16) -> SiteSpec {
     SiteSpec {
         site_id: id.to_string(),
         short_id: "00000001".to_string(),
-        user: format!("setu-site-{id}"),
+        // Production form: the short id (usernames cap at 32 chars).
+        user: format!("setu-site-{}", &id[id.len() - 8..]),
         data_dir: dir.join("data"),
         run_dir: dir.join("run"),
         port,
@@ -104,6 +105,60 @@ async fn serve_tarball(tarball: Vec<u8>) -> String {
 }
 
 #[tokio::test]
+async fn write_unit_ensures_site_user_before_dropin() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let systemd = FakeSystemd::new();
+    let rt = test_runtime(
+        systemd.clone(),
+        &dir.path().join("sites"),
+        &dir.path().join("state.json"),
+    );
+    let site = test_site(&dir.path().join("sites"), 20001);
+
+    rt.write_unit(&site).await.expect("write_unit");
+
+    // The site user must exist before the drop-in (which names it) and
+    // the env file (which is chowned to it) land.
+    let calls = systemd.calls();
+    let user_at = calls
+        .iter()
+        .position(|c| c == "ensure-user setu-site-00000001")
+        .expect("ensure-user must be recorded");
+    let dropin_at = calls
+        .iter()
+        .position(|c| c.starts_with("write-dropin"))
+        .expect("drop-in must be recorded");
+    assert!(user_at < dropin_at, "user first: {calls:?}");
+}
+
+#[tokio::test]
+async fn remove_inner_deletes_user_and_dropin() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let systemd = FakeSystemd::new();
+    let rt = test_runtime(
+        systemd.clone(),
+        &dir.path().join("sites"),
+        &dir.path().join("state.json"),
+    );
+    let site = test_site(&dir.path().join("sites"), 20001);
+
+    rt.write_unit(&site).await.expect("write_unit");
+    rt.remove_inner(&site).await.expect("remove_inner");
+
+    let calls = systemd.calls();
+    assert!(
+        calls
+            .iter()
+            .any(|c| c == "remove-dropin setu-site@01jtestsite00000000000001.service"),
+        "drop-in removed: {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|c| c == "remove-user setu-site-00000001"),
+        "site user removed: {calls:?}"
+    );
+}
+
+#[tokio::test]
 async fn write_unit_renders_limits_dropin() {
     let dir = tempfile::tempdir().expect("tempdir");
     let systemd = FakeSystemd::new();
@@ -123,7 +178,7 @@ async fn write_unit_renders_limits_dropin() {
     let expected = "\
 # Setu-managed drop-in for site 01jtestsite00000000000001. Do not edit by hand.\n\
 [Service]\n\
-User=setu-site-01jtestsite00000000000001\n\
+User=setu-site-00000001\n\
 WorkingDirectory=/SITES/01jtestsite00000000000001\n\
 EnvironmentFile=/SITES/01jtestsite00000000000001/env\n\
 ExecStart=\n\

@@ -3,14 +3,16 @@
 # and the `install::tests::sudoers_asset_has_required_entries` unit test.
 #
 # Root access goes ONLY through the pinned helper (`setu helper …`),
-# which allowlists every verb, unit and path itself (see
-# crates/agent/src/helper.rs). The entries below name the helper with no
-# arguments — sudo permits any helper subcommand — because sudoers
-# forbids wildcards in command arguments, so per-site units like
-# `systemctl start setu-site@<id>` cannot be pinned here directly.
+# which allowlists every verb, unit, path and username itself (see
+# crates/agent/src/helper.rs, whose gates are unit-tested). A bare
+# `… helper` entry would match ONLY argv-exactly (sudo compares the full
+# command line), so the rule carries a trailing ` *` to permit helper
+# subcommands — per-site units like `setu-site@<id>` can never be pinned
+# here because they vary per call, which is exactly why the helper
+# validates them instead.
 # Postgres admin is confined to the postgres target user and the three
 # binaries the agent needs. No shells, no editors, no package managers.
-setu ALL=(root) NOPASSWD: /opt/setu/setu helper
+setu ALL=(root) NOPASSWD: /opt/setu/setu helper *
 setu ALL=(postgres) NOPASSWD: /usr/bin/psql
 setu ALL=(postgres) NOPASSWD: /usr/bin/pg_dump
 setu ALL=(postgres) NOPASSWD: /usr/bin/pg_restore

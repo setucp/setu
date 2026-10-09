@@ -19,6 +19,8 @@ pub enum HelperError {
     BadMode(String),
     #[error("refusing {0}: not a setu site unit")]
     BadUnit(String),
+    #[error("refusing {0}: not a setu site user")]
+    BadUser(String),
     #[error("refusing systemctl verb {0}")]
     BadVerb(String),
     #[error("I/O for {0}: {1}")]
@@ -264,6 +266,82 @@ pub fn remove_dropin(unit_dir: &Path, unit: &str) -> Result<(), HelperError> {
     }
 }
 
+/// Validate a site username (`setu-site-<id>`, id charset only) and
+/// return the site id. This is the gate the user create/delete helpers
+/// pass through: without it a privileged `useradd`/`userdel` would take
+/// an arbitrary name. Total length caps at 32 — shadow `useradd` rejects
+/// longer names, and refusing here beats its cryptic error (found by the
+/// e2e with 36-char full-ULID users; jobs now sends the 8-char short id).
+pub fn check_site_user(user: &str) -> Result<String, HelperError> {
+    let id = user
+        .strip_prefix("setu-site-")
+        .ok_or_else(|| HelperError::BadUser(user.to_string()))?;
+    if id.is_empty()
+        || user.len() > 32
+        || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(HelperError::BadUser(user.to_string()));
+    }
+    Ok(id.to_string())
+}
+
+/// Ensure the site's system user exists (idempotent): `id <user>` first,
+/// `useradd --system` when missing. Returns true when the user was
+/// created. The agent runs `WriteUnit` before `WriteEnv`, and the env
+/// write chowns to this user, so the user must exist by then.
+pub fn ensure_site_user(user: &str) -> Result<bool, HelperError> {
+    check_site_user(user)?;
+    let missing = std::process::Command::new("/usr/bin/id")
+        .arg(user)
+        .output()
+        .map(|o| !o.status.success())
+        .unwrap_or(true);
+    if !missing {
+        return Ok(false);
+    }
+    let out = std::process::Command::new("/usr/sbin/useradd")
+        .arg("--system")
+        .arg("--no-create-home")
+        .arg("--shell")
+        .arg("/usr/sbin/nologin")
+        .arg(user)
+        .output()
+        .map_err(|e| HelperError::Io("useradd".to_string(), e.to_string()))?;
+    if !out.status.success() {
+        return Err(HelperError::Io(
+            "useradd".to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ));
+    }
+    Ok(true)
+}
+
+/// Delete the site's system user when present (idempotent): missing users
+/// are not an error. Runs after the unit is stopped, so no processes
+/// should remain; a busy user errors rather than forcing removal.
+pub fn remove_site_user(user: &str) -> Result<bool, HelperError> {
+    check_site_user(user)?;
+    let missing = std::process::Command::new("/usr/bin/id")
+        .arg(user)
+        .output()
+        .map(|o| !o.status.success())
+        .unwrap_or(false);
+    if missing {
+        return Ok(false);
+    }
+    let out = std::process::Command::new("/usr/sbin/userdel")
+        .arg(user)
+        .output()
+        .map_err(|e| HelperError::Io("userdel".to_string(), e.to_string()))?;
+    if !out.status.success() {
+        return Err(HelperError::Io(
+            "userdel".to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ));
+    }
+    Ok(true)
+}
+
 /// Privileged write used by the runtime in production: re-exec through
 /// `sudo <exe> helper write-file`, piping contents on stdin. `owner`
 /// chowns inside the helper (which runs as root).
@@ -400,6 +478,30 @@ mod tests {
         systemctl("reboot", Some("setu-site@abc.service")).expect_err("bad verb");
         systemctl("start", Some("evil.service")).expect_err("bad unit");
         systemctl("start", None).expect_err("missing unit");
+    }
+
+    #[test]
+    fn site_user_gate() {
+        assert_eq!(
+            check_site_user("setu-site-00000001").expect("valid"),
+            "00000001"
+        );
+        for bad in [
+            "root",
+            "setu",
+            "setu-site-",
+            "setu-site-a/b",
+            "setu-site-a b",
+            "setu-site-a;reboot",
+            "setu-site-$(reboot)",
+            "other-abc",
+            "setu-site@abc.service",
+            // 36 chars: shadow useradd rejects overlong names, so the
+            // gate refuses first (jobs sends the 8-char short id).
+            "setu-site-01jtestsitetest00000001",
+        ] {
+            check_site_user(bad).expect_err("must reject");
+        }
     }
 
     #[test]

@@ -84,6 +84,19 @@ pub enum HelperCmd {
         #[arg(long)]
         unit: String,
     },
+    /// Create one site's system user when missing (`setu-site-<id>`
+    /// only; idempotent). Runs as root through the pinned sudoers entry.
+    EnsureUser {
+        /// Site user (`setu-site-<id>`).
+        #[arg(long)]
+        user: String,
+    },
+    /// Delete one site's system user when present (idempotent).
+    RemoveUser {
+        /// Site user (`setu-site-<id>`).
+        #[arg(long)]
+        user: String,
+    },
 }
 
 /// Execute a parsed `setu agent …` command.
@@ -158,6 +171,14 @@ pub async fn run_helper(cmd: HelperCmd) -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             // The unit set changed: reload so systemd drops the override.
             crate::helper::systemctl("daemon-reload", None).map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok(())
+        }
+        HelperCmd::EnsureUser { user } => {
+            crate::helper::ensure_site_user(&user).map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok(())
+        }
+        HelperCmd::RemoveUser { user } => {
+            crate::helper::remove_site_user(&user).map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok(())
         }
     }

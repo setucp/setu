@@ -56,6 +56,7 @@ async fn system_setup() -> Result<(), InstallError> {
     ensure_user().await?;
     ensure_dirs().await?;
     ensure_packages().await?;
+    ensure_services().await?;
     ensure_caddy_admin().await?;
     write_sudoers().await?;
     write_units().await?;
@@ -240,6 +241,25 @@ async fn ensure_packages() -> Result<(), InstallError> {
     Ok(())
 }
 
+/// Services `install` owns, converged after the apt step below.
+const MANAGED_SERVICES: &[&str] = &["postgresql", "caddy"];
+
+/// Start (and enable) the services install depends on. Fresh debs
+/// auto-start on real machines, but container images and hardened hosts
+/// pin `policy-rc.d`, which silently skips the start (found by the e2e:
+/// caddy stayed `inactive (dead)` after a successful apt install).
+/// Converging explicitly is idempotent, so already-running services are
+/// untouched — then fail fast when something still isn't active, rather
+/// than at the first site provision minutes later.
+async fn ensure_services() -> Result<(), InstallError> {
+    for svc in MANAGED_SERVICES {
+        run("systemctl", &["enable", "--now", svc], "enable service").await?;
+    }
+    for svc in MANAGED_SERVICES {
+        run("systemctl", &["is-active", svc], "service active").await?;
+    }
+    Ok(())
+}
 /// Make sure Caddy's admin API listens on 127.0.0.1:2019 (best effort:
 //  skipped when already reachable).
 async fn ensure_caddy_admin() -> Result<(), InstallError> {
@@ -253,13 +273,7 @@ async fn ensure_caddy_admin() -> Result<(), InstallError> {
     }
     // Point Caddy at a minimal config with the admin API enabled; the
     // agent manages routes through it from here on.
-    let config = serde_json::json!({
-        "admin": { "listen": "127.0.0.1:2019" },
-        "apps": { "http": { "servers": { "srv0": {
-            "listen": [":80", ":443"],
-            "routes": [],
-        } } } },
-    });
+    let config = caddy_bootstrap_config(caddy_auto_https_off());
     let status = reqwest::Client::new()
         .post("http://127.0.0.1:2019/load")
         .json(&config)
@@ -274,6 +288,35 @@ async fn ensure_caddy_admin() -> Result<(), InstallError> {
         ));
     }
     Ok(())
+}
+
+/// Bootstrap Caddy config posted by `ensure_caddy_admin`. `auto_https_off`
+/// adds `automatic_https.disable` to `srv0` (verified against
+/// `caddy adapt` for `auto_https off`): no ACME attempts, plain HTTP on
+/// `:80`. Production keeps the default (ACME on).
+fn caddy_bootstrap_config(auto_https_off: bool) -> serde_json::Value {
+    let mut srv0 = serde_json::json!({
+        "listen": [":80", ":443"],
+        "routes": [],
+    });
+    if auto_https_off {
+        srv0["automatic_https"] = serde_json::json!({ "disable": true });
+    }
+    serde_json::json!({
+        "admin": { "listen": "127.0.0.1:2019" },
+        "apps": { "http": { "servers": { "srv0": srv0 } } },
+    })
+}
+
+/// `SETU_AGENT_CADDY_INTERNAL_TLS=off` disables Caddy automatic HTTPS at
+/// install time. E2E-only: test domains (e.g. `hello.test`) have no
+/// public DNS, so ACME issuance would fail and HTTP would redirect.
+/// Unset (or anything else) keeps issuance enabled.
+fn caddy_auto_https_off() -> bool {
+    std::env::var("SETU_AGENT_CADDY_INTERNAL_TLS")
+        .as_deref()
+        .map(str::trim)
+        == Ok("off")
 }
 
 async fn write_sudoers() -> Result<(), InstallError> {
@@ -396,6 +439,16 @@ async fn join_control_plane(opts: &InstallOpts) -> Result<(), InstallError> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
         .map_err(|e| InstallError::Step("config", e.to_string()))?;
+    // Join runs as root but the agent runs as `setu`: without this the
+    // service crash-loops on `Permission denied` reading its own token
+    // (found by the e2e: restart counter 100+, zero heartbeats, while the
+    // control plane still showed `online` from the join timestamp).
+    // `setu` always exists here: `install` creates it before joining, and
+    // standalone `join` re-joins an installed host.
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| InstallError::Step("config", "config path is not UTF-8".to_string()))?;
+    run("chown", &["setu:setu", path_str], "config owner").await?;
     println!("joined as server {}", config.server_id);
     Ok(())
 }
@@ -406,11 +459,13 @@ mod tests {
 
     #[test]
     fn sudoers_asset_has_required_entries() {
-        // The whole root surface is the pinned helper (no argument
-        // wildcards: sudoers forbids them, so units are allowlisted in
-        // the helper itself). Postgres admin is per-binary, postgres user.
+        // The whole root surface is the pinned helper. A bare `helper`
+        // entry matches argv-exactly (sudo compares the full command
+        // line), so the rule carries a trailing ` *` and the helper
+        // allowlists verbs/units/paths itself. Postgres admin is
+        // per-binary, postgres user.
         for needle in [
-            "setu ALL=(root) NOPASSWD: /opt/setu/setu helper",
+            "setu ALL=(root) NOPASSWD: /opt/setu/setu helper *",
             "setu ALL=(postgres) NOPASSWD: /usr/bin/psql",
             "setu ALL=(postgres) NOPASSWD: /usr/bin/pg_dump",
             "setu ALL=(postgres) NOPASSWD: /usr/bin/pg_restore",
@@ -420,11 +475,13 @@ mod tests {
                 "sudoers asset must pin `{needle}`"
             );
         }
-        // No wildcards anywhere (rejected by visudo in argument position,
-        // and a sign of an overbroad rule everywhere else) and no
-        // blanket shell/editor/package access or direct systemctl and
-        // journalctl rules (those go through the helper). Comments are
-        // prose; only rule lines count.
+        // Exactly one wildcard form is allowed: the helper rule's
+        // trailing ` *` (its subcommands vary per call and are validated
+        // in `helper.rs`, unit-tested). Anywhere else a wildcard is a
+        // sign of an overbroad rule. Likewise no blanket shell/editor/
+        // package access or direct systemctl and journalctl rules (those
+        // go through the helper). Comments are prose; only rule lines
+        // count.
         let rules: Vec<&str> = SUDOERS_ASSET
             .lines()
             .filter(|l| {
@@ -432,19 +489,22 @@ mod tests {
                 !t.is_empty() && !t.starts_with('#')
             })
             .collect();
-        for bad in [
-            "*",
-            "/bin/sh",
-            "/bin/bash",
-            "/usr/bin/apt",
-            "systemctl",
-            "journalctl",
-            "rm ",
-        ] {
-            assert!(
-                !rules.iter().any(|l| l.contains(bad)),
-                "sudoers rules must not contain `{bad}`"
-            );
+        for rule in &rules {
+            let scoped = rule.replace("/opt/setu/setu helper *", "HELPER_RULE");
+            for bad in [
+                "*",
+                "/bin/sh",
+                "/bin/bash",
+                "/usr/bin/apt",
+                "systemctl",
+                "journalctl",
+                "rm ",
+            ] {
+                assert!(
+                    !scoped.contains(bad),
+                    "sudoers rules must not contain `{bad}`"
+                );
+            }
         }
     }
 
@@ -458,5 +518,53 @@ mod tests {
     #[test]
     fn agent_unit_starts_the_one_binary() {
         assert!(AGENT_UNIT_ASSET.contains("/opt/setu/setu agent run"));
+        // The agent escalates via the pinned sudo helper, which a
+        // `NoNewPrivileges` directive would break (the e2e caught sudo
+        // refusing at the first CreateDatabase). Sites keep it.
+        assert!(
+            !AGENT_UNIT_ASSET
+                .lines()
+                .any(|l| l.trim_start().starts_with("NoNewPrivileges=")),
+            "agent unit must not set NoNewPrivileges"
+        );
+        // `strict` mounts /etc read-only and breaks drop-in writes and
+        // useradd (`cannot lock /etc/passwd` in the e2e); `true` keeps
+        // /usr+/boot read-only while the agent manages /etc. Sites keep
+        // `strict`.
+        assert!(
+            AGENT_UNIT_ASSET
+                .lines()
+                .any(|l| l.trim() == "ProtectSystem=true"),
+            "agent unit must set ProtectSystem=true, not strict"
+        );
+        // sudo needs its timestamp dir under the sandbox
+        // (`ProtectSystem=strict` leaves /run read-only for the unit).
+        assert!(AGENT_UNIT_ASSET.contains("RuntimeDirectory=sudo"));
+    }
+
+    #[test]
+    fn install_manages_postgres_and_caddy() {
+        // `system_setup` converges exactly these after apt (policy-rc.d
+        // skips deb auto-start in containers; the e2e caught caddy dead).
+        assert_eq!(MANAGED_SERVICES, &["postgresql", "caddy"]);
+    }
+
+    #[test]
+    fn caddy_bootstrap_disables_auto_https_only_when_asked() {
+        let prod = caddy_bootstrap_config(false);
+        assert!(prod["apps"]["http"]["servers"]["srv0"]
+            .get("automatic_https")
+            .is_none());
+        let e2e = caddy_bootstrap_config(true);
+        assert_eq!(
+            e2e["apps"]["http"]["servers"]["srv0"]["automatic_https"],
+            serde_json::json!({ "disable": true })
+        );
+        // The shape matches `caddy adapt` output for `auto_https off`,
+        // so `/load` accepts it on any Caddy 2.x.
+        assert_eq!(
+            e2e["apps"]["http"]["servers"]["srv0"]["listen"],
+            serde_json::json!([":80", ":443"])
+        );
     }
 }

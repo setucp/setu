@@ -308,7 +308,12 @@ pub(crate) fn build_spec(
     Ok(setu_proto::SiteSpec {
         site_id: site.id.clone(),
         short_id: setu_common::short_id(&site.id),
-        user: format!("setu-site-{}", site.id),
+        // Usernames cap at 32 chars (shadow `useradd` rejects longer):
+        // the 8-char short id, same uniqueness basis as db names.
+        user: format!(
+            "setu-site-{}",
+            setu_common::short_id(&site.id).to_lowercase()
+        ),
         data_dir,
         run_dir,
         port: site.port as u16,
@@ -388,7 +393,12 @@ pub(crate) fn build_site(
     let spec = setu_proto::SiteSpec {
         site_id: site.id.clone(),
         short_id: setu_common::short_id(&site.id),
-        user: format!("setu-site-{}", site.id),
+        // Usernames cap at 32 chars (shadow `useradd` rejects longer):
+        // the 8-char short id, same uniqueness basis as db names.
+        user: format!(
+            "setu-site-{}",
+            setu_common::short_id(&site.id).to_lowercase()
+        ),
         data_dir,
         run_dir,
         port: site.port as u16,
@@ -418,7 +428,12 @@ pub(crate) fn minimal_spec(site: &Site) -> setu_proto::SiteSpec {
     setu_proto::SiteSpec {
         site_id: site.id.clone(),
         short_id: setu_common::short_id(&site.id),
-        user: format!("setu-site-{}", site.id),
+        // Usernames cap at 32 chars (shadow `useradd` rejects longer):
+        // the 8-char short id, same uniqueness basis as db names.
+        user: format!(
+            "setu-site-{}",
+            setu_common::short_id(&site.id).to_lowercase()
+        ),
         data_dir,
         run_dir,
         port: site.port as u16,

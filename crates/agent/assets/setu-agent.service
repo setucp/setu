@@ -8,9 +8,19 @@ User=setu
 ExecStart=/opt/setu/setu agent run
 Restart=always
 RestartSec=2
-NoNewPrivileges=yes
-ProtectSystem=strict
+# NOTE: no `NoNewPrivileges=yes` here (the site template keeps it): the
+# agent escalates through the pinned `sudo … helper` surface and
+# `sudo -u postgres psql`, and NNP makes sudo refuse with "The no new
+# privileges flag is set" (found by the e2e at the first CreateDatabase).
+# `ProtectSystem` stays at `true`, not `strict`: the agent manages
+# `/etc` (systemd drop-ins, passwd/shadow/group via useradd/userdel),
+# and `strict` mounts it read-only, which broke `ensure-user` with
+# "cannot lock /etc/passwd" (likewise found by the e2e). Sites keep
+# `strict` — they never touch `/etc`.
+# sudo also needs its timestamp dir under the sandbox.
+ProtectSystem=true
 ReadWritePaths=/var/lib/setu /srv/setu/sites
+RuntimeDirectory=sudo
 
 [Install]
 WantedBy=multi-user.target

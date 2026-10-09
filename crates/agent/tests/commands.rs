@@ -10,10 +10,12 @@ use setu_proto::{BinaryRef, Command, EnvVar, Limits, SiteSpec};
 
 fn test_site(sites_root: &Path, site_id: &str, port: u16) -> SiteSpec {
     let dir = sites_root.join(site_id);
+    let short = &site_id[site_id.len() - 8..];
     SiteSpec {
         site_id: site_id.to_string(),
-        short_id: site_id[site_id.len() - 8..].to_string(),
-        user: format!("setu-site-{site_id}"),
+        short_id: short.to_string(),
+        // Production form: the short id (usernames cap at 32 chars).
+        user: format!("setu-site-{short}"),
         data_dir: dir.join("data"),
         run_dir: dir.join("run"),
         port,

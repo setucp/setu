@@ -1,0 +1,37 @@
+name: E2E
+
+# Full end-to-end (scripts/e2e.sh): control plane + privileged systemd
+# container + agent install + hello provision/update/rollback/delete.
+# Heavy (up to 40 min), so it runs only when the server side or the
+# script itself changed. GitHub-hosted runners allow privileged Docker.
+on:
+  push:
+    branches: [main, mvp]
+    paths:
+      - "crates/**"
+      - "apps/**"
+      - "scripts/e2e.sh"
+      - "scripts/e2e/**"
+      - ".github/workflows/e2e.yml"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "apps/**"
+      - "scripts/e2e.sh"
+      - "scripts/e2e/**"
+      - ".github/workflows/e2e.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_BUILD_JOBS: 4
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+      - run: bash scripts/e2e.sh

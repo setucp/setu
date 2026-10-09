@@ -47,6 +47,11 @@ pub trait Systemd: Send + Sync {
     async fn write_dropin(&self, unit: &str, contents: &str) -> anyhow::Result<bool>;
     /// Remove a per-site drop-in (site delete).
     async fn remove_dropin(&self, unit: &str) -> anyhow::Result<()>;
+    /// Create the site's system user when missing (idempotent). Runs
+    /// before any file is chowned to that user.
+    async fn ensure_user(&self, user: &str) -> anyhow::Result<()>;
+    /// Delete the site's system user when present (idempotent).
+    async fn remove_user(&self, user: &str) -> anyhow::Result<()>;
     /// Last `lines` journal lines for a unit (oldest first).
     async fn fetch_logs(&self, unit: &str, lines: u32) -> anyhow::Result<Vec<String>>;
 }
@@ -213,18 +218,26 @@ impl Systemd for SystemctlCli {
     }
 
     async fn remove_dropin(&self, unit: &str) -> anyhow::Result<()> {
-        self.helper(
-            &[
-                "remove-dropin",
-                "--unit",
-                unit,
-                "--unit-dir",
-                self.unit_dir.to_str().unwrap_or("/etc/systemd/system"),
-            ],
-            None,
-        )
-        .await
-        .map(|_| ())?;
+        // The helper pins `/etc/systemd/system` itself (sudoers carries
+        // no per-unit args, so the allowlist lives in `helper.rs`): no
+        // `--unit-dir` override is accepted here.
+        self.helper(&["remove-dropin", "--unit", unit], None)
+            .await
+            .map(|_| ())?;
+        Ok(())
+    }
+
+    async fn ensure_user(&self, user: &str) -> anyhow::Result<()> {
+        self.helper(&["ensure-user", "--user", user], None)
+            .await
+            .map(|_| ())?;
+        Ok(())
+    }
+
+    async fn remove_user(&self, user: &str) -> anyhow::Result<()> {
+        self.helper(&["remove-user", "--user", user], None)
+            .await
+            .map(|_| ())?;
         Ok(())
     }
 
@@ -391,6 +404,18 @@ impl Systemd for FakeSystemd {
         let mut inner = self.lock();
         inner.dropins.remove(unit);
         inner.calls.push(format!("remove-dropin {unit}"));
+        Ok(())
+    }
+
+    async fn ensure_user(&self, user: &str) -> anyhow::Result<()> {
+        let mut inner = self.lock();
+        inner.calls.push(format!("ensure-user {user}"));
+        Ok(())
+    }
+
+    async fn remove_user(&self, user: &str) -> anyhow::Result<()> {
+        let mut inner = self.lock();
+        inner.calls.push(format!("remove-user {user}"));
         Ok(())
     }
 

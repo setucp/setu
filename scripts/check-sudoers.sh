@@ -17,11 +17,13 @@ fail() {
 [[ -f "${ASSET}" ]] || fail "missing ${ASSET}"
 
 # Required sudo surface (spec §4/§7): root only through the pinned
-# helper (units/verbs/paths are allowlisted inside the helper because
-# sudoers forbids wildcards in command arguments); Postgres admin
-# confined to the postgres user and the three binaries the agent needs.
+# helper. A bare `… helper` entry would match argv-exactly (sudo compares
+# the full command line), so the rule carries a trailing ` *` and the
+# helper allowlists verbs/units/paths itself (unit-tested in helper.rs).
+# Postgres admin confined to the postgres user and the three binaries
+# the agent needs.
 required=(
-    "setu ALL=(root) NOPASSWD: /opt/setu/setu helper"
+    "setu ALL=(root) NOPASSWD: /opt/setu/setu helper *"
     "setu ALL=(postgres) NOPASSWD: /usr/bin/psql"
     "setu ALL=(postgres) NOPASSWD: /usr/bin/pg_dump"
     "setu ALL=(postgres) NOPASSWD: /usr/bin/pg_restore"
@@ -30,14 +32,19 @@ for needle in "${required[@]}"; do
     grep -qF -- "${needle}" "${ASSET}" || fail "asset missing: ${needle}"
 done
 
-# No wildcards anywhere: `visudo -cf` rejects them in argument position,
-# and elsewhere they signal an overbroad rule. No shells, editors,
-# package managers, or direct systemctl/journalctl entries (those go
-# through the helper, which validates verb and unit). Comments are
-# stripped before this check so prose cannot trip it.
+# Exactly one wildcard form is allowed: the helper rule's trailing ` *`
+# (its subcommands vary per call and are validated inside the helper).
+# Anywhere else a wildcard signals an overbroad rule. No shells,
+# editors, package managers, or direct systemctl/journalctl entries
+# (those go through the helper, which validates verb and unit). Comments
+# are stripped before this check so prose cannot trip it.
 CODE_LINES="$(grep -v '^[[:space:]]*#' "${ASSET}" || true)"
+# Scope out exactly the documented exception (the helper rule's trailing
+# ` *`) before banning wildcards, so a second wildcard on that same line
+# is still caught.
+SCOPED="$(printf '%s\n' "${CODE_LINES}" | sed 's|/opt/setu/setu helper \*|HELPER_RULE|' || true)"
 for bad in "*" "/bin/sh" "/bin/bash" "/usr/bin/vim" "ALL=(ALL) NOPASSWD: ALL" "/usr/bin/apt" "systemctl" "journalctl"; do
-    printf '%s\n' "${CODE_LINES}" | grep -qF -- "${bad}" && fail "asset must not contain: ${bad}"
+    printf '%s\n' "${SCOPED}" | grep -qF -- "${bad}" && fail "asset must not contain: ${bad}"
 done
 
 # Every non-comment line must be a rule for the agent user.
