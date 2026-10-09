@@ -1,0 +1,17 @@
+[package]
+name = "setu-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+autobins = false
+
+[lib]
+name = "setu_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "setu"
+path = "src/main.rs"
+
+[lints]
+workspace = true

@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/common",
+    "crates/manifest",
+    "crates/proto",
+    "crates/db",
+    "crates/jobs",
+    "crates/api",
+    "crates/agent",
+    "crates/testkit",
+    "apps/hello",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8" }
+tower = { version = "0.5" }
+tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "json", "chrono"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+toml = { version = "0.8" }
+thiserror = { version = "2" }
+anyhow = { version = "1" }
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+utoipa = { version = "5", features = ["axum_extras", "chrono"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
+argon2 = { version = "0.5" }
+chacha20poly1305 = { version = "0.10" }
+rand = { version = "0.9" }
+base64 = { version = "0.22" }
+hex = { version = "0.4" }
+sha2 = { version = "0.10" }
+ulid = { version = "1" }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+config = { version = "0.15" }
+rust-embed = { version = "8" }
+async-trait = { version = "0.1" }
+tokio-util = { version = "0.7" }
+futures = { version = "0.3" }
+semver = { version = "1" }
+tempfile = { version = "3" }
+serial_test = { version = "3" }
