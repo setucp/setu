@@ -113,7 +113,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
             site_id: site.id.clone(),
             port: port as u16,
             path: prep.manifest.app.health.clone(),
-            timeout_s: 90,
+            timeout_s: u64::from(prep.manifest.app.startup_grace_s),
         },
     )
     .await?;

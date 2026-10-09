@@ -27,14 +27,13 @@ name = "Hello"
 version = "{version}"
 homepage = "https://example.com"
 health = "/healthz"
-port_env = "PORT"
 admin_path = "/"
 
 [run]
 kind = "binary"
+args = ["serve"]
 
 [run.binary]
-args = ["serve"]
 "x86_64-linux" = {{ url = "https://example.com/hello-{version}.tar.gz", sha256 = "{SHA256}", exec = "hello" }}
 
 [needs]
@@ -62,14 +61,6 @@ strategy = "replace"
     )
 }
 
-/// Same app with a `command` update strategy.
-pub fn manifest_toml_command(version: &str) -> String {
-    manifest_toml(version).replace(
-        "[update]\nstrategy = \"replace\"",
-        "[update]\nstrategy = \"command\"\ncommand = \"hello update apply\"",
-    )
-}
-
 /// Same app as a container image (phase 2): parses, but provisioning
 /// and update must reject it before issuing anything.
 pub fn manifest_toml_image(version: &str) -> String {
@@ -83,7 +74,6 @@ name = "Hello"
 version = "{version}"
 homepage = "https://example.com"
 health = "/healthz"
-port_env = "PORT"
 admin_path = "/"
 
 [run]

@@ -88,7 +88,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), App
             site_id: site.id.clone(),
             port: site.port as u16,
             path: manifest.app.health.clone(),
-            timeout_s: 90,
+            timeout_s: u64::from(manifest.app.startup_grace_s),
         },
     )
     .await?;

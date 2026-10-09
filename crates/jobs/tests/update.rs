@@ -2,10 +2,7 @@
 
 mod common;
 
-use common::{
-    ctx_with_logs, manifest_toml, manifest_toml_command, manifest_toml_image, publish_version,
-    setup,
-};
+use common::{ctx_with_logs, manifest_toml, manifest_toml_image, publish_version, setup};
 use setu_jobs::{provision, testing::FakeAgent, update};
 
 /// Provision 0.1.0 to `running` and return the fixture plus the agent
@@ -45,12 +42,28 @@ async fn update_takes_pre_update_backup_then_switches() {
             "switch_version",
             "start",
             "health",
-            // The fixture carries a `once` secret: provision's mirror
-            // cleanup rewrites the file without it after first health.
-            "write_env",
         ]
         .map(str::to_string),
     );
+    // The fixture carries a `once` secret: an update never re-emits it
+    // (spec §2), so there is no cleanup write after health either.
+    let writes = agent.write_env_calls();
+    let update_write = writes.last().expect("update wrote the env");
+    assert!(
+        update_write
+            .iter()
+            .all(|v| !v.once && v.name != "HELLO_PASSWORD"),
+        "once value re-emitted by update"
+    );
+    // ...but it stays sealed in storage for reveal.
+    let stored = fx.db.sites().get(&fx.site_id).await.unwrap().env;
+    let pw = stored
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["name"] == "HELLO_PASSWORD")
+        .expect("once value kept in storage");
+    assert!(pw["value"].as_str().unwrap().starts_with("v1:"));
 
     let site = fx.db.sites().get(&fx.site_id).await.unwrap();
     assert_eq!(site.status, "running");
@@ -68,7 +81,9 @@ async fn update_takes_pre_update_backup_then_switches() {
     assert!(lines.iter().any(|l| l == "step backup: ok"));
     assert!(lines.iter().any(|l| l == "step switch_version: ok"));
     assert!(lines.iter().any(|l| l == "step write_env: ok"));
-    assert!(lines.iter().any(|l| l == "step write_env_cleanup: ok"));
+    assert!(!lines
+        .iter()
+        .any(|l| l.starts_with("step write_env_cleanup")));
     assert!(lines.iter().any(|l| l == "step finish: ok"));
 }
 
@@ -124,34 +139,6 @@ async fn bad_checksum_update_never_stops_the_site() {
     let site = fx.db.sites().get(&fx.site_id).await.unwrap();
     assert_eq!(site.status, "running");
     assert_eq!(site.app_version, "0.1.0");
-}
-
-#[tokio::test]
-async fn update_command_strategy_runs_command() {
-    let (_test_db, fx, agent) = provisioned().await;
-    publish_version(&fx.db, &manifest_toml_command("0.2.0")).await;
-    let before = agent.transcript().len();
-    let (ctx, _logs) = ctx_with_logs(fx.db.clone(), &agent);
-
-    update::run(&ctx, &fx.site_id, "0.2.0")
-        .await
-        .expect("command update");
-
-    // The manifest command runs as a Restart + Health (no generic exec
-    // command exists in proto); no replace-flow commands are issued.
-    let tail = tail(&agent.transcript(), before);
-    assert!(tail.iter().any(|k| k == "restart"), "tail: {tail:?}");
-    assert!(tail.iter().any(|k| k == "health"), "tail: {tail:?}");
-    assert!(!tail.iter().any(|k| k == "install"), "tail: {tail:?}");
-    assert!(!tail.iter().any(|k| k == "stop"), "tail: {tail:?}");
-    assert!(
-        !tail.iter().any(|k| k == "switch_version"),
-        "tail: {tail:?}"
-    );
-
-    let site = fx.db.sites().get(&fx.site_id).await.unwrap();
-    assert_eq!(site.status, "running");
-    assert_eq!(site.app_version, "0.2.0");
 }
 
 #[tokio::test]
@@ -285,7 +272,7 @@ async fn update_refreshes_values_but_keeps_stored_secrets() {
         .iter()
         .find(|v| v["name"] == "HELLO_LABEL")
         .expect("label stored");
-    assert_eq!(label["value"], "label-new");
+    assert_eq!(label["value"], "plain:label-new");
     assert_eq!(label["secret"], false);
     drop(test_db);
 }

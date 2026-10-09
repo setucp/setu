@@ -17,22 +17,25 @@ name = "Hello"
 version = "__VERSION__"
 homepage = "https://example.com/hello"
 health = "/healthz"
-port_env = "PORT"
 admin_path = "/"
+startup_grace_s = 30
 
 [run]
 kind = "binary"
-
-[run.binary]
+workdir = "exec_dir"
 args = []
-"x86_64-linux" = { url = "__URL__", sha256 = "__SHA256__", exec = "hello" }
+
+[run.binary."x86_64-linux"]
+url = "__URL__"
+sha256 = "__SHA256__"
+exec = "hello"
 
 [needs]
 postgres = ">=16"
 dirs = []
 
 [env]
-PORT = { from = "port" }
+HELLO_BIND = { from = "bind_addr" }
 DATABASE_URL = { from = "postgres_url" }
 HELLO_NAME = { value = "__HELLO_NAME__" }
 __EXTRA_ENV__

@@ -4,12 +4,12 @@ pub mod resolve;
 pub mod schema;
 pub mod validate;
 
-pub use resolve::{resolve_env, EnvVar, ResolveError, ResolveInput};
+pub use resolve::{merge, resolve_env, EnvVar, ResolveError, ResolveInput};
 pub use schema::Manifest;
 pub use schema::{
     App, Backup, BinaryRun, BinaryTarget, EnvSource, EnvSpec, FromSpec, GenerateKind, GenerateSpec,
-    ImageRun, Limits, LimitsSection, ManifestError, Needs, PromptSpec, Run, Target, Update,
-    ValueSpec,
+    ImageRun, Limits, LimitsSection, ManifestError, Needs, PromptSpec, Run, RunKind, Strategy,
+    Target, Update, ValueSpec, Workdir,
 };
 
 impl Manifest {
@@ -107,23 +107,36 @@ fn key_from_line(line: &str) -> Option<String> {
     }
 }
 
-/// Refine a `[run]`-attributed error to `[run.binary]` / `[run.image]`.
-/// Custom `Deserialize` impls lose inner spans (via `toml::Value`), so
-/// without this an extra key in a binary target, an unknown triple, or an
-/// extra key in `[run.image]` reports the `[run]` line. Returns
-/// (section, line).
+/// `[run.*]` section headers in source order, e.g. `run.binary` or
+/// `run.binary."x86_64-linux"`.
+fn run_subsections(src: &str) -> Vec<String> {
+    src.lines()
+        .filter_map(|line| {
+            let t = line.trim();
+            let end = t.find(']')?;
+            let h = t.strip_prefix('[')?[..end - 1].trim().to_string();
+            h.starts_with("run.").then_some(h)
+        })
+        .collect()
+}
+
+/// Refine a `[run]`-attributed error to the `[run.*]` table that holds
+/// `field`. Target tables deserialize through `serde_json::Value` and
+/// lose inner spans, so without this an extra key in a binary target or
+/// an unknown triple reports the `[run]` line. Returns (section, line).
 fn refine_run_error(src: &str, field: Option<&str>) -> (String, Option<usize>) {
     use crate::validate::{line_of_key, line_of_section};
+    let display = |h: &str| h.replace(['"', '\''], "");
+    let sections = run_subsections(src);
     if let Some(f) = field {
-        if let Some(l) = line_of_key(src, "run.binary", f) {
-            return ("run.binary".to_string(), Some(l));
-        }
-        if let Some(l) = line_of_key(src, "run.image", f) {
-            return ("run.image".to_string(), Some(l));
+        for section in &sections {
+            if let Some(l) = line_of_key(src, section, f) {
+                return (display(section), Some(l));
+            }
         }
         // Inline-table case: `extra` inside `"x86_64-linux" = { ..., extra = ... }`
-        // does not start a line, so fall back to the target line containing it.
-        for section in ["run.binary", "run.image"] {
+        // does not start a line, so fall back to the line containing it.
+        for section in &sections {
             let mut current = String::new();
             for (i, line) in src.lines().enumerate() {
                 let t = line.trim();
@@ -133,17 +146,14 @@ fn refine_run_error(src: &str, field: Option<&str>) -> (String, Option<usize>) {
                         continue;
                     }
                 }
-                if current == section && line.contains(f) {
-                    return (section.to_string(), Some(i + 1));
+                if &current == section && line.contains(f) {
+                    return (display(section), Some(i + 1));
                 }
             }
         }
     }
-    if let Some(l) = line_of_section(src, "run.binary") {
-        return ("run.binary".to_string(), Some(l));
-    }
-    if let Some(l) = line_of_section(src, "run.image") {
-        return ("run.image".to_string(), Some(l));
+    if let Some(section) = sections.first() {
+        return (display(section), line_of_section(src, section));
     }
     ("run".to_string(), line_of_section(src, "run"))
 }

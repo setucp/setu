@@ -1,5 +1,10 @@
+//! Validator corpus (plan Task 3): every `*.toml` has a `*.expect` holding
+//! `ok` or the single `error: <message> line <n>` the validator reports.
+
 use std::fs;
 use std::path::PathBuf;
+
+const CASES: usize = 17;
 
 #[test]
 fn corpus() {
@@ -10,38 +15,50 @@ fn corpus() {
         .filter(|p| p.extension().is_some_and(|e| e == "toml"))
         .collect();
     tomls.sort();
-    assert!(!tomls.is_empty(), "no corpus files found");
+    assert_eq!(tomls.len(), CASES, "corpus case count");
+    let mut failures = Vec::new();
     for toml_path in tomls {
         let stem = toml_path
             .file_stem()
             .expect("stem")
             .to_string_lossy()
             .to_string();
-        let expect_path = dir.join(format!("{stem}.expect"));
         let src = fs::read_to_string(&toml_path).expect("read toml");
-        let expect = fs::read_to_string(&expect_path)
+        let expect = fs::read_to_string(dir.join(format!("{stem}.expect")))
             .unwrap_or_else(|_| panic!("missing .expect for {stem}"))
             .trim()
             .to_string();
-        let result = setu_manifest::Manifest::parse(&src);
-        if expect == "ok" {
-            match result {
-                Ok(_) => {}
-                Err(errs) => panic!("{stem}: expected ok, got errors: {errs:?}"),
+        let actual = match setu_manifest::Manifest::parse(&src) {
+            Ok(m) => {
+                // Stored manifests are JSON: they must read back.
+                let json = serde_json::to_value(&m).expect("manifest serializes");
+                let back: setu_manifest::Manifest =
+                    serde_json::from_value(json).expect("stored manifest reads back");
+                assert_eq!(back.app.id, m.app.id);
+                "ok".to_string()
             }
-        } else {
-            match result {
-                Ok(_) => panic!("{stem}: expected error {expect:?}, got ok"),
-                Err(errs) => {
-                    assert_eq!(
-                        errs.len(),
-                        1,
-                        "{stem}: expected exactly one error line, got {errs:?}"
-                    );
-                    let actual = format!("error: {}", errs[0]);
-                    assert_eq!(actual, expect, "{stem}: error mismatch");
-                }
-            }
+            Err(errs) if errs.len() == 1 => format!("error: {}", errs[0]),
+            Err(errs) => format!("{} errors: {errs:?}", errs.len()),
+        };
+        if actual != expect {
+            failures.push(format!("{stem}:\n  expected {expect}\n  actual   {actual}"));
         }
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// `apps/hello/manifest.toml` is a template the e2e renders: rendered with
+/// placeholder values it must validate under the current schema.
+#[test]
+fn hello_template_renders_valid() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/hello/manifest.toml");
+    let src = fs::read_to_string(path)
+        .expect("read hello template")
+        .replace("__VERSION__", "0.1.0")
+        .replace("__HELLO_NAME__", "hello")
+        .replace("__EXTRA_ENV__", "HELLO_FAIL = { value = \"1\" }")
+        .replace("__SHA256__", &"a".repeat(64))
+        .replace("__URL__", "http://127.0.0.1:1/hello-0.1.0.tar.gz");
+    let manifest = setu_manifest::Manifest::parse(&src).expect("hello template validates");
+    assert!(manifest.env.contains_key("HELLO_BIND"));
 }

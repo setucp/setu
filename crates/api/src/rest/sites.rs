@@ -217,6 +217,15 @@ fn stored_env(site: &setu_db::Site) -> Vec<StoredVar> {
         .collect()
 }
 
+/// Open one stored env value (`v1:` or `plain:`); anything else is
+/// corrupt storage and surfaces as `internal`.
+fn open_stored(sealer: &setu_common::Sealer, value: &str) -> Result<String, AppError> {
+    sealer.open(value).map_err(|e| {
+        tracing::error!(error = %e, "stored env failed to open");
+        AppError::internal()
+    })
+}
+
 /// Load the validated manifest struct for an app version. Stored
 /// manifests were validated at publish; a corrupt row is `internal`.
 fn load_manifest(version: &setu_db::AppVersion) -> Result<setu_manifest::Manifest, AppError> {
@@ -403,12 +412,11 @@ pub async fn create(
     if name.is_empty() {
         return Err(AppError::validation("site name must not be empty"));
     }
-    let domain = body.domain.trim().to_lowercase();
-    if domain.is_empty() || domain.contains(char::is_whitespace) || !domain.contains('.') {
-        return Err(AppError::validation(
-            "domain must be a bare hostname like example.com",
-        ));
-    }
+    let domain = setu_common::domain::normalise(&body.domain).map_err(|e| {
+        AppError::validation(format!(
+            "{e}: domain must be a bare hostname like example.com"
+        ))
+    })?;
     if !body.owner_email.contains('@') {
         return Err(AppError::validation("owner_email must contain @"));
     }
@@ -434,7 +442,7 @@ pub async fn create(
             }
         })?;
     let manifest = load_manifest(&app_version)?;
-    if matches!(manifest.run, setu_manifest::Run::Image { .. }) {
+    if manifest.run.is_image() {
         return Err(AppError::validation(
             "image runtime not available in this version",
         ));
@@ -499,7 +507,7 @@ pub async fn create(
             .map(|v| {
                 serde_json::json!({
                     "name": v.name,
-                    "value": if v.secret { state.sealer.seal(&v.value) } else { v.value.clone() },
+                    "value": state.sealer.store(&v.value, v.secret),
                     "secret": v.secret,
                     "once": v.once,
                 })
@@ -557,18 +565,12 @@ pub async fn create(
         }
     };
 
-    // Real names now that the id exists: `site_<short>` and the
-    // data dir under the control plane's data dir.
+    // Real names now that the id exists: `site_<short>` and the agent's
+    // fixed site root (Ruling R47/R48: never derived from the control
+    // plane's own `data_dir`; agents derive paths themselves from rev3 WS5).
     let short = setu_common::short_id(&created.id).to_lowercase();
     let db_name = format!("site_{short}");
-    let data_dir = state
-        .config
-        .data_dir
-        .join("sites")
-        .join(&created.id)
-        .join("data")
-        .to_string_lossy()
-        .into_owned();
+    let data_dir = format!("/srv/setu/sites/{}/data", created.id);
     sqlx::query("UPDATE sites SET db_name = $2, data_dir = $3 WHERE id = $1")
         .bind(&created.id)
         .bind(&db_name)
@@ -800,7 +802,7 @@ pub async fn update(
             }
         })?;
     let manifest = load_manifest(&target)?;
-    if matches!(manifest.run, setu_manifest::Run::Image { .. }) {
+    if manifest.run.is_image() {
         return Err(AppError::validation(
             "image runtime not available in this version",
         ));
@@ -959,23 +961,24 @@ pub async fn env_get(
 ) -> Result<impl IntoResponse, AppError> {
     require_role(&session, &state.db, Role::Viewer).await?;
     let site = state.db.sites().get(&id).await?;
-    Ok(Json(EnvGetOut {
-        env: stored_env(&site)
-            .into_iter()
-            .map(|v| EnvEntryOut {
-                name: v.name,
+    let env = stored_env(&site)
+        .into_iter()
+        .map(|v| {
+            Ok(EnvEntryOut {
                 value: if v.secret {
                     MASKED_VALUE.to_string()
                 } else {
-                    v.value
+                    open_stored(&state.sealer, &v.value)?
                 },
+                name: v.name,
                 masked: v.secret,
                 secret: v.secret,
                 once: v.once,
                 has_value: true,
             })
-            .collect(),
-    }))
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+    Ok(Json(EnvGetOut { env }))
 }
 
 /// Update non-generated env vars (operator and above): only manifest
@@ -1059,14 +1062,7 @@ pub async fn env_put(
             let secret = secrets.get(&v.name).copied().unwrap_or(v.secret);
             merged.push((v.name.clone(), new_value.clone(), secret, v.once));
         } else {
-            let plain = if v.secret {
-                state.sealer.open(&v.value).map_err(|e| {
-                    tracing::error!(error = %e, "stored env failed to open");
-                    AppError::internal()
-                })?
-            } else {
-                v.value.clone()
-            };
+            let plain = open_stored(&state.sealer, &v.value)?;
             merged.push((v.name.clone(), plain, v.secret, v.once));
         }
     }
@@ -1093,7 +1089,7 @@ pub async fn env_put(
             .map(|(name, value, secret, once)| {
                 serde_json::json!({
                     "name": name,
-                    "value": if *secret { state.sealer.seal(value) } else { value.clone() },
+                    "value": state.sealer.store(value, *secret),
                     "secret": secret,
                     "once": once,
                 })
@@ -1165,20 +1161,12 @@ fn env_site_spec(
         || std::path::PathBuf::from(format!("/srv/setu/sites/{}", site.id)),
         std::path::PathBuf::from,
     );
-    let (exec, args) = match &manifest.run {
-        setu_manifest::Run::Binary { binary } => binary
-            .targets
-            .get(&setu_manifest::Target::X86_64Linux)
-            .map(|t| {
-                (
-                    site_dir.join("bin").join("current").join(&t.exec),
-                    binary.args.clone(),
-                )
-            })
-            .unwrap_or((site_dir.join("bin").join("current").join("app"), Vec::new())),
-        setu_manifest::Run::Image { .. } => {
-            (site_dir.join("bin").join("current").join("app"), Vec::new())
-        }
+    let (exec, args) = match manifest.run.target(setu_manifest::Target::X86_64Linux) {
+        Some(t) => (
+            site_dir.join("bin").join("current").join(&t.exec),
+            manifest.run.args.clone(),
+        ),
+        None => (site_dir.join("bin").join("current").join("app"), Vec::new()),
     };
     setu_proto::SiteSpec {
         site_id: site.id.clone(),

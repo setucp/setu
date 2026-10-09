@@ -24,14 +24,13 @@ name = "Hello"
 version = "{version}"
 homepage = "https://example.com"
 health = "/healthz"
-port_env = "PORT"
 admin_path = "/"
 
 [run]
 kind = "binary"
+args = ["serve"]
 
 [run.binary]
-args = ["serve"]
 "x86_64-linux" = {{ url = "https://example.com/hello-{version}.tar.gz", sha256 = "{SHA256}", exec = "hello" }}
 
 [needs]
@@ -68,7 +67,6 @@ name = "Imgapp"
 version = "0.3.0"
 homepage = "https://example.com"
 health = "/healthz"
-port_env = "PORT"
 admin_path = "/"
 
 [run]

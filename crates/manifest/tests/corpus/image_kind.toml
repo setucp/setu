@@ -6,20 +6,26 @@ name = "Hello"
 version = "0.1.0"
 homepage = "https://example.com"
 health = "/healthz"
-port_env = "PORT"
 admin_path = "/"
+startup_grace_s = 30
 
 [run]
 kind = "image"
+args = ["serve"]
 
 [run.image]
 image = "ghcr.io/example/hello:0.1.0"
 
 [needs]
-dirs = []
+postgres = ">=16"
+dirs = ["notes"]
 
 [env]
-HELLO_PORT = { from = "port" }
+HELLO_BIND = { from = "bind_addr" }
+DATABASE_URL = { from = "postgres_url" }
+HELLO_NOTES_DIR = { from = "dir", dir = "notes" }
+HELLO_NAME = { prompt = "Display name" }
+HELLO_TOKEN = { generate = "hex32", secret = true }
 
 [limits.default]
 memory_mb = 256
@@ -27,7 +33,8 @@ cpu_percent = 50
 disk_mb = 1024
 
 [backup]
-postgres = false
+postgres = true
+dirs = ["notes"]
 
 [update]
 strategy = "replace"

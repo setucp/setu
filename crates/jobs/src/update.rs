@@ -1,8 +1,7 @@
 //! Update state machine (spec §5, strategy `replace`).
 //!
-//! Named steps: `validate`, `backup` (pre-update), `install`, `stop`,
-//! `switch_version`, `start`, `health`, `finish` (plus `run_command`
-//! instead of install→start for strategy `command`).
+//! Named steps: `validate`, `backup` (pre-update), `install`,
+//! `write_env`, `stop`, `switch_version`, `start`, `health`, `finish`.
 //!
 //! - The target manifest is loaded and image-rejected BEFORE anything:
 //!   no status change, no backup row, no agent call.
@@ -11,22 +10,20 @@
 //! - Any failure at or after `stop` rolls back: `SwitchVersion(old)` +
 //!   `Start`, site back to `running` on the old version, error contains
 //!   `rollback`.
-//! - Strategy `command` runs the manifest's command as a `Restart`
-//!   followed by `Health` (Ruling: proto has no generic exec command;
-//!   the agent-side detail is deferred to the Task 10 handler). No
-//!   rollback beyond what the app does itself: failures there mark the
-//!   site `failed`.
+//! - The env is `setu_manifest::merge(stored, new manifest)`: generated
+//!   and prompt values kept, `value`/`from` re-resolved, `once` values
+//!   never re-emitted (they stay sealed in storage for reveal).
 
 use std::path::PathBuf;
 
 use setu_common::{AppError, ErrorCode};
 use setu_db::Site;
-use setu_manifest::{Manifest, Update};
+use setu_manifest::{EnvSource, EnvSpec, Manifest};
 use setu_proto::Command;
 
 use crate::{
-    build_site, call_agent, fail, job_prompts, load_manifest, log_step, merge_update_env,
-    require_ok, sealed_env, stored_plaintext, to_proto_envs, JobCtx,
+    build_site, call_agent, fail, job_prompts, load_manifest, log_step, require_ok, resolve_error,
+    resolve_input, sealed_env, stored_plaintext, to_proto_envs, JobCtx,
 };
 
 /// Update the site to `to_version`.
@@ -42,7 +39,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
         Ok(m) => m,
         Err(e) => return Err(fail(ctx, site_id, "validate", e).await),
     };
-    if matches!(new_manifest.run, setu_manifest::Run::Image { .. }) {
+    if new_manifest.run.is_image() {
         return Err(AppError::validation(
             "image runtime not available in this version",
         ));
@@ -80,19 +77,53 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
         Ok(m) => m,
         Err(e) => return Err(fail(ctx, site_id, "validate", e).await),
     };
-    let merged = merge_update_env(&new_manifest, &new_built.env_manifest, &current);
-    let persistent: Vec<setu_manifest::EnvVar> =
-        merged.iter().filter(|v| !v.once).cloned().collect();
-    let has_once = persistent.len() != merged.len();
-    let current_proto = to_proto_envs(
-        &current
+    let existing: Vec<setu_manifest::EnvVar> = current
+        .iter()
+        .map(|(name, (value, secret, once))| setu_manifest::EnvVar {
+            name: name.clone(),
+            value: value.clone(),
+            secret: *secret,
+            once: *once,
+        })
+        .collect();
+    // The role password was minted once at provision and lives in
+    // Postgres: re-resolve `postgres_url` from the stored URL, never a
+    // fresh password (that would desynchronise the file from the role).
+    let db_url = new_manifest
+        .env
+        .iter()
+        .filter(|(_, spec)| matches!(spec, EnvSpec::From(f) if f.from == EnvSource::PostgresUrl))
+        .find_map(|(name, _)| current.get(name).map(|(v, _, _)| v.clone()))
+        .or_else(|| {
+            new_built
+                .env_manifest
+                .iter()
+                .find(|v| {
+                    matches!(new_manifest.env.get(&v.name),
+                        Some(EnvSpec::From(f)) if f.from == EnvSource::PostgresUrl)
+                })
+                .map(|v| v.value.clone())
+        })
+        .unwrap_or_default();
+    let mut input = resolve_input(&site, db_url, &prompts);
+    let merged = match setu_manifest::merge(&existing, &new_manifest, &mut input) {
+        Ok(m) => m,
+        Err(e) => return Err(fail(ctx, site_id, "validate", resolve_error(e)).await),
+    };
+    // Storage keeps the sealed `once` values the merge never re-emits.
+    let mut stored_after = merged.clone();
+    stored_after.extend(
+        existing
             .iter()
-            .map(|(name, (value, secret, once))| setu_manifest::EnvVar {
-                name: name.clone(),
-                value: value.clone(),
-                secret: *secret,
-                once: *once,
-            })
+            .filter(|v| v.once && !merged.iter().any(|m| m.name == v.name))
+            .cloned(),
+    );
+    // Rollback restores the previous file, without `once` values.
+    let current_proto = to_proto_envs(
+        &existing
+            .iter()
+            .filter(|v| !v.once)
+            .cloned()
             .collect::<Vec<_>>(),
     );
 
@@ -105,10 +136,6 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
         return Err(e);
     }
     log_step(ctx, "backup", true, None).await;
-
-    if let Update::Command { command: _ } = &new_manifest.update {
-        return run_command_strategy(ctx, &site, &server_id, to_version).await;
-    }
 
     // Install beside the old version BEFORE stopping: checksum (or any
     // install) failure leaves the old site untouched and `running`.
@@ -214,7 +241,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
             site_id: site.id.clone(),
             port: site.port as u16,
             path: new_manifest.app.health.clone(),
-            timeout_s: 90,
+            timeout_s: u64::from(new_manifest.app.startup_grace_s),
         },
     )
     .await
@@ -232,98 +259,12 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
     }
     log_step(ctx, "health", true, None).await;
 
-    // Mirror provision: `once` secrets leave the env file after the new
-    // version's first healthy boot (file cleanup only — the running
-    // process already loaded them, so no restart). A cleanup failure is
-    // recorded but does not fail the update.
-    if has_once {
-        match write_env_file(
-            ctx,
-            &server_id,
-            &new_built.spec,
-            &to_proto_envs(&persistent),
-        )
-        .await
-        {
-            Ok(()) => log_step(ctx, "write_env_cleanup", true, None).await,
-            Err(e) => log_step(ctx, "write_env_cleanup", false, Some(&e.message)).await,
-        }
-    }
-
-    let sealed = sealed_env(&ctx.sealer, &merged);
+    let sealed = sealed_env(&ctx.sealer, &stored_after);
     if let Err(e) = ctx.db.sites().set_env(site_id, &sealed).await {
         return Err(fail(ctx, site_id, "finish", e).await);
     }
     ctx.db.sites().set_version(site_id, to_version).await?;
     match ctx.db.sites().set_status(site_id, "running", None).await {
-        Ok(_) => {
-            log_step(ctx, "finish", true, None).await;
-            Ok(())
-        }
-        Err(e) => {
-            log_step(ctx, "finish", false, Some(&e.message.clone())).await;
-            Err(e)
-        }
-    }
-}
-
-/// Strategy `command`: the app updates itself; we restart (which is how
-/// the command takes effect in phase 1) and health-check. Failures mark
-/// the site `failed` — there is nothing to roll back to.
-async fn run_command_strategy(
-    ctx: &JobCtx,
-    site: &Site,
-    server_id: &str,
-    to_version: &str,
-) -> Result<(), AppError> {
-    if let Err(e) = update_call(
-        ctx,
-        "run_command",
-        server_id,
-        Command::Restart {
-            site_id: site.id.clone(),
-        },
-    )
-    .await
-    {
-        let msg = e.message.clone();
-        log_step(ctx, "run_command", false, Some(&msg)).await;
-        let _ = ctx
-            .db
-            .sites()
-            .set_status(&site.id, "failed", Some("run_command"))
-            .await;
-        return Err(e);
-    }
-    log_step(ctx, "run_command", true, None).await;
-
-    let manifest = load_manifest(&ctx.db, &site.app_id, to_version).await?;
-    if let Err(e) = update_call(
-        ctx,
-        "health",
-        server_id,
-        Command::Health {
-            site_id: site.id.clone(),
-            port: site.port as u16,
-            path: manifest.app.health.clone(),
-            timeout_s: 90,
-        },
-    )
-    .await
-    {
-        let msg = e.message.clone();
-        log_step(ctx, "health", false, Some(&msg)).await;
-        let _ = ctx
-            .db
-            .sites()
-            .set_status(&site.id, "failed", Some("health"))
-            .await;
-        return Err(e);
-    }
-    log_step(ctx, "health", true, None).await;
-
-    ctx.db.sites().set_version(&site.id, to_version).await?;
-    match ctx.db.sites().set_status(&site.id, "running", None).await {
         Ok(_) => {
             log_step(ctx, "finish", true, None).await;
             Ok(())

@@ -4,7 +4,8 @@
 //! - `GET /healthz` runs a Postgres `SELECT 1` on `DATABASE_URL` (skipped
 //!   with 200 when `DATABASE_URL` is unset); `HELLO_FAIL=1` forces a 500
 //!   so the e2e can exercise update rollback.
-//! - Listens on `PORT` (default 3000).
+//! - Listens on `HELLO_BIND` (`127.0.0.1:<port>`, from the manifest's
+//!   `from = "bind_addr"`); without it, on `0.0.0.0:$PORT` (default 3000).
 //!
 //! Error bodies are static strings: connection errors can echo hostnames,
 //! and env values must never reach logs or responses.
@@ -38,11 +39,13 @@ fn greeting(name: &str) -> String {
     format!("hello from {name}")
 }
 
-fn listen_port() -> u16 {
-    std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(3000)
+/// `HELLO_BIND` when it parses, else `0.0.0.0:$PORT` (pure, unit-tested).
+fn listen_addr(bind: Option<&str>, port: Option<&str>) -> SocketAddr {
+    if let Some(addr) = bind.and_then(|b| b.parse().ok()) {
+        return addr;
+    }
+    let port = port.and_then(|p| p.parse().ok()).unwrap_or(3000);
+    SocketAddr::from(([0, 0, 0, 0], port))
 }
 
 async fn index(State(cfg): State<AppConfig>) -> String {
@@ -87,7 +90,10 @@ fn router(cfg: AppConfig) -> Router {
 #[tokio::main]
 async fn main() {
     let cfg = AppConfig::load();
-    let addr = SocketAddr::from(([0, 0, 0, 0], listen_port()));
+    let addr = listen_addr(
+        std::env::var("HELLO_BIND").ok().as_deref(),
+        std::env::var("PORT").ok().as_deref(),
+    );
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("bind listen port");
@@ -99,6 +105,19 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listen_addr_prefers_hello_bind() {
+        assert_eq!(
+            listen_addr(Some("127.0.0.1:20001"), Some("9")),
+            "127.0.0.1:20001".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(
+            listen_addr(None, Some("4000")),
+            "0.0.0.0:4000".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(listen_addr(Some("nope"), None).port(), 3000);
+    }
 
     #[test]
     fn greeting_names_the_site() {

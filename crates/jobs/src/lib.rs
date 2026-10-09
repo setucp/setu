@@ -20,7 +20,7 @@ use std::time::Duration;
 use rand::SeedableRng;
 use setu_common::{AppError, ErrorCode, Sealer};
 use setu_db::{Db, Plan, Site};
-use setu_manifest::{Manifest, ResolveInput, Run, Target};
+use setu_manifest::{Manifest, ResolveInput, Target};
 pub mod agent;
 pub mod backup;
 pub mod delete;
@@ -292,18 +292,16 @@ pub(crate) fn build_spec(
     site: &Site,
     manifest: &Manifest,
 ) -> Result<setu_proto::SiteSpec, AppError> {
-    let (binary_exec, args) = match &manifest.run {
-        Run::Binary { binary: run } => run
-            .targets
-            .get(&Target::X86_64Linux)
-            .map(|target| (target.exec.clone(), run.args.clone()))
-            .ok_or_else(|| AppError::validation("run.binary must declare x86_64-linux"))?,
-        Run::Image { .. } => {
-            return Err(AppError::validation(
-                "image runtime not available in this version",
-            ));
-        }
-    };
+    if manifest.run.is_image() {
+        return Err(AppError::validation(
+            "image runtime not available in this version",
+        ));
+    }
+    let target = manifest
+        .run
+        .target(Target::X86_64Linux)
+        .ok_or_else(|| AppError::validation("run.binary must declare x86_64-linux"))?;
+    let (binary_exec, args) = (target.exec.clone(), manifest.run.args.clone());
     let (site_dir, data_dir, run_dir, env_file) = site_paths(site);
     Ok(setu_proto::SiteSpec {
         site_id: site.id.clone(),
@@ -323,22 +321,8 @@ pub(crate) fn build_spec(
         limits: plan_limits(plan, manifest),
         health_path: manifest.app.health.clone(),
         binary: Some(setu_proto::BinaryRef {
-            url: match &manifest.run {
-                Run::Binary { binary: run } => run
-                    .targets
-                    .get(&Target::X86_64Linux)
-                    .map(|t| t.url.clone())
-                    .unwrap_or_default(),
-                Run::Image { .. } => String::new(),
-            },
-            sha256: match &manifest.run {
-                Run::Binary { binary: run } => run
-                    .targets
-                    .get(&Target::X86_64Linux)
-                    .map(|t| t.sha256.clone())
-                    .unwrap_or_default(),
-                Run::Image { .. } => String::new(),
-            },
+            url: target.url.clone(),
+            sha256: target.sha256.clone(),
             exec: binary_exec,
             version: manifest.app.version.clone(),
         }),
@@ -356,40 +340,24 @@ pub(crate) fn build_site(
     manifest: &Manifest,
     prompts: &BTreeMap<String, String>,
 ) -> Result<BuiltSite, AppError> {
-    let (binary, args) = match &manifest.run {
-        Run::Binary { binary: run } => run
-            .targets
-            .get(&Target::X86_64Linux)
-            .map(|target| (target, run.args.clone()))
-            .ok_or_else(|| AppError::validation("run.binary must declare x86_64-linux"))?,
-        Run::Image { .. } => {
-            return Err(AppError::validation(
-                "image runtime not available in this version",
-            ));
-        }
-    };
+    if manifest.run.is_image() {
+        return Err(AppError::validation(
+            "image runtime not available in this version",
+        ));
+    }
+    let binary = manifest
+        .run
+        .target(Target::X86_64Linux)
+        .ok_or_else(|| AppError::validation("run.binary must declare x86_64-linux"))?;
+    let args = manifest.run.args.clone();
     let (site_dir, data_dir, run_dir, env_file) = site_paths(site);
     let db_password = random_db_password();
     let db_url = format!(
         "postgres://{}:{}@127.0.0.1:5432/{}",
         site.db_name, db_password, site.db_name
     );
-    let mut input = ResolveInput {
-        site_url: format!("https://{}", site.domain),
-        owner_email: site.owner_email.clone(),
-        port: site.port as u16,
-        run_dir: run_dir.clone(),
-        data_dir: data_dir.clone(),
-        db_url,
-        prompts: prompts.clone(),
-        rng: rand::rngs::StdRng::from_os_rng(),
-    };
-    let env_manifest = setu_manifest::resolve_env(manifest, &mut input).map_err(|e| match &e {
-        setu_manifest::ResolveError::MissingPrompt(_) => {
-            AppError::validation(format!("prompt values missing: {e}"))
-        }
-        setu_manifest::ResolveError::Invalid(_, _) => AppError::validation(e.to_string()),
-    })?;
+    let mut input = resolve_input(site, db_url, prompts);
+    let env_manifest = setu_manifest::resolve_env(manifest, &mut input).map_err(resolve_error)?;
     let spec = setu_proto::SiteSpec {
         site_id: site.id.clone(),
         short_id: setu_common::short_id(&site.id).to_lowercase(),
@@ -419,6 +387,34 @@ pub(crate) fn build_site(
         env_manifest,
         db_password,
     })
+}
+
+/// Resolution inputs for `site` (paths from the stored data dir).
+pub(crate) fn resolve_input(
+    site: &Site,
+    db_url: String,
+    prompts: &BTreeMap<String, String>,
+) -> ResolveInput {
+    let (_, data_dir, run_dir, _) = site_paths(site);
+    ResolveInput {
+        site_url: format!("https://{}", site.domain),
+        owner_email: site.owner_email.clone(),
+        port: site.port as u16,
+        run_dir,
+        data_dir,
+        db_url,
+        prompts: prompts.clone(),
+        rng: rand::rngs::StdRng::from_os_rng(),
+    }
+}
+
+pub(crate) fn resolve_error(e: setu_manifest::ResolveError) -> AppError {
+    match &e {
+        setu_manifest::ResolveError::MissingPrompt(_) => {
+            AppError::validation(format!("prompt values missing: {e}"))
+        }
+        setu_manifest::ResolveError::Invalid(_, _) => AppError::validation(e.to_string()),
+    }
 }
 
 /// Minimal spec when the manifest is unavailable (delete path): no binary,
@@ -464,9 +460,9 @@ pub(crate) fn to_proto_envs(vars: &[setu_manifest::EnvVar]) -> Vec<setu_proto::E
     vars.iter().map(to_proto_env).collect()
 }
 
-/// Plaintext of the stored sealed env: name → (value, secret, once).
-/// Unseals secret values with the panel key; corrupt storage is
-/// `internal` (ciphertext never surfaces to callers).
+/// Plaintext of the stored env: name → (value, secret, once). Every
+/// stored value is prefixed (`v1:` sealed, `plain:` not secret); corrupt
+/// or unprefixed storage is `internal` (ciphertext never surfaces).
 pub(crate) fn stored_plaintext(
     site: &Site,
     sealer: &Sealer,
@@ -486,53 +482,13 @@ pub(crate) fn stored_plaintext(
             .to_string();
         let secret = v.get("secret").and_then(|b| b.as_bool()).unwrap_or(false);
         let once = v.get("once").and_then(|b| b.as_bool()).unwrap_or(false);
-        let plain = if secret {
-            sealer.open(&value).map_err(|e| {
-                tracing::error!(error = %e, "stored env failed to open");
-                AppError::internal()
-            })?
-        } else {
-            value
-        };
+        let plain = sealer.open(&value).map_err(|e| {
+            tracing::error!(error = %e, "stored env failed to open");
+            AppError::internal()
+        })?;
         out.insert(name.to_string(), (plain, secret, once));
     }
     Ok(out)
-}
-
-/// Merge fresh resolution with stored values for update: `Generate` and
-/// `Prompt` entries keep their stored plaintext (an update must never
-/// rotate operator or app secrets), as does `from = "postgres_url"` —
-/// the role password was minted once at provision and lives in Postgres
-/// (`build_site` mints a fresh random one per call, which would
-/// desynchronise the file from the role and break DB auth). `Value`
-/// entries take the fresh resolution (author defaults refresh); every
-/// other `From` source re-derives deterministically. Names new to
-/// storage keep their fresh values.
-pub(crate) fn merge_update_env(
-    manifest: &Manifest,
-    fresh: &[setu_manifest::EnvVar],
-    stored: &BTreeMap<String, (String, bool, bool)>,
-) -> Vec<setu_manifest::EnvVar> {
-    use setu_manifest::{EnvSource, EnvSpec};
-    fresh
-        .iter()
-        .map(|v| {
-            let sticky = match manifest.env.get(&v.name) {
-                Some(EnvSpec::Generate(_)) | Some(EnvSpec::Prompt(_)) => true,
-                Some(EnvSpec::From(f)) => matches!(f.from, EnvSource::PostgresUrl),
-                _ => false,
-            };
-            match (sticky, stored.get(&v.name)) {
-                (true, Some((val, secret, once))) => setu_manifest::EnvVar {
-                    name: v.name.clone(),
-                    value: val.clone(),
-                    secret: *secret,
-                    once: *once,
-                },
-                _ => v.clone(),
-            }
-        })
-        .collect()
 }
 
 /// Everything before the first agent call: manifest + plan + capacity
@@ -549,7 +505,7 @@ pub(crate) struct Prep {
 
 pub(crate) async fn prepare_site(ctx: &JobCtx, site: &Site) -> Result<Prep, AppError> {
     let manifest = load_manifest(&ctx.db, &site.app_id, &site.app_version).await?;
-    if matches!(manifest.run, Run::Image { .. }) {
+    if manifest.run.is_image() {
         return Err(AppError::validation(
             "image runtime not available in this version",
         ));
@@ -613,15 +569,15 @@ pub(crate) async fn job_prompts(ctx: &JobCtx) -> BTreeMap<String, String> {
     out
 }
 
-/// Sealed DB copy of resolved env: secret values sealed with the panel
-/// key, `secret`/`once` flags kept for the UI. Plain values stay plain.
+/// Stored DB copy of resolved env: secret values sealed (`v1:`), the rest
+/// `plain:`, `secret`/`once` flags kept for the UI.
 pub(crate) fn sealed_env(sealer: &Sealer, vars: &[setu_manifest::EnvVar]) -> serde_json::Value {
     let arr: Vec<serde_json::Value> = vars
         .iter()
         .map(|v| {
             serde_json::json!({
                 "name": v.name,
-                "value": if v.secret { sealer.seal(&v.value) } else { v.value.clone() },
+                "value": sealer.store(&v.value, v.secret),
                 "secret": v.secret,
                 "once": v.once,
             })

@@ -1,0 +1,43 @@
+schema = 1
+
+[app]
+id = "hello"
+name = "Hello"
+version = "not-a-version"
+homepage = "https://example.com"
+health = "/healthz"
+admin_path = "/"
+startup_grace_s = 30
+
+[run]
+kind = "binary"
+workdir = "exec_dir"
+args = ["serve"]
+
+[run.binary."x86_64-linux"]
+url = "https://example.com/hello-0.1.0-x86_64-unknown-linux-musl.tar.gz"
+sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+exec = "hello-0.1.0/hello"
+
+[needs]
+postgres = ">=16"
+dirs = ["notes"]
+
+[env]
+HELLO_BIND = { from = "bind_addr" }
+DATABASE_URL = { from = "postgres_url" }
+HELLO_NOTES_DIR = { from = "dir", dir = "notes" }
+HELLO_NAME = { prompt = "Display name" }
+HELLO_TOKEN = { generate = "hex32", secret = true }
+
+[limits.default]
+memory_mb = 256
+cpu_percent = 50
+disk_mb = 1024
+
+[backup]
+postgres = true
+dirs = ["notes"]
+
+[update]
+strategy = "replace"

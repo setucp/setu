@@ -1,1 +1,1 @@
-error: env.VYASA_MEDIA_DIR references dir "media" not in needs.dirs line 23
+error: env.HELLO_NOTES_DIR references dir "media" not in needs.dirs line 29

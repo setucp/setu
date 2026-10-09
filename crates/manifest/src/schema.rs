@@ -29,71 +29,72 @@ pub struct App {
     pub version: String,
     pub homepage: String,
     pub health: String,
-    pub port_env: String,
     pub admin_path: String,
+    /// Seconds health may fail after a start before the start counts as
+    /// failed (spec §2).
+    #[serde(default = "default_startup_grace_s")]
+    pub startup_grace_s: u32,
 }
 
-/// `[run]` section: binary (phase 1) or image (phase 2, parsed but
-/// rejected later at provisioning).
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind")]
-pub enum Run {
-    #[serde(rename = "binary")]
-    Binary {
-        #[serde(rename = "binary")]
-        binary: BinaryRun,
-    },
-    #[serde(rename = "image")]
-    Image {
-        #[serde(rename = "image")]
-        image: ImageRun,
-    },
+fn default_startup_grace_s() -> u32 {
+    90
 }
 
-impl<'de> Deserialize<'de> for Run {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        // Deserialize nested tables directly (not via `toml::Value`) so
-        // inner errors keep their spans and `toml_error_to_manifest_error`
-        // can report `[run.binary]` / `[run.image]` lines instead of `[run]`.
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Helper {
-            kind: String,
-            #[serde(default)]
-            binary: Option<BinaryRun>,
-            #[serde(default)]
-            image: Option<ImageRun>,
-        }
+/// `[run]` section. `kind = "binary"` needs `[run.binary."x86_64-linux"]`;
+/// `kind = "image"` (phase 2) is parsed and rejected at provisioning.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Run {
+    pub kind: RunKind,
+    #[serde(default)]
+    pub workdir: Workdir,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<BinaryRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageRun>,
+}
 
-        let helper = Helper::deserialize(deserializer)?;
-        match helper.kind.as_str() {
-            "binary" => {
-                let binary = helper
-                    .binary
-                    .ok_or_else(|| serde::de::Error::missing_field("binary"))?;
-                Ok(Run::Binary { binary })
-            }
-            "image" => {
-                let image = helper
-                    .image
-                    .ok_or_else(|| serde::de::Error::missing_field("image"))?;
-                Ok(Run::Image { image })
-            }
-            other => Err(serde::de::Error::unknown_variant(
-                other,
-                &["binary", "image"],
-            )),
+impl Run {
+    /// Is this an image manifest (not runnable in phase 1)?
+    pub fn is_image(&self) -> bool {
+        self.kind == RunKind::Image
+    }
+
+    /// The artefact for `target`, when this is a binary manifest.
+    pub fn target(&self, target: Target) -> Option<&BinaryTarget> {
+        match self.kind {
+            RunKind::Binary => self.binary.as_ref()?.targets.get(&target),
+            RunKind::Image => None,
         }
     }
 }
 
-/// Body of `[run.binary]`: dynamic target keys plus `args`.
+/// `run.kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunKind {
+    Binary,
+    Image,
+}
+
+/// `run.workdir`: the unit's working directory.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Workdir {
+    /// The directory holding `exec` inside `bin/current`.
+    #[default]
+    ExecDir,
+    /// `bin/current` itself.
+    Bin,
+    /// The site's `data/` directory.
+    Data,
+}
+
+/// Body of `[run.binary]`: one table per target.
 #[derive(Debug, Clone)]
 pub struct BinaryRun {
-    pub args: Vec<String>,
     pub targets: BTreeMap<Target, BinaryTarget>,
 }
 
@@ -103,8 +104,7 @@ impl Serialize for BinaryRun {
         S: serde::Serializer,
     {
         use serde::ser::SerializeMap;
-        let mut map = serializer.serialize_map(Some(self.targets.len() + 1))?;
-        map.serialize_entry("args", &self.args)?;
+        let mut map = serializer.serialize_map(Some(self.targets.len()))?;
         for (target, entry) in &self.targets {
             map.serialize_entry(&target.to_string(), entry)?;
         }
@@ -121,11 +121,7 @@ impl<'de> Deserialize<'de> for BinaryRun {
         // so manifests round-trip through the JSON stored in `app_versions`
         // (the control plane reads them back without TOML). `null` has no
         // TOML spelling, so `toml::Value` cannot represent stored manifests.
-        let mut map = BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
-        let args = match map.remove("args") {
-            Some(value) => Vec::<String>::deserialize(value).map_err(serde::de::Error::custom)?,
-            None => Vec::new(),
-        };
+        let map = BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
         let mut targets = BTreeMap::new();
         for (key, value) in map {
             let target = match key.as_str() {
@@ -134,14 +130,14 @@ impl<'de> Deserialize<'de> for BinaryRun {
                 other => {
                     return Err(serde::de::Error::unknown_field(
                         other,
-                        &["x86_64-linux", "aarch64-linux", "args"],
+                        &["x86_64-linux", "aarch64-linux"],
                     ));
                 }
             };
             let entry = BinaryTarget::deserialize(value).map_err(serde::de::Error::custom)?;
             targets.insert(target, entry);
         }
-        Ok(BinaryRun { args, targets })
+        Ok(BinaryRun { targets })
     }
 }
 
@@ -200,6 +196,7 @@ pub enum EnvSpec {
 }
 
 const FROM_CHOICES: &[&str] = &[
+    "bind_addr",
     "postgres_url",
     "dir",
     "run_dir",
@@ -272,7 +269,7 @@ impl<'de> Deserialize<'de> for EnvSpec {
                 if let Some(s) = v.as_str() {
                     if !FROM_CHOICES.contains(&s) {
                         return Err(D::Error::custom(format!(
-                            "unknown from \"{s}\": expected one of \"postgres_url\", \"dir\", \"run_dir\", \"site_url\", \"owner_email\", \"port\""
+                            "unknown from \"{s}\": expected one of \"bind_addr\", \"postgres_url\", \"dir\", \"run_dir\", \"site_url\", \"owner_email\", \"port\""
                         )));
                     }
                 }
@@ -328,6 +325,9 @@ pub struct FromSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum EnvSource {
+    /// `127.0.0.1:<port>`.
+    #[serde(rename = "bind_addr")]
+    BindAddr,
     #[serde(rename = "postgres_url")]
     PostgresUrl,
     #[serde(rename = "dir")]
@@ -346,6 +346,7 @@ impl EnvSource {
     /// Manifest spelling used in user-facing errors (not Rust variant names).
     pub fn as_str(self) -> &'static str {
         match self {
+            EnvSource::BindAddr => "bind_addr",
             EnvSource::PostgresUrl => "postgres_url",
             EnvSource::Dir => "dir",
             EnvSource::RunDir => "run_dir",
@@ -401,44 +402,31 @@ pub struct Backup {
 }
 
 /// `[update]` section.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "strategy", rename_all = "lowercase")]
-pub enum Update {
-    Replace,
-    Command { command: String },
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Update {
+    pub strategy: Strategy,
 }
 
-impl<'de> Deserialize<'de> for Update {
+/// `update.strategy`: `replace` is the only strategy in this version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Strategy {
+    Replace,
+}
+
+impl<'de> Deserialize<'de> for Strategy {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Helper {
-            strategy: String,
-            #[serde(default)]
-            command: Option<String>,
-        }
-
-        let helper = Helper::deserialize(deserializer)?;
-        match helper.strategy.as_str() {
-            "replace" => {
-                if helper.command.is_some() {
-                    return Err(serde::de::Error::unknown_field("command", &["strategy"]));
-                }
-                Ok(Update::Replace)
-            }
-            "command" => {
-                let command = helper
-                    .command
-                    .ok_or_else(|| serde::de::Error::missing_field("command"))?;
-                Ok(Update::Command { command })
-            }
-            other => Err(serde::de::Error::unknown_variant(
-                other,
-                &["replace", "command"],
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "replace" => Ok(Strategy::Replace),
+            "command" => Err(serde::de::Error::custom(
+                "update.strategy \"command\" is not supported in this version",
             )),
+            other => Err(serde::de::Error::unknown_variant(other, &["replace"])),
         }
     }
 }

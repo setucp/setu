@@ -15,14 +15,13 @@ name = "Hello"
 version = "0.1.0"
 homepage = "https://example.com"
 health = "/healthz"
-port_env = "PORT"
 admin_path = "/"
 
 [run]
 kind = "binary"
+args = ["serve"]
 
 [run.binary]
-args = ["serve"]
 "x86_64-linux" = { url = "https://example.com/hello-0.1.0-x86_64.tar.gz", sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", exec = "hello" }
 
 [needs]
