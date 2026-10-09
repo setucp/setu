@@ -10,8 +10,6 @@ Group=setu
 ExecStart=/opt/setu/setu agent run
 Restart=always
 RestartSec=2
-ProtectSystem=full
-ReadWritePaths=/var/lib/setu /etc
 
 [Install]
 WantedBy=multi-user.target

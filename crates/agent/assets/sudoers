@@ -1,3 +1,2 @@
-Defaults:setu !requiretty, env_reset
 setu ALL=(root) NOPASSWD: /opt/setu/setu helper *
 setu ALL=(postgres) NOPASSWD: /usr/bin/psql, /usr/bin/pg_dump, /usr/bin/pg_restore

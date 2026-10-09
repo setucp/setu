@@ -8,11 +8,12 @@ const AGENT_UNIT: &str = include_str!("../assets/setu-agent.service");
 const DROPIN: &str = include_str!("../assets/dropin.conf.tmpl");
 
 #[test]
-fn sudoers_is_exactly_the_three_spec_lines() {
+fn sudoers_is_exactly_the_helper_and_postgres_lines() {
+    // No `Defaults:setu` line (ledger R70): `!requiretty` and `env_reset`
+    // are sudo's defaults already, and sudo-rs rejects `requiretty`.
     assert_eq!(
         SUDOERS,
-        "Defaults:setu !requiretty, env_reset\n\
-         setu ALL=(root) NOPASSWD: /opt/setu/setu helper *\n\
+        "setu ALL=(root) NOPASSWD: /opt/setu/setu helper *\n\
          setu ALL=(postgres) NOPASSWD: /usr/bin/psql, /usr/bin/pg_dump, /usr/bin/pg_restore\n"
     );
 }
@@ -65,9 +66,9 @@ CPUQuota={cpu_percent}%
 
 #[test]
 fn agent_unit_is_golden() {
-    // `ReadWritePaths` adds `/etc` to the spec's `/var/lib/setu`: sudo
-    // children share this unit's mount namespace and the helper writes
-    // drop-ins and runs useradd (ledger R62). No `NoNewPrivileges`: it
+    // No `ProtectSystem=`/`ReadWritePaths=` (ledger R69): sudo children
+    // share this unit's mount namespace and the helper writes under /etc;
+    // file modes already stop the `setu` user. No `NoNewPrivileges`: it
     // would make sudo refuse.
     assert_eq!(
         AGENT_UNIT,
@@ -83,14 +84,14 @@ Group=setu
 ExecStart=/opt/setu/setu agent run
 Restart=always
 RestartSec=2
-ProtectSystem=full
-ReadWritePaths=/var/lib/setu /etc
 
 [Install]
 WantedBy=multi-user.target
 "
     );
     assert!(!AGENT_UNIT.contains("NoNewPrivileges"));
+    assert!(!AGENT_UNIT.contains("ProtectSystem"));
+    assert!(!AGENT_UNIT.contains("ReadWritePaths"));
 }
 
 #[test]

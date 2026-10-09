@@ -550,16 +550,10 @@ mod tests {
                 .any(|l| l.trim_start().starts_with("NoNewPrivileges=")),
             "agent unit must not set NoNewPrivileges"
         );
-        // spec §4: `full` (not `strict`), writable `/var/lib/setu`; `/etc`
-        // stays writable because sudo children share the unit's mount
-        // namespace and the helper writes drop-ins and runs useradd
-        // (ledger R62).
-        assert!(AGENT_UNIT_ASSET
-            .lines()
-            .any(|l| l.trim() == "ProtectSystem=full"));
-        assert!(AGENT_UNIT_ASSET
-            .lines()
-            .any(|l| l.trim() == "ReadWritePaths=/var/lib/setu /etc"));
+        // No mount-namespace hardening (ledger R69): sudo children
+        // share it and the helper writes under /etc; DAC stops `setu`.
+        assert!(!AGENT_UNIT_ASSET.contains("ProtectSystem="));
+        assert!(!AGENT_UNIT_ASSET.contains("ReadWritePaths="));
     }
 
     #[test]

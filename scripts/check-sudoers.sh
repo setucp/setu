@@ -16,14 +16,13 @@ fail() {
 
 [[ -f "${ASSET}" ]] || fail "missing ${ASSET}"
 
-EXPECTED='Defaults:setu !requiretty, env_reset
-setu ALL=(root) NOPASSWD: /opt/setu/setu helper *
+EXPECTED='setu ALL=(root) NOPASSWD: /opt/setu/setu helper *
 setu ALL=(postgres) NOPASSWD: /usr/bin/psql, /usr/bin/pg_dump, /usr/bin/pg_restore'
 [[ "$(cat "${ASSET}")" == "${EXPECTED}" ]] || fail "asset differs from the spec §4 golden text"
 
-# Prefer classic sudo's visudo (Ubuntu 24.04 ships it). Ubuntu >= 25.10
-# defaults to sudo-rs, whose visudo does not know `requiretty`; the
-# classic one stays installed as visudo.ws there.
+# Prefer classic sudo's visudo (Ubuntu 24.04 ships it); Ubuntu >= 25.10
+# defaults to sudo-rs and keeps the classic one as visudo.ws. The asset
+# has no `Defaults` line (ledger R70), so sudo-rs's visudo parses it too.
 VISUDO=""
 for cand in visudo.ws visudo; do
     if command -v "${cand}" >/dev/null 2>&1; then
@@ -35,11 +34,6 @@ if [[ -z "${VISUDO}" ]]; then
     echo "check-sudoers: ok (golden text); SKIPPED visudo -cf: visudo is not installed"
     exit 0
 fi
-if "${VISUDO}" --version 2>&1 | head -1 | grep -q 'visudo-rs'; then
-    echo "check-sudoers: ok (golden text); SKIPPED visudo -cf: only sudo-rs visudo found (no classic sudo); it rejects \`requiretty\`"
-    exit 0
-fi
-
 # visudo may insist on root ownership and 0440: check a copy with those
 # attributes when we can (root), else the 0440 copy as-is.
 TMP="$(mktemp -d)"
