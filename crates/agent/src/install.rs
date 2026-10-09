@@ -38,11 +38,13 @@ pub enum InstallError {
     Step(&'static str, String),
 }
 
-/// Full install: system setup, then join.
+/// Full install: system setup, then join, then start the agent (the
+/// token must exist before first start — no crash-loop).
 pub async fn install(opts: &InstallOpts) -> Result<(), InstallError> {
     require_root()?;
     system_setup().await?;
     join_control_plane(opts).await?;
+    start_agent().await?;
     Ok(())
 }
 
@@ -405,12 +407,21 @@ async fn write_units() -> Result<(), InstallError> {
     std::fs::write("/etc/systemd/system/setu-agent.service", agent_unit)
         .map_err(|e| InstallError::Step("agent unit", e.to_string()))?;
     run("systemctl", &["daemon-reload"], "daemon-reload").await?;
+    // Enable only: the service starts after `join` writes the token
+    // (`install` joins below; a token-less start crash-loops until the
+    // restart lands post-join — found by the e2e).
     run(
         "systemctl",
-        &["enable", "--now", "setu-agent.service"],
+        &["enable", "setu-agent.service"],
         "enable agent",
     )
     .await?;
+    Ok(())
+}
+
+/// Start the agent service now that the token exists (end of install).
+async fn start_agent() -> Result<(), InstallError> {
+    run("systemctl", &["start", "setu-agent.service"], "start agent").await?;
     Ok(())
 }
 
