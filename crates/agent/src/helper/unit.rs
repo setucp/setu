@@ -288,12 +288,27 @@ fn systemctl(args: &[&str]) -> Result<String, HelperError> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// The `systemctl` invocations of one op. A site's desired state must
+/// survive a reboot (spec §9 `survives_container_restart`), so `start`
+/// also enables the instance and `stop` also disables it; `restart`
+/// enables first (it starts a stopped unit too). Ledger R118.
+pub fn op_argv(op: UnitOp, unit: &str) -> Result<Vec<Vec<String>>, HelperError> {
+    let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    Ok(match op {
+        UnitOp::Start => vec![v(&["enable", "--now", unit])],
+        UnitOp::Stop => vec![v(&["disable", "--now", unit])],
+        UnitOp::Restart => vec![v(&["enable", unit]), v(&["restart", unit])],
+        UnitOp::Show => return Err(HelperError::Invalid("op".to_string())),
+    })
+}
+
 impl Systemctl for RealSystemctl {
     fn op(&self, op: UnitOp, unit: &str) -> Result<(), HelperError> {
-        if op == UnitOp::Show {
-            return Err(HelperError::Invalid("op".to_string()));
+        for argv in op_argv(op, unit)? {
+            let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+            systemctl(&args)?;
         }
-        systemctl(&[op.as_str(), unit]).map(|_| ())
+        Ok(())
     }
 
     fn show(&self, unit: &str) -> Result<BTreeMap<String, String>, HelperError> {
@@ -405,6 +420,25 @@ mod tests {
         assert_eq!(quote_arg("say \"hi\"\\"), "\"say \\\"hi\\\"\\\\\"");
         assert_eq!(quote_arg(""), "\"\"");
         assert_eq!(quote_arg(";"), "\";\"");
+    }
+
+    #[test]
+    fn start_and_stop_persist_across_reboot() {
+        let u = "setu-site@abcd1234.service";
+        let line = |op| {
+            op_argv(op, u)
+                .expect("op")
+                .iter()
+                .map(|a| a.join(" "))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(line(UnitOp::Start), vec![format!("enable --now {u}")]);
+        assert_eq!(line(UnitOp::Stop), vec![format!("disable --now {u}")]);
+        assert_eq!(
+            line(UnitOp::Restart),
+            vec![format!("enable {u}"), format!("restart {u}")]
+        );
+        assert!(op_argv(UnitOp::Show, u).is_err());
     }
 
     #[test]
