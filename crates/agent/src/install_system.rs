@@ -106,6 +106,7 @@ pub struct RecordingCommands {
     calls: Arc<Mutex<Vec<String>>>,
     caddy: Option<FakeAdmin>,
     fail_on: Option<String>,
+    answers: Vec<(String, String)>,
 }
 
 impl RecordingCommands {
@@ -122,6 +123,12 @@ impl RecordingCommands {
     /// recorded).
     pub fn failing_on(mut self, needle: &str) -> Self {
         self.fail_on = Some(needle.to_string());
+        self
+    }
+
+    /// Every command whose line contains `needle` prints `stdout`.
+    pub fn answering(mut self, needle: &str, stdout: &str) -> Self {
+        self.answers.push((needle.to_string(), stdout.to_string()));
         self
     }
 
@@ -143,6 +150,11 @@ impl SystemCommands for RecordingCommands {
             }
         }
         let fail = self.fail_on.as_deref().is_some_and(|n| line.contains(n));
+        let answer = self
+            .answers
+            .iter()
+            .find(|(needle, _)| line.contains(needle.as_str()))
+            .map(|(_, out)| out.clone());
         self.calls
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -150,7 +162,7 @@ impl SystemCommands for RecordingCommands {
         if fail {
             anyhow::bail!("recorded failure");
         }
-        Ok(String::new())
+        Ok(answer.unwrap_or_default())
     }
 }
 

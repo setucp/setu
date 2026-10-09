@@ -141,6 +141,9 @@ pub async fn install(opts: &InstallOpts) -> Result<(), InstallError> {
 /// alone (the installer's `--caddy-only --panel-host … --upstream …`).
 pub async fn install_system_cmd(opts: &InstallSystemOpts) -> Result<(), InstallError> {
     require_root()?;
+    // Standalone (the installer's `--caddy-only`): Caddy may not be
+    // installed yet; `install` installs it with the other packages.
+    ensure_caddy_package(&RealCommands).await?;
     crate::install_system::install_system(opts)
         .await
         .map_err(step("install_system"))
@@ -253,8 +256,23 @@ pub fn caddy_deb_fallback_commands() -> Vec<Vec<String>> {
     ]
 }
 
-async fn ensure_packages(sys: &dyn SystemCommands) -> Result<(), InstallError> {
-    let cmds = apt_commands();
+/// [`apt_commands`] with the last step installing Caddy alone (the
+/// installer brings Postgres and the rest itself).
+pub fn caddy_apt_commands() -> Vec<Vec<&'static str>> {
+    let mut cmds = apt_commands();
+    if let Some(last) = cmds.last_mut() {
+        *last = vec!["apt-get", "install", "-y", "caddy"];
+    }
+    cmds
+}
+
+/// Run `cmds`; when a step from the Caddy keyring on fails (x86_64),
+/// run `fallback` instead of the rest (ledger R116).
+async fn apt_with_caddy_fallback(
+    sys: &dyn SystemCommands,
+    cmds: &[Vec<&str>],
+    fallback: &[Vec<String>],
+) -> Result<(), InstallError> {
     for (i, argv) in cmds.iter().enumerate() {
         if let Err(e) = sys.run(argv[0], &argv[1..]).await {
             // The first two commands use only the distribution archive:
@@ -263,7 +281,7 @@ async fn ensure_packages(sys: &dyn SystemCommands) -> Result<(), InstallError> {
                 return Err(step("apt")(e));
             }
             tracing::warn!(error = %format!("{e:#}"), url = CADDY_DEB_URL, "Caddy apt repository failed; installing Caddy's release package");
-            for argv in caddy_deb_fallback_commands() {
+            for argv in fallback {
                 let args: Vec<&str> = argv[1..].iter().map(String::as_str).collect();
                 sys.run(&argv[0], &args)
                     .await
@@ -272,6 +290,29 @@ async fn ensure_packages(sys: &dyn SystemCommands) -> Result<(), InstallError> {
             break;
         }
     }
+    Ok(())
+}
+
+/// Install the `caddy` package unless dpkg already has it: the official
+/// repository, else the verified release `.deb` (without the
+/// distribution packages of [`caddy_deb_fallback_commands`]).
+pub async fn ensure_caddy_package(sys: &dyn SystemCommands) -> Result<(), InstallError> {
+    let status = sys
+        .run("dpkg-query", &["-W", "-f=${Status}", "caddy"])
+        .await
+        .unwrap_or_default();
+    if status.contains("install ok installed") {
+        return Ok(());
+    }
+    let fallback: Vec<Vec<String>> = caddy_deb_fallback_commands()
+        .into_iter()
+        .filter(|argv| !(argv.len() > 3 && argv[1] == "install" && argv[3] == "sudo"))
+        .collect();
+    apt_with_caddy_fallback(sys, &caddy_apt_commands(), &fallback).await
+}
+
+async fn ensure_packages(sys: &dyn SystemCommands) -> Result<(), InstallError> {
+    apt_with_caddy_fallback(sys, &apt_commands(), &caddy_deb_fallback_commands()).await?;
     // policy-rc.d (containers, hardened hosts) can skip the deb's own
     // start; converge Postgres explicitly. Caddy is `install_system`'s.
     sys.run("systemctl", &["enable", "--now", "postgresql"])
@@ -589,6 +630,40 @@ mod tests {
             calls.last().map(String::as_str),
             Some("systemctl enable --now postgresql")
         );
+    }
+
+    #[tokio::test]
+    async fn caddy_package_is_installed_alone_when_missing() {
+        let sys = crate::install_system::RecordingCommands::new();
+        ensure_caddy_package(&sys).await.expect("installs");
+        let calls = sys.calls();
+        assert_eq!(calls[0], "dpkg-query -W -f=${Status} caddy");
+        assert!(calls.iter().any(|c| c.contains("caddy-stable.list")));
+        assert_eq!(
+            calls.last().map(String::as_str),
+            Some("apt-get install -y caddy")
+        );
+        assert!(calls.iter().all(|c| !c.contains("postgresql")));
+    }
+
+    #[tokio::test]
+    async fn caddy_package_falls_back_to_the_release_deb_alone() {
+        let sys = crate::install_system::RecordingCommands::new()
+            .failing_on("dl.cloudsmith.io/public/caddy/stable/debian.deb.txt");
+        ensure_caddy_package(&sys).await.expect("fallback succeeds");
+        let calls = sys.calls();
+        assert!(calls
+            .iter()
+            .any(|c| c == &format!("apt-get install -y {CADDY_DEB_PATH}")));
+        assert!(calls.iter().all(|c| !c.contains("postgresql")));
+    }
+
+    #[tokio::test]
+    async fn installed_caddy_package_is_left_alone() {
+        let sys = crate::install_system::RecordingCommands::new()
+            .answering("dpkg-query", "install ok installed");
+        ensure_caddy_package(&sys).await.expect("no-op");
+        assert_eq!(sys.calls(), vec!["dpkg-query -W -f=${Status} caddy"]);
     }
 
     #[tokio::test]
