@@ -10,9 +10,15 @@ use super::apps::{
     PublishResponse, ValidateRequest, ValidateResponse,
 };
 use super::auth::{LoginRequest, OperatorOut};
+use super::backups::{BackupJobResponse, BackupListOut, BackupOut};
+use super::jobs::{AuditEntryOut, AuditListOut, AuditQuery, JobListOut, JobsQuery};
 use super::operators::{CreateOperatorRequest, OperatorListOut};
 use super::plans::{CreatePlanRequest, PlanLimitsIn, PlanListOut, PlanOut, UpdatePlanRequest};
 use super::servers::{CreateServerRequest, CreateServerResponse, ServerListOut, ServerOut};
+use super::sites::{
+    CreateSiteRequest, CreateSiteResponse, EnvEntryOut, EnvGetOut, EnvPutRequest, JobOut,
+    SiteJobResponse, SiteListOut, SiteOut, UpdateSiteRequest,
+};
 use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
 
 #[derive(OpenApi)]
@@ -42,6 +48,25 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::plans::create,
         super::plans::get,
         super::plans::update,
+        super::sites::list,
+        super::sites::create,
+        super::sites::get,
+        super::sites::restart,
+        super::sites::stop,
+        super::sites::start,
+        super::sites::update,
+        super::sites::retry,
+        super::sites::delete,
+        super::sites::env_get,
+        super::sites::env_put,
+        super::sites::logs,
+        super::backups::list,
+        super::backups::create,
+        super::backups::restore,
+        super::jobs::list,
+        super::jobs::get,
+        super::jobs::log,
+        super::jobs::audit_list,
         super::agent::join,
         super::agent::commands,
         super::agent::result,
@@ -74,6 +99,24 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         PlanLimitsIn,
         CreatePlanRequest,
         UpdatePlanRequest,
+        SiteOut,
+        SiteListOut,
+        JobOut,
+        CreateSiteRequest,
+        CreateSiteResponse,
+        UpdateSiteRequest,
+        SiteJobResponse,
+        EnvEntryOut,
+        EnvGetOut,
+        EnvPutRequest,
+        BackupOut,
+        BackupListOut,
+        BackupJobResponse,
+        JobListOut,
+        JobsQuery,
+        AuditEntryOut,
+        AuditListOut,
+        AuditQuery,
         setu_proto::JoinRequest,
         setu_proto::JoinResponse,
         setu_proto::Command,

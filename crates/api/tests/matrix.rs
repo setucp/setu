@@ -425,6 +425,118 @@ async fn route_matrix() {
         200
     );
 
+    // Sites: reads viewer+, writes operator+. `POST /sites` uses a
+    // well-formed body with an unknown app so auth failures (401/403)
+    // stay distinct from the 400 the validation produces for
+    // operator/owner; action routes use a bogus id (404 past auth).
+    ctx.row("GET", "/api/v1/sites", None, 401, 200, 200, 200)
+        .await;
+    ctx.row(
+        "POST",
+        "/api/v1/sites",
+        Some(json!({
+            "name": unique("mx-site"),
+            "app_id": "no-such-app",
+            "version": "0.1.0",
+            "plan_id": "plan-nope",
+            "domain": format!("{}.example.com", unique("mx-site")),
+            "owner_email": "owner@example.com",
+            "prompts": {},
+        })),
+        401,
+        403,
+        400,
+        400,
+    )
+    .await;
+    ctx.row(
+        "GET",
+        "/api/v1/sites/does-not-exist",
+        None,
+        401,
+        404,
+        404,
+        404,
+    )
+    .await;
+    for action in ["restart", "stop", "start", "retry"] {
+        ctx.row(
+            "POST",
+            &format!("/api/v1/sites/does-not-exist/{action}"),
+            None,
+            401,
+            403,
+            404,
+            404,
+        )
+        .await;
+    }
+    ctx.row(
+        "POST",
+        "/api/v1/sites/does-not-exist/update",
+        Some(json!({"version": "0.1.1"})),
+        401,
+        403,
+        404,
+        404,
+    )
+    .await;
+    ctx.row(
+        "DELETE",
+        "/api/v1/sites/does-not-exist",
+        None,
+        401,
+        403,
+        404,
+        404,
+    )
+    .await;
+    for path in [
+        "/api/v1/sites/does-not-exist/logs",
+        "/api/v1/sites/does-not-exist/backups",
+        "/api/v1/sites/does-not-exist/env",
+        "/api/v1/jobs/does-not-exist",
+        "/api/v1/jobs/does-not-exist/log",
+    ] {
+        ctx.row("GET", path, None, 401, 404, 404, 404).await;
+    }
+    ctx.row(
+        "PUT",
+        "/api/v1/sites/does-not-exist/env",
+        Some(json!({"env": {"FOO": "bar"}})),
+        401,
+        403,
+        404,
+        404,
+    )
+    .await;
+    ctx.row(
+        "POST",
+        "/api/v1/sites/does-not-exist/backups",
+        None,
+        401,
+        403,
+        404,
+        404,
+    )
+    .await;
+    ctx.row(
+        "POST",
+        "/api/v1/sites/does-not-exist/backups/nope/restore",
+        None,
+        401,
+        403,
+        404,
+        404,
+    )
+    .await;
+
+    // Jobs and audit: viewer+ reads.
+    ctx.row("GET", "/api/v1/jobs", None, 401, 200, 200, 200)
+        .await;
+    ctx.row("GET", "/api/v1/audit", None, 401, 200, 200, 200)
+        .await;
+
     // Logout last: it destroys each session (anon was never logged in).
     ctx.row("POST", "/api/v1/auth/logout", None, 401, 204, 204, 204)
         .await;

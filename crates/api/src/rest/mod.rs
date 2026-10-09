@@ -3,10 +3,13 @@
 pub mod agent;
 pub mod apps;
 pub mod auth;
+pub mod backups;
 pub mod docs;
+pub mod jobs;
 pub mod operators;
 pub mod plans;
 pub mod servers;
+pub mod sites;
 
 use axum::{
     extract::{FromRequest, Request, State},
@@ -88,6 +91,24 @@ pub fn router(state: AppState) -> Router {
         .route("/apps/{id}/versions", get(apps::versions))
         .route("/plans", get(plans::list).post(plans::create))
         .route("/plans/{id}", get(plans::get).put(plans::update))
+        .route("/sites", get(sites::list).post(sites::create))
+        .route("/sites/{id}", get(sites::get).delete(sites::delete))
+        .route("/sites/{id}/restart", post(sites::restart))
+        .route("/sites/{id}/stop", post(sites::stop))
+        .route("/sites/{id}/start", post(sites::start))
+        .route("/sites/{id}/update", post(sites::update))
+        .route("/sites/{id}/retry", post(sites::retry))
+        .route("/sites/{id}/env", get(sites::env_get).put(sites::env_put))
+        .route("/sites/{id}/logs", get(sites::logs))
+        .route(
+            "/sites/{id}/backups",
+            get(backups::list).post(backups::create),
+        )
+        .route("/sites/{id}/backups/{bid}/restore", post(backups::restore))
+        .route("/jobs", get(jobs::list))
+        .route("/jobs/{id}", get(jobs::get))
+        .route("/jobs/{id}/log", get(jobs::log))
+        .route("/audit", get(jobs::audit_list))
         .layer(middleware::from_fn(authn::csrf_middleware))
         .with_state(state.clone());
 

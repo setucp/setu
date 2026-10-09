@@ -154,6 +154,7 @@ pub mod testing {
         status_active: bool,
         write_envs: Vec<Vec<EnvVar>>,
         switch_versions: Vec<String>,
+        log_lines: Vec<String>,
     }
 
     /// Scripted agent: records every call's kind name, returns `ok`
@@ -177,6 +178,11 @@ pub mod testing {
                     status_active: true,
                     write_envs: Vec::new(),
                     switch_versions: Vec::new(),
+                    log_lines: vec![
+                        "fake log line 1".to_string(),
+                        "fake log line 2".to_string(),
+                        "fake log line 3".to_string(),
+                    ],
                 })),
             }
         }
@@ -258,6 +264,11 @@ pub mod testing {
         pub fn set_status_active(&self, active: bool) {
             self.inner.lock().expect("fake agent lock").status_active = active;
         }
+
+        /// What `FetchLogs` reports (three canned lines by default).
+        pub fn set_log_lines(&self, lines: Vec<String>) {
+            self.inner.lock().expect("fake agent lock").log_lines = lines;
+        }
     }
 
     impl Default for FakeAgent {
@@ -304,6 +315,7 @@ pub mod testing {
             }
             let output = match &cmd {
                 Command::Status { .. } => serde_json::json!({"active": inner.status_active}),
+                Command::FetchLogs { .. } => serde_json::json!({"lines": inner.log_lines}),
                 _ => serde_json::json!({}),
             };
             Ok(CommandResult {

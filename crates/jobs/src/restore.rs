@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use setu_common::AppError;
 use setu_proto::Command;
 
-use crate::{agent_step, build_site, fail, load_manifest, log_step, JobCtx};
+use crate::{agent_step, build_spec, fail, load_manifest, log_step, JobCtx};
 
 /// Restore the site from `backup_id`; ends `running`.
 pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), AppError> {
@@ -21,7 +21,9 @@ pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), App
     }
     let manifest = load_manifest(&ctx.db, &site.app_id, &site.app_version).await?;
     let plan = ctx.db.plans().get(&site.plan_id).await?;
-    let built = build_site(&plan, &site, &manifest)?;
+    // Same as backup: no env resolution (no prompts on this job, none
+    // needed — the env file already on disk is untouched by restore).
+    let spec = build_spec(&plan, &site, &manifest)?;
     let server_id = site.server_id.clone();
 
     log_step(ctx, "validate", true, None).await;
@@ -61,7 +63,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), App
         "restore",
         &server_id,
         Command::Restore {
-            site: built.spec.clone(),
+            site: spec,
             db: site.db_name.clone(),
             src: PathBuf::from(&backup.location),
         },

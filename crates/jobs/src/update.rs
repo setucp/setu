@@ -24,7 +24,9 @@ use setu_db::Site;
 use setu_manifest::{Manifest, Update};
 use setu_proto::Command;
 
-use crate::{build_site, call_agent, fail, load_manifest, log_step, require_ok, JobCtx};
+use crate::{
+    build_site, call_agent, fail, job_prompts, load_manifest, log_step, require_ok, JobCtx,
+};
 
 /// Update the site to `to_version`.
 pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), AppError> {
@@ -54,11 +56,14 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
     };
     // Specs for both versions are built before anything mutates: build
     // failures (missing target, unresolvable env) abort pre-status.
-    let old_built = match build_site(&plan, &site, &old_manifest) {
+    // Prompt answers ride on the job payload (the API recovers them from
+    // the site's provision job); direct `run` callers resolve without.
+    let prompts = job_prompts(ctx).await;
+    let old_built = match build_site(&plan, &site, &old_manifest, &prompts) {
         Ok(b) => b,
         Err(e) => return Err(fail(ctx, site_id, "validate", e).await),
     };
-    let new_built = match build_site(&plan, &site, &new_manifest) {
+    let new_built = match build_site(&plan, &site, &new_manifest, &prompts) {
         Ok(b) => b,
         Err(e) => return Err(fail(ctx, site_id, "validate", e).await),
     };

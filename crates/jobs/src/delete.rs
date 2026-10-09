@@ -8,7 +8,7 @@
 use setu_common::{AppError, ErrorCode};
 use setu_proto::Command;
 
-use crate::{build_site, call_agent, fail, load_manifest, log_step, minimal_spec, JobCtx};
+use crate::{build_spec, call_agent, fail, load_manifest, log_step, minimal_spec, JobCtx};
 
 /// Delete the site; ends with the row gone.
 pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
@@ -17,11 +17,11 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
     let domain = site.domain.clone();
     let db_name = site.db_name.clone();
 
+    // `build_spec` needs no prompts (Stop/Remove key off `site_id`);
+    // fall back to `minimal_spec` when the manifest/plan is gone.
     let spec = match load_manifest(&ctx.db, &site.app_id, &site.app_version).await {
         Ok(manifest) => match ctx.db.plans().get(&site.plan_id).await {
-            Ok(plan) => build_site(&plan, &site, &manifest)
-                .map(|b| b.spec)
-                .unwrap_or_else(|_| minimal_spec(&site)),
+            Ok(plan) => build_spec(&plan, &site, &manifest).unwrap_or_else(|_| minimal_spec(&site)),
             Err(_) => minimal_spec(&site),
         },
         Err(_) => minimal_spec(&site),

@@ -35,6 +35,8 @@ time.workspace = true
 futures.workspace = true
 sqlx.workspace = true
 async-trait.workspace = true
+rand.workspace = true
+hex.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 setu-common = { path = "../common" }

@@ -14,6 +14,8 @@ pub const JOB_KINDS: &[&str] = &[
     "restore_site",
     "delete_site",
     "restart_site",
+    "stop_site",
+    "start_site",
     "reconcile",
 ];
 

@@ -284,12 +284,72 @@ pub(crate) struct BuiltSite {
     pub db_password: String,
 }
 
+/// Build just the agent [`setu_proto::SiteSpec`] without resolving env
+/// (backup/restore/delete paths: no prompt answers available on those
+/// jobs and none needed — the agent works from paths + db name).
+pub(crate) fn build_spec(
+    plan: &Plan,
+    site: &Site,
+    manifest: &Manifest,
+) -> Result<setu_proto::SiteSpec, AppError> {
+    let (binary_exec, args) = match &manifest.run {
+        Run::Binary { binary: run } => run
+            .targets
+            .get(&Target::X86_64Linux)
+            .map(|target| (target.exec.clone(), run.args.clone()))
+            .ok_or_else(|| AppError::validation("run.binary must declare x86_64-linux"))?,
+        Run::Image { .. } => {
+            return Err(AppError::validation(
+                "image runtime not available in this version",
+            ));
+        }
+    };
+    let (site_dir, data_dir, run_dir, env_file) = site_paths(site);
+    Ok(setu_proto::SiteSpec {
+        site_id: site.id.clone(),
+        short_id: setu_common::short_id(&site.id),
+        user: format!("setu-site-{}", site.id),
+        data_dir,
+        run_dir,
+        port: site.port as u16,
+        exec: site_dir.join("bin").join("current").join(&binary_exec),
+        args,
+        env_file,
+        limits: plan_limits(plan, manifest),
+        health_path: manifest.app.health.clone(),
+        binary: Some(setu_proto::BinaryRef {
+            url: match &manifest.run {
+                Run::Binary { binary: run } => run
+                    .targets
+                    .get(&Target::X86_64Linux)
+                    .map(|t| t.url.clone())
+                    .unwrap_or_default(),
+                Run::Image { .. } => String::new(),
+            },
+            sha256: match &manifest.run {
+                Run::Binary { binary: run } => run
+                    .targets
+                    .get(&Target::X86_64Linux)
+                    .map(|t| t.sha256.clone())
+                    .unwrap_or_default(),
+                Run::Image { .. } => String::new(),
+            },
+            exec: binary_exec,
+            version: manifest.app.version.clone(),
+        }),
+    })
+}
+
 /// Build the agent [`setu_proto::SiteSpec`] and resolve env per manifest.
 /// Rejects `image` manifests: the phase-1 control plane cannot run them.
+/// `prompts` carries the operator-supplied prompt answers (the API stores
+/// them on the provision job's payload); direct `run` callers pass an
+/// empty map, preserving the old resolve behaviour.
 pub(crate) fn build_site(
     plan: &Plan,
     site: &Site,
     manifest: &Manifest,
+    prompts: &BTreeMap<String, String>,
 ) -> Result<BuiltSite, AppError> {
     let (binary, args) = match &manifest.run {
         Run::Binary { binary: run } => run
@@ -316,7 +376,7 @@ pub(crate) fn build_site(
         run_dir: run_dir.clone(),
         data_dir: data_dir.clone(),
         db_url,
-        prompts: BTreeMap::new(),
+        prompts: prompts.clone(),
         rng: rand::rngs::StdRng::from_os_rng(),
     };
     let env_manifest = setu_manifest::resolve_env(manifest, &mut input).map_err(|e| match &e {
@@ -413,7 +473,8 @@ pub(crate) async fn prepare_site(ctx: &JobCtx, site: &Site) -> Result<Prep, AppE
         )));
     }
     check_capacity(&ctx.db, site, &plan, &manifest).await?;
-    let built = build_site(&plan, site, &manifest)?;
+    let prompts = job_prompts(ctx).await;
+    let built = build_site(&plan, site, &manifest, &prompts)?;
     let sealed = sealed_env(&ctx.sealer, &built.env_manifest);
     ctx.db.sites().set_env(&site.id, &sealed).await?;
     let env_all: Vec<setu_proto::EnvVar> = built.env_manifest.iter().map(to_proto_env).collect();
@@ -432,6 +493,33 @@ pub(crate) async fn prepare_site(ctx: &JobCtx, site: &Site) -> Result<Prep, AppE
         db_password: built.db_password,
         has_once,
     })
+}
+
+/// Prompt answers stored on the provision job's payload by `POST /sites`
+/// (Task 9). Direct `run` callers carry no job id, so this is empty for
+/// them and resolution behaves exactly as before.
+pub(crate) async fn job_prompts(ctx: &JobCtx) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let Some(job_id) = &ctx.job_id else {
+        return out;
+    };
+    let Ok(job) = ctx.db.jobs().get(job_id).await else {
+        return out;
+    };
+    let Some(obj) = job
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("prompts"))
+        .and_then(|p| p.as_object())
+    else {
+        return out;
+    };
+    for (k, v) in obj {
+        if let Some(s) = v.as_str() {
+            out.insert(k.clone(), s.to_string());
+        }
+    }
+    out
 }
 
 /// Sealed DB copy of resolved env: secret values sealed with the panel

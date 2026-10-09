@@ -36,6 +36,11 @@ pub struct TestServer {
     /// The scripted agent the server's state machines call.
     pub agent: FakeAgent,
     test_db: TestDb,
+    /// Background job runner (concurrency 4, like `setu serve`), so
+    /// `POST /sites` provisions to `running` without manual driving.
+    /// Held so the task stays associated with the test's runtime.
+    #[allow(dead_code)]
+    runner: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl TestServer {
@@ -93,15 +98,20 @@ impl TestServer {
             public_url,
             data_dir: std::env::temp_dir().join(format!("setu-test-{}", addr.port())),
         };
-        let mut state = crate::AppState::new(
-            db.clone(),
-            Sealer::new(&secret),
-            config,
-            Arc::new(agent.clone()),
-        );
+        let sealer = Sealer::new(&secret);
+        let mut state =
+            crate::AppState::new(db.clone(), sealer.clone(), config, Arc::new(agent.clone()));
         if let Some(limit) = agent_poll_limit {
             state = state.with_agent_poll_limit(limit);
         }
+        // Background runner over the same `FakeAgent`, so enqueued jobs
+        // complete on their own (Ruling, Task 9: `TestServer` runs the
+        // `Runner` exactly like `setu serve` does, concurrency 4; tests
+        // poll `GET /jobs/{id}` until done instead of driving jobs by
+        // hand. Cost if wrong: every site test would reimplement the
+        // claim/dispatch loop).
+        let runner_agent: Arc<dyn setu_jobs::AgentClient> = Arc::new(agent.clone());
+        let runner = setu_jobs::Runner::spawn(db.clone(), runner_agent, sealer, 4);
         let app = crate::rest::router(state);
         tokio::spawn(async move {
             axum::serve(
@@ -120,6 +130,7 @@ impl TestServer {
             db,
             agent,
             test_db,
+            runner: Some(runner),
         }
     }
 

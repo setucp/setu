@@ -120,6 +120,14 @@ async fn handle_job(db: &Db, agent: &Arc<dyn AgentClient>, sealer: &Sealer, job:
             Some(site_id) => restart(&ctx, site_id).await,
             None => Err(AppError::validation("restart_site job has no site_id")),
         },
+        "stop_site" => match job.site_id.as_deref() {
+            Some(site_id) => stop_site(&ctx, site_id).await,
+            None => Err(AppError::validation("stop_site job has no site_id")),
+        },
+        "start_site" => match job.site_id.as_deref() {
+            Some(site_id) => start_site(&ctx, site_id).await,
+            None => Err(AppError::validation("start_site job has no site_id")),
+        },
         "reconcile" => {
             match db
                 .agent_commands()
@@ -180,6 +188,65 @@ async fn restart(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
     .await?;
     // `agent_step` already marked `failed` on error; only the success
     // path reaches here.
+    match ctx.db.sites().set_status(site_id, "running", None).await {
+        Ok(_) => {
+            log_step(ctx, "finish", true, None).await;
+            Ok(())
+        }
+        Err(e) => Err(fail(ctx, site_id, "finish", e).await),
+    }
+}
+
+/// `stop_site` (no payload): stop the unit, ending `stopped`. Stopping an
+/// already-`stopped` site is an idempotent success (the agent call is
+/// still issued: the unit may have been started out of band).
+async fn stop_site(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
+    let site = ctx.db.sites().get(site_id).await?;
+    if site.status != "running" && site.status != "stopped" {
+        return Err(AppError::validation(format!(
+            "site {site_id} cannot stop from status {}",
+            site.status
+        )));
+    }
+    agent_step(
+        ctx,
+        site_id,
+        "stop",
+        &site.server_id,
+        Command::Stop {
+            site_id: site.id.clone(),
+        },
+    )
+    .await?;
+    match ctx.db.sites().set_status(site_id, "stopped", None).await {
+        Ok(_) => {
+            log_step(ctx, "finish", true, None).await;
+            Ok(())
+        }
+        Err(e) => Err(fail(ctx, site_id, "finish", e).await),
+    }
+}
+
+/// `start_site` (no payload): start the unit, ending `running`. Starting
+/// an already-`running` site is an idempotent success.
+async fn start_site(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
+    let site = ctx.db.sites().get(site_id).await?;
+    if site.status != "stopped" && site.status != "running" {
+        return Err(AppError::validation(format!(
+            "site {site_id} cannot start from status {}",
+            site.status
+        )));
+    }
+    agent_step(
+        ctx,
+        site_id,
+        "start",
+        &site.server_id,
+        Command::Start {
+            site_id: site.id.clone(),
+        },
+    )
+    .await?;
     match ctx.db.sites().set_status(site_id, "running", None).await {
         Ok(_) => {
             log_step(ctx, "finish", true, None).await;
