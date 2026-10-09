@@ -1,7 +1,8 @@
 import * as React from "react";
 import { toast } from "sonner";
-import { usePutSiteEnv, useSiteEnv } from "@/lib/api";
-import { ApiError } from "@/lib/client";
+import { usePutSiteEnv, useRevealEnv, useSiteEnv } from "@/lib/api";
+import { ApiError, type EnvEntry } from "@/lib/client";
+import { CopyButton } from "./CopyButton";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -16,10 +17,11 @@ import {
 } from "./ui/table";
 
 /**
- * Masked env table. Secret values are never returned as plaintext by the API
- * (`[MASKED_VALUE]`), so Reveal — behind an explicit confirm dialog — arms an
- * input for entering a *new* value rather than displaying the old one.
- * Saving PUTs the edited values (a restart job starts) and reports the job.
+ * Masked env table. The list never carries a secret (`[MASKED_VALUE]`);
+ * Reveal opens a dialog that asks for the operator's own password and
+ * calls `POST /sites/{id}/env/{name}/reveal`, which audits every call.
+ * Non-secret `value`/`prompt` variables are edited in place; saving PUTs
+ * them (a restart job starts) and reports the job.
  */
 export function SiteEnv({
   siteId,
@@ -31,7 +33,7 @@ export function SiteEnv({
   const env = useSiteEnv(siteId);
   const put = usePutSiteEnv(siteId);
   const [armed, setArmed] = React.useState<Record<string, string>>({});
-  const [confirmName, setConfirmName] = React.useState<string | null>(null);
+  const [revealing, setRevealing] = React.useState<EnvEntry | null>(null);
 
   if (env.isPending) {
     return <p className="text-sm text-muted-foreground">Loading…</p>;
@@ -53,9 +55,10 @@ export function SiteEnv({
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted-foreground">
-        Secret values stay masked. Only <code>value</code> and <code>prompt</code>{" "}
-        variables can be edited — generated and derived ones are rejected by the
-        server.
+        Secret values stay masked; Reveal asks for your password and is audited.{" "}
+        <code>once</code> values reached the app on its first boot only. Only{" "}
+        <code>value</code> and <code>prompt</code> variables can be changed — the
+        server rejects generated and derived ones.
       </p>
       <Table>
         <TableHeader>
@@ -112,14 +115,25 @@ export function SiteEnv({
                       Cancel
                     </Button>
                   ) : row.secret ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setConfirmName(row.name)}
-                    >
-                      Reveal
-                    </Button>
+                    <span className="flex gap-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setRevealing(row)}
+                      >
+                        Reveal
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Replace ${row.name}`}
+                        onClick={() => arm(row.name)}
+                      >
+                        Replace
+                      </Button>
+                    </span>
                   ) : (
                     <Button
                       type="button"
@@ -163,28 +177,125 @@ export function SiteEnv({
           ) : null}
         </div>
       ) : null}
-      <Modal
-        open={confirmName !== null}
-        onClose={() => setConfirmName(null)}
-        title={`Reveal ${confirmName ?? ""}?`}
-        description="The new value you enter will be visible on screen. The current secret value is never shown — it stays on the server."
-        footer={
+      <RevealDialog
+        siteId={siteId}
+        entry={revealing}
+        onClose={() => setRevealing(null)}
+      />
+    </div>
+  );
+}
+
+/**
+ * Password re-authentication, then the plaintext, shown in this dialog
+ * only: closing it drops the value (nothing is cached), and every reveal
+ * is a fresh, audited request.
+ */
+function RevealDialog({
+  siteId,
+  entry,
+  onClose,
+}: {
+  siteId: string;
+  entry: EnvEntry | null;
+  onClose: () => void;
+}) {
+  const reveal = useRevealEnv(siteId);
+  const [password, setPassword] = React.useState("");
+  const name = entry?.name ?? "";
+  const reset = reveal.reset;
+
+  React.useEffect(() => {
+    setPassword("");
+    reset();
+  }, [entry, reset]);
+
+  const value = reveal.data?.value;
+
+  function close() {
+    setPassword("");
+    reset();
+    onClose();
+  }
+
+  return (
+    <Modal
+      open={entry !== null}
+      onClose={close}
+      title={`Reveal ${name}`}
+      description="Confirm with your own password. Each reveal is recorded in the audit log."
+      footer={
+        value === undefined ? (
           <>
-            <Button variant="outline" onClick={() => setConfirmName(null)}>
+            <Button variant="outline" onClick={close}>
               Cancel
             </Button>
             <Button
-              data-testid="confirm-accept"
-              onClick={() => {
-                if (confirmName !== null) arm(confirmName);
-                setConfirmName(null);
-              }}
+              type="submit"
+              form="reveal-form"
+              disabled={password === "" || reveal.isPending}
             >
-              Reveal
+              {reveal.isPending ? "Checking…" : "Reveal"}
             </Button>
           </>
-        }
-      />
-    </div>
+        ) : (
+          <Button onClick={close}>Done</Button>
+        )
+      }
+    >
+      <div className="flex flex-col gap-3">
+        {entry?.once === true ? (
+          <p className="rounded-md border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm">
+            <span className="font-medium">{name}</span> is a <code>once</code> value:
+            the app received it on its first boot only, and it was removed from the
+            app's environment after the first successful health check. Setu keeps
+            it sealed so you can read it here — for example, an initial admin
+            password. Changing it in the app does not change it here.
+          </p>
+        ) : null}
+        {value === undefined ? (
+          <form
+            id="reveal-form"
+            className="flex flex-col gap-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (entry === null || password === "") return;
+              reveal.mutate(
+                { name: entry.name, password },
+                { onSettled: () => setPassword("") },
+              );
+            }}
+          >
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Your password
+              <Input
+                type="password"
+                autoComplete="current-password"
+                autoFocus
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
+            {reveal.isError ? (
+              <p role="alert" className="text-sm text-destructive">
+                {reveal.error instanceof ApiError ? reveal.error.message : "reveal failed"}
+              </p>
+            ) : null}
+          </form>
+        ) : (
+          <>
+            <code className="block overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-sm break-all">
+              {value}
+            </code>
+            <div className="flex items-center gap-2">
+              <CopyButton text={value} label="Value" />
+              <span className="text-xs text-muted-foreground">
+                Shown once — closing this dialog forgets it.
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }

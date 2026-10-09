@@ -2,22 +2,15 @@ import * as React from "react";
 import { toast } from "sonner";
 import { useCreateServer } from "@/lib/api";
 import { ApiError } from "@/lib/client";
+import { InstallInstructions } from "./CopyButton";
 import { Button } from "./ui/button";
 import { Modal } from "./ui/dialog";
 import { Input } from "./ui/input";
 
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
- * Add-server dialog: names a pending server, then shows the one-line install
- * command (join token embedded, shown once) with a copy button.
+ * Add-server dialog: names a pending server, then shows the token-free
+ * install command and, on its own line, the single-use join token (both
+ * with copy buttons). Neither lingers: reopening starts fresh.
  */
 export function AddServerDialog({
   open,
@@ -30,15 +23,14 @@ export function AddServerDialog({
 }) {
   const [name, setName] = React.useState("");
   const create = useCreateServer();
+  const reset = create.reset;
 
-  // Fresh state for every opening; the install command never lingers.
   React.useEffect(() => {
     if (open) {
       setName("");
-      create.reset();
+      reset();
     }
-    // Reset only on open transitions.
-  }, [open ]);
+  }, [open, reset]);
 
   const result = create.data;
 
@@ -46,8 +38,9 @@ export function AddServerDialog({
     <Modal
       open={open}
       onClose={onClose}
+      size="lg"
       title="Add server"
-      description="Registers a pending server and mints its single-use join token (valid 1 hour). Run the install command on the server as root."
+      description="Registers a pending server and mints its single-use join token (valid one hour)."
     >
       {result === undefined ? (
         <form
@@ -85,34 +78,13 @@ export function AddServerDialog({
       ) : (
         <div className="flex flex-col gap-3">
           <p className="text-sm">
-            Server <span className="font-medium">{result.server.name}</span>{" "}
-            registered. Run this on the server:
+            Server <span className="font-medium">{result.server.name}</span> registered.
+            It shows as <span className="font-mono">pending</span> until its agent joins.
           </p>
-          <code className="block overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs break-all">
-            {result.install_command}
-          </code>
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                void copyText(result.install_command).then((ok) => {
-                  toast[ok ? "success" : "error"](
-                    ok ? "Install command copied" : "Copy failed — select it manually",
-                  );
-                });
-              }}
-            >
-              Copy install command
-            </Button>
-            <Button type="button" size="sm" onClick={onClose}>
-              Done
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            The join token is shown once and expires after one hour.
-          </p>
+          <InstallInstructions command={result.install_command} joinToken={result.join_token} />
+          <Button type="button" size="sm" className="self-start" onClick={onClose}>
+            Done
+          </Button>
         </div>
       )}
     </Modal>

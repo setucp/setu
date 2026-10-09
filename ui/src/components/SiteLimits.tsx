@@ -1,5 +1,6 @@
 import { usePlans } from "@/lib/api";
-import { ApiError } from "@/lib/client";
+import { ApiError, type SiteDetail } from "@/lib/client";
+import { formatBytes, formatSeconds } from "@/lib/format";
 import {
   Table,
   TableBody,
@@ -10,11 +11,12 @@ import {
 } from "./ui/table";
 
 /**
- * Plan limits for one site. There is no usage endpoint in this version —
- * live usage arrives with the agent heartbeat (Task 15) — so this page shows
- * the plan's limits and says so instead of inventing numbers.
+ * The site's plan limits next to its current usage from the latest
+ * metrics sample (spec §3 `site_metrics`). CPU is limited as a share of
+ * one core and reported as cumulative CPU seconds, so the two columns
+ * are not a ratio.
  */
-export function SiteLimits({ planId }: { planId: string }) {
+export function SiteLimits({ site }: { site: SiteDetail }) {
   const plans = usePlans();
 
   if (plans.isPending) {
@@ -27,42 +29,47 @@ export function SiteLimits({ planId }: { planId: string }) {
       </p>
     );
   }
-  const plan = (plans.data ?? []).find((p) => p.id === planId);
+  const plan = (plans.data ?? []).find((p) => p.id === site.plan_id);
   if (plan === undefined) {
     return <p className="text-sm text-muted-foreground">Plan not found.</p>;
   }
+  const m = site.metrics ?? null;
 
   return (
     <div className="flex max-w-xl flex-col gap-3">
+      <p className="text-sm">
+        Plan <span className="font-medium">{plan.name}</span>
+      </p>
       <Table>
         <TableHeader>
           <TableRow>
+            <TableHead>Resource</TableHead>
             <TableHead>Limit</TableHead>
-            <TableHead>Value</TableHead>
+            <TableHead>Current</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           <TableRow>
-            <TableCell>Plan</TableCell>
-            <TableCell>{plan.name}</TableCell>
-          </TableRow>
-          <TableRow>
             <TableCell>Memory</TableCell>
             <TableCell>{plan.limits.memory_mb ?? "—"} MB</TableCell>
+            <TableCell>{m === null ? "—" : formatBytes(m.memory_bytes)}</TableCell>
           </TableRow>
           <TableRow>
             <TableCell>CPU</TableCell>
             <TableCell>{plan.limits.cpu_percent ?? "—"}% of one core</TableCell>
+            <TableCell>{m === null ? "—" : formatSeconds(m.cpu_seconds)}</TableCell>
           </TableRow>
           <TableRow>
             <TableCell>Disk</TableCell>
             <TableCell>{plan.limits.disk_mb ?? "—"} MB</TableCell>
+            <TableCell>{m === null ? "—" : formatBytes(m.disk_bytes)}</TableCell>
           </TableRow>
         </TableBody>
       </Table>
-      <p className="text-sm text-muted-foreground">
-        Live usage is not reported in this version — per-site metrics arrive with
-        the agent heartbeat.
+      <p className="text-xs text-muted-foreground">
+        {m === null
+          ? "No usage sample yet — the agent reports one every minute while the site runs."
+          : `Usage sampled ${new Date(m.at).toLocaleString()}; CPU time is cumulative.`}
       </p>
     </div>
   );

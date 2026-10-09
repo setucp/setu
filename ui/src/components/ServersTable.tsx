@@ -1,5 +1,7 @@
 import type { Plan, Server, Site } from "@/lib/client";
+import { formatMb } from "@/lib/format";
 import { StatusBadge } from "./StatusBadge";
+import { Badge } from "./ui/badge";
 import {
   Table,
   TableBody,
@@ -9,15 +11,11 @@ import {
   TableRow,
 } from "./ui/table";
 
-function formatMb(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "—";
-  return value >= 1024 ? `${(value / 1024).toFixed(1)}G` : `${value}M`;
-}
-
 /**
- * Servers list: heartbeat status, host, site count (client-side join over the
- * sites list), and reserved plan memory against capacity. Reserved — not live
- * usage — because no usage endpoint exists in this version.
+ * Servers list: status (pending/online/offline), control-plane and cordon
+ * markers, host, site count (client-side join over the sites list),
+ * reserved plan memory against capacity, and the latest heartbeat's load
+ * figures (1-minute load, free memory, free disk) when it has sent any.
  */
 export function ServersTable({
   servers,
@@ -48,7 +46,8 @@ export function ServersTable({
           <TableHead>Status</TableHead>
           <TableHead>Sites</TableHead>
           <TableHead>Memory reserved</TableHead>
-          <TableHead>Free memory</TableHead>
+          <TableHead>Load</TableHead>
+          <TableHead>Free</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -70,7 +69,11 @@ export function ServersTable({
               </TableCell>
               <TableCell>{server.host ?? "—"}</TableCell>
               <TableCell>
-                <StatusBadge status={server.status} />
+                <span className="flex flex-wrap items-center gap-1">
+                  <StatusBadge status={server.status} />
+                  {server.is_control_plane ? <Badge variant="outline">control plane</Badge> : null}
+                  {server.cordoned ? <Badge variant="secondary">cordoned</Badge> : null}
+                </span>
               </TableCell>
               <TableCell>
                 {owned.length} site{owned.length === 1 ? "" : "s"}
@@ -103,7 +106,19 @@ export function ServersTable({
                   </span>
                 ) : null}
               </TableCell>
-              <TableCell>{formatMb(server.mem_free_mb)}</TableCell>
+              <TableCell>
+                {server.load1 === null || server.load1 === undefined ? "—" : server.load1.toFixed(2)}
+              </TableCell>
+              <TableCell className="text-xs">
+                {server.mem_free_mb === null || server.mem_free_mb === undefined ? (
+                  "—"
+                ) : (
+                  <span className="block">{formatMb(server.mem_free_mb)} free memory</span>
+                )}
+                {server.disk_free_mb === null || server.disk_free_mb === undefined ? null : (
+                  <span className="block">{formatMb(server.disk_free_mb)} free disk</span>
+                )}
+              </TableCell>
             </TableRow>
           );
         })}

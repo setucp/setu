@@ -1,17 +1,11 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { SetupWizard } from "@/components/SetupWizard";
 
 export const Route = createFileRoute("/setup")({
   component: SetupPage,
 });
 
+/** The wizard's last step links to the sites list itself. */
 function SetupPage() {
-  const navigate = useNavigate({ from: Route.fullPath });
-  return (
-    <SetupWizard
-      onDone={() => {
-        void navigate({ to: "/sites" });
-      }}
-    />
-  );
+  return <SetupWizard />;
 }

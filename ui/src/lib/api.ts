@@ -105,6 +105,17 @@ export function useCreateServer() {
   });
 }
 
+export function useCordonServer(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (cordoned: boolean) => api.cordonServer(id, cordoned),
+    onSuccess: (server) => {
+      queryClient.setQueryData(["servers", id], server);
+      void queryClient.invalidateQueries({ queryKey: ["servers"] });
+    },
+  });
+}
+
 export function useDeleteServer() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -206,6 +217,25 @@ export function useRestoreBackup(siteId: string) {
   });
 }
 
+export function useDeleteBackup(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (backupId: string) => api.deleteBackup(siteId, backupId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sites", siteId, "backups"] });
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+/** Not cached: the plaintext lives only in the dialog that asked for it. */
+export function useRevealEnv(siteId: string) {
+  return useMutation({
+    mutationFn: ({ name, password }: { name: string; password: string }) =>
+      api.revealEnv(siteId, name, password),
+  });
+}
+
 export function useSiteAction(siteId: string) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -222,7 +252,8 @@ export function useSiteAction(siteId: string) {
 export function useUpdateSite(siteId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (version: string) => api.updateSite(siteId, version),
+    mutationFn: ({ version, prompts }: { version: string; prompts: Record<string, string> }) =>
+      api.updateSite(siteId, version, prompts),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["sites", siteId] });
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
@@ -261,6 +292,24 @@ export function useCreateOperator() {
       void queryClient.invalidateQueries({ queryKey: ["operators"] });
     },
   });
+}
+
+export function useSetOperatorPassword() {
+  return useMutation({
+    mutationFn: ({
+      id,
+      password,
+      currentPassword,
+    }: {
+      id: string;
+      password: string;
+      currentPassword?: string;
+    }) => api.setOperatorPassword(id, password, currentPassword),
+  });
+}
+
+export function useSetupStatus() {
+  return useQuery({ queryKey: ["setup"], queryFn: () => api.setupStatus() });
 }
 
 export function useAudit() {

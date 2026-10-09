@@ -2,18 +2,14 @@ import * as React from "react";
 import { useJob } from "@/lib/api";
 import { ApiError } from "@/lib/client";
 import { useSseLines } from "@/lib/sse";
-import { Badge } from "./ui/badge";
-
-const variantByStatus: Record<string, "success" | "warning" | "destructive" | "secondary"> = {
-  done: "success",
-  queued: "warning",
-  running: "warning",
-  failed: "destructive",
-};
+import { StatusBadge, jobVariant } from "./StatusBadge";
 
 /**
- * Full job view: status, error, the stored log plus a live SSE tail while the
- * job is still open. Finished jobs render the stored log only.
+ * Full job view: status, error and the log. While the job is open the log
+ * comes from the SSE stream, which replays the stored backlog and then
+ * tails it (reconnects are merged without duplicates, see `LineMerger`);
+ * until its first line arrives the stored log shows. Finished jobs render
+ * the stored log only and never subscribe.
  */
 export function JobLogView({ jobId }: { jobId: string }) {
   const job = useJob(jobId);
@@ -23,8 +19,8 @@ export function JobLogView({ jobId }: { jobId: string }) {
     open ? `/api/v1/jobs/${encodeURIComponent(jobId)}/log` : null,
   );
   const scrollRef = React.useRef<HTMLPreElement>(null);
-  const stored = job.data?.log ?? "";
-  const text = [stored, ...live].filter((part) => part !== "").join("\n");
+  const stored = (job.data?.log ?? "").replace(/\n$/, "");
+  const text = open && live.length > 0 ? live.join("\n") : stored;
 
   React.useEffect(() => {
     const el = scrollRef.current;
@@ -52,7 +48,7 @@ export function JobLogView({ jobId }: { jobId: string }) {
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3">
         <h1 className="text-xl font-semibold tracking-tight">Job {j.kind}</h1>
-        <Badge variant={variantByStatus[j.status] ?? "secondary"}>{j.status}</Badge>
+        <StatusBadge status={j.status} variants={jobVariant} />
       </div>
       {j.error !== null && j.error !== undefined ? (
         <p role="alert" className="text-sm text-destructive">
@@ -80,6 +76,7 @@ export function JobLogView({ jobId }: { jobId: string }) {
       </dl>
       <pre
         ref={scrollRef}
+        data-testid="job-log"
         className="max-h-[60dvh] overflow-auto rounded-md border bg-muted/40 p-4 font-mono text-xs whitespace-pre-wrap"
       >
         {text === "" ? "Waiting for output…" : text}

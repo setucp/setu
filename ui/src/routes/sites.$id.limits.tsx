@@ -24,5 +24,5 @@ function SiteLimitsTab() {
   if (site.data === undefined) {
     return <p className="text-sm text-muted-foreground">Loading…</p>;
   }
-  return <SiteLimits planId={site.data.plan_id} />;
+  return <SiteLimits site={site.data} />;
 }

@@ -1,38 +1,41 @@
 import * as React from "react";
-import { toast } from "sonner";
 import { api, ApiError, type LocalServerResponse } from "@/lib/client";
+import { InstallInstructions } from "./CopyButton";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { cn } from "@/lib/utils";
 
 type Phase =
   | { name: "checking" }
+  | { name: "token" }
   | { name: "owner" }
-  | { name: "panel"; publicUrl: string }
-  | { name: "server"; install: LocalServerResponse }
+  | { name: "server"; publicUrl: string; install: LocalServerResponse | null }
   | { name: "done" }
   | { name: "complete" };
 
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const STEPS: Partial<Record<Phase["name"], { n: number; title: string }>> = {
+  token: { n: 1, title: "Setup token" },
+  owner: { n: 2, title: "Owner account" },
+  server: { n: 3, title: "This server" },
+  done: { n: 4, title: "Done" },
+};
 
 /**
- * First-run wizard: create the owner, show the panel URL, register the
- * local server and wait for it to come online. Used by `/setup`; plain
- * `fetch` calls with local state (no query client needed), and `onDone`
+ * First-run wizard (spec §7): setup token → owner → local server → done.
+ * The token is asked alone, then posted with the owner in one request;
+ * a wrong token (401) returns to step 1. The local-server step shows the
+ * token-free install command and the join token apart, each with a copy
+ * button, and polls `GET /servers` until that server is online. Plain
+ * `fetch` calls with local state (no query client needed); `onDone`
  * instead of navigation so tests can assert completion.
  */
 export function SetupWizard({
   onDone,
+  pollMs = 2000,
   className,
 }: {
   onDone?: () => void;
+  pollMs?: number;
   className?: string;
 }) {
   const [phase, setPhase] = React.useState<Phase>({ name: "checking" });
@@ -47,13 +50,7 @@ export function SetupWizard({
     api
       .setupStatus()
       .then((status) => {
-        if (!cancelled) {
-          setPhase(
-            status.needed
-              ? { name: "owner" }
-              : { name: "complete" },
-          );
-        }
+        if (!cancelled) setPhase(status.needed ? { name: "token" } : { name: "complete" });
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -69,28 +66,38 @@ export function SetupWizard({
     e.preventDefault();
     setBusy(true);
     setError(null);
+    const trimmedEmail = email.trim();
     try {
-      const trimmedEmail = email.trim();
       await api.setupOwner(token.trim(), trimmedEmail, password);
+    } catch (err) {
+      setBusy(false);
+      if (err instanceof ApiError && err.status === 401) {
+        setToken("");
+        setPhase({ name: "token" });
+      }
+      setError(err instanceof ApiError ? err.message : "setup failed");
+      return;
+    }
+    try {
       // The setup endpoint does not start a session; sign in explicitly.
       await api.login(trimmedEmail, password);
       setPassword("");
       setToken("");
       const status = await api.setupStatus();
-      setPhase({ name: "panel", publicUrl: status.public_url });
+      setPhase({ name: "server", publicUrl: status.public_url, install: null });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "setup failed");
+      setError(err instanceof ApiError ? err.message : "sign-in failed");
     } finally {
       setBusy(false);
     }
   }
 
-  async function registerServer() {
+  async function registerServer(publicUrl: string) {
     setBusy(true);
     setError(null);
     try {
       const install = await api.setupLocalServer();
-      setPhase({ name: "server", install });
+      setPhase({ name: "server", publicUrl, install });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "server registration failed");
     } finally {
@@ -98,32 +105,47 @@ export function SetupWizard({
     }
   }
 
-  // After the install command is shown, poll the server until the agent
-  // joins (online) — then the single-node install is one finished flow.
+  // Once the command is shown, poll the servers list until the agent
+  // joins and heartbeats (`online`).
+  const waitingFor = phase.name === "server" ? (phase.install?.server.id ?? null) : null;
+  const onDoneRef = React.useRef(onDone);
+  onDoneRef.current = onDone;
   React.useEffect(() => {
-    if (phase.name !== "server") return;
-    const id = phase.install.server.id;
+    if (waitingFor === null) return;
+    let stopped = false;
     const timer = window.setInterval(() => {
       api
-        .getServer(id)
-        .then((server) => {
-          if (server.status === "online") {
+        .listServers()
+        .then((servers) => {
+          const server = servers.find((s) => s.id === waitingFor);
+          if (!stopped && server?.status === "online") {
+            stopped = true;
             window.clearInterval(timer);
             setPhase({ name: "done" });
-            onDone?.();
+            onDoneRef.current?.();
           }
         })
         .catch(() => {
           // Keep polling through transient failures.
         });
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [phase, onDone]);
+    }, pollMs);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [waitingFor, pollMs]);
+
+  const step = STEPS[phase.name];
 
   return (
-    <div className={cn("flex min-h-dvh items-center justify-center px-5", className)}>
-      <div className="w-full max-w-md">
+    <div className={cn("flex min-h-dvh items-center justify-center px-5 py-10", className)}>
+      <div className="w-full max-w-lg">
         <h1 className="text-xl font-semibold tracking-tight">Set up Setu</h1>
+        {step !== undefined ? (
+          <p className="mt-1 text-sm text-muted-foreground">
+            Step {step.n} of 4: {step.title}
+          </p>
+        ) : null}
         {phase.name === "checking" && error === null ? (
           <p className="mt-4 text-sm text-muted-foreground">Checking setup status…</p>
         ) : null}
@@ -132,17 +154,23 @@ export function SetupWizard({
             {error}
           </p>
         ) : null}
-        {phase.name === "owner" ? (
+
+        {phase.name === "token" ? (
           <form
-            aria-label="Create owner"
+            aria-label="Token"
             className="mt-4 flex flex-col gap-4"
-            onSubmit={(e) => void createOwner(e)}
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (token.trim() === "") return;
+              setError(null);
+              setPhase({ name: "owner" });
+            }}
           >
             <p className="text-sm text-muted-foreground">
-              Create the first operator account. This step works exactly once.
-              The setup token is in{" "}
-              <span className="font-mono">/var/lib/setu/setup-token</span> on
-              the panel host.
+              The installer printed a one-time setup token. It is also in{" "}
+              <span className="font-mono">/var/lib/setu/setup-token</span> on the
+              panel host (readable by root and the <span className="font-mono">setu</span>{" "}
+              user only).
             </p>
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Setup token
@@ -154,6 +182,22 @@ export function SetupWizard({
                 required
               />
             </label>
+            <Button type="submit" className="self-start">
+              Continue
+            </Button>
+          </form>
+        ) : null}
+
+        {phase.name === "owner" ? (
+          <form
+            aria-label="Create owner"
+            className="mt-4 flex flex-col gap-4"
+            onSubmit={(e) => void createOwner(e)}
+          >
+            <p className="text-sm text-muted-foreground">
+              Create the first operator: the owner, who can do everything. This
+              step works exactly once.
+            </p>
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Email
               <Input
@@ -175,75 +219,75 @@ export function SetupWizard({
                 required
               />
             </label>
-            <Button type="submit" disabled={busy} className="self-start">
-              {busy ? "Creating…" : "Create owner"}
-            </Button>
-          </form>
-        ) : null}
-        {phase.name === "panel" ? (
-          <div className="mt-4 flex flex-col gap-3">
-            <p className="text-sm">
-              Owner created and signed in. The panel lives at:
-            </p>
-            <code className="block overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs break-all">
-              {phase.publicUrl}
-            </code>
-            <p className="text-sm text-muted-foreground">
-              Set it with <span className="font-mono">SETU_PUBLIC_URL</span> (or{" "}
-              <span className="font-mono">public_url</span> in{" "}
-              <span className="font-mono">setu.toml</span>) — the install
-              command below embeds it so the agent can reach this panel.
-            </p>
-            <Button type="button" disabled={busy} onClick={() => void registerServer()} className="self-start">
-              {busy ? "Registering…" : "Register this server"}
-            </Button>
-          </div>
-        ) : null}
-        {phase.name === "server" ? (
-          <div className="mt-4 flex flex-col gap-3">
-            <p className="text-sm">
-              Server{" "}
-              <span className="font-medium">{phase.install.server.name}</span>{" "}
-              registered. Run this on the server as root:
-            </p>
-            <code className="block overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs break-all">
-              {phase.install.install_command}
-            </code>
-            <p className="text-sm">
-              It reads the join token from{" "}
-              <span className="font-mono">SETU_JOIN_TOKEN</span> or stdin:
-            </p>
-            <code className="block overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs break-all">
-              {phase.install.join_token}
-            </code>
             <div className="flex gap-2">
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
                 onClick={() => {
-                  void copyText(phase.install.install_command).then((ok) => {
-                    toast[ok ? "success" : "error"](
-                      ok ? "Install command copied" : "Copy failed — select it manually",
-                    );
-                  });
+                  setError(null);
+                  setPhase({ name: "token" });
                 }}
               >
-                Copy install command
+                Back
+              </Button>
+              <Button type="submit" disabled={busy}>
+                {busy ? "Creating…" : "Create owner"}
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Waiting for the agent to join — this page continues
-              automatically once it is online. The join token is shown
-              once and expires after one hour.
-            </p>
+          </form>
+        ) : null}
+
+        {phase.name === "server" ? (
+          <div className="mt-4 flex flex-col gap-4">
+            <p className="text-sm">Owner created and signed in. The panel lives at:</p>
+            <code className="block overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs break-all">
+              {phase.publicUrl}
+            </code>
+            {phase.install === null ? (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  Register this machine as the first server; its agent joins the
+                  panel like any other server.
+                </p>
+                <Button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void registerServer(phase.publicUrl)}
+                  className="self-start"
+                >
+                  {busy ? "Registering…" : "Register this server"}
+                </Button>
+              </>
+            ) : (
+              <>
+                <p className="text-sm">
+                  Server <span className="font-medium">{phase.install.server.name}</span>{" "}
+                  registered.
+                </p>
+                <InstallInstructions
+                  command={phase.install.install_command}
+                  joinToken={phase.install.join_token}
+                />
+                <p className="text-xs text-muted-foreground" aria-live="polite">
+                  Waiting for the agent to join — this page continues on its own
+                  once the server is online.
+                </p>
+              </>
+            )}
           </div>
         ) : null}
+
         {phase.name === "done" ? (
-          <p className="mt-4 text-sm text-green-700 dark:text-green-400">
-            Server is online. Setup is finished.
-          </p>
+          <div className="mt-4 flex flex-col gap-2">
+            <p className="text-sm text-green-700 dark:text-green-400">
+              Server is online. Setup is finished.
+            </p>
+            <a href="/sites" className="text-sm underline underline-offset-2">
+              Go to sites
+            </a>
+          </div>
         ) : null}
+
         {phase.name === "complete" ? (
           <p className="mt-4 text-sm text-muted-foreground">
             Setup is already complete.{" "}

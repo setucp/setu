@@ -1,6 +1,6 @@
 import * as React from "react";
 import { toast } from "sonner";
-import { useCreateOperator, useOperators } from "@/lib/api";
+import { useCreateOperator, useMe, useOperators, useSetOperatorPassword } from "@/lib/api";
 import { ApiError, type AuditEntry, type Operator } from "@/lib/client";
 import { Button } from "./ui/button";
 import { Modal } from "./ui/dialog";
@@ -18,12 +18,16 @@ import {
 const ROLES = ["owner", "operator", "viewer"] as const;
 
 /**
- * Operators list with create. The API offers list + create only (no update or
- * delete endpoints), so the panel matches exactly that.
+ * Operators: list, create, and a password change per row. The API has no
+ * operator update or delete endpoint, so the panel offers exactly these.
+ * Your own password needs the current one; the owner sets anyone else's
+ * (R102). Every session of the target ends on change.
  */
 export function OperatorsPanel() {
   const operators = useOperators();
+  const me = useMe();
   const [open, setOpen] = React.useState(false);
+  const [passwordFor, setPasswordFor] = React.useState<Operator | null>(null);
 
   if (operators.isPending) {
     return <p className="text-sm text-muted-foreground">Loading…</p>;
@@ -57,6 +61,9 @@ export function OperatorsPanel() {
             <TableHead>Email</TableHead>
             <TableHead>Role</TableHead>
             <TableHead>Created</TableHead>
+            <TableHead>
+              <span className="sr-only">Actions</span>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -65,12 +72,141 @@ export function OperatorsPanel() {
               <TableCell className="font-medium">{o.email}</TableCell>
               <TableCell>{o.role}</TableCell>
               <TableCell>{new Date(o.created_at).toLocaleDateString()}</TableCell>
+              <TableCell className="text-right">
+                {me.data?.id === o.id || me.data?.role === "owner" ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setPasswordFor(o)}
+                  >
+                    Change password
+                  </Button>
+                ) : null}
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
       </Table>
       <CreateOperatorDialog open={open} onClose={() => setOpen(false)} />
+      <PasswordDialog
+        operator={passwordFor}
+        self={passwordFor !== null && me.data?.id === passwordFor.id}
+        onClose={() => setPasswordFor(null)}
+      />
     </div>
+  );
+}
+
+function PasswordDialog({
+  operator,
+  self,
+  onClose,
+}: {
+  operator: Operator | null;
+  self: boolean;
+  onClose: () => void;
+}) {
+  const [current, setCurrent] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [again, setAgain] = React.useState("");
+  const [localError, setLocalError] = React.useState<string | null>(null);
+  const change = useSetOperatorPassword();
+  const reset = change.reset;
+
+  React.useEffect(() => {
+    setCurrent("");
+    setPassword("");
+    setAgain("");
+    setLocalError(null);
+    reset();
+  }, [operator, reset]);
+
+  const error =
+    localError ??
+    (change.isError
+      ? change.error instanceof ApiError
+        ? change.error.message
+        : "password change failed"
+      : null);
+
+  return (
+    <Modal
+      open={operator !== null}
+      onClose={onClose}
+      title={`Change password for ${operator?.email ?? ""}`}
+      description={
+        self
+          ? "Your other sessions are signed out; this browser stays signed in."
+          : "Every session of this operator is signed out."
+      }
+    >
+      <form
+        aria-label="Change password"
+        className="flex flex-col gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (operator === null) return;
+          if (password !== again) {
+            setLocalError("The new passwords do not match.");
+            return;
+          }
+          setLocalError(null);
+          change.mutate(
+            { id: operator.id, password, currentPassword: self ? current : undefined },
+            {
+              onSuccess: () => {
+                toast.success(`Password changed for ${operator.email}`);
+                onClose();
+              },
+            },
+          );
+        }}
+      >
+        {self ? (
+          <label className="flex flex-col gap-1.5 text-sm font-medium">
+            Current password
+            <Input
+              type="password"
+              autoComplete="current-password"
+              value={current}
+              onChange={(e) => setCurrent(e.target.value)}
+              required
+            />
+          </label>
+        ) : null}
+        <label className="flex flex-col gap-1.5 text-sm font-medium">
+          New password
+          <Input
+            type="password"
+            autoComplete="new-password"
+            minLength={8}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </label>
+        <label className="flex flex-col gap-1.5 text-sm font-medium">
+          Confirm new password
+          <Input
+            type="password"
+            autoComplete="new-password"
+            minLength={8}
+            value={again}
+            onChange={(e) => setAgain(e.target.value)}
+            required
+          />
+        </label>
+        {error !== null ? (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
+        <Button type="submit" disabled={change.isPending} className="self-start">
+          {change.isPending ? "Saving…" : "Set password"}
+        </Button>
+      </form>
+    </Modal>
   );
 }
 
@@ -79,15 +215,16 @@ function CreateOperatorDialog({ open, onClose }: { open: boolean; onClose: () =>
   const [password, setPassword] = React.useState("");
   const [role, setRole] = React.useState<string>("operator");
   const create = useCreateOperator();
+  const reset = create.reset;
 
   React.useEffect(() => {
     if (open) {
       setEmail("");
       setPassword("");
       setRole("operator");
-      create.reset();
+      reset();
     }
-  }, [open ]);
+  }, [open, reset]);
 
   return (
     <Modal open={open} onClose={onClose} title="Add operator">

@@ -1,250 +1,161 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import * as React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SiteBackups } from "@/components/SiteBackups";
-import { SiteEnv } from "@/components/SiteEnv";
+import { SiteDanger } from "@/components/SiteDanger";
+import { SiteLimits } from "@/components/SiteLimits";
 import { SiteLogs } from "@/components/SiteLogs";
-import { SiteUpdates } from "@/components/SiteUpdates";
-import { ConfirmProvider } from "@/components/ui/dialog";
+import { SiteOverview } from "@/components/SiteOverview";
+import type { SiteDetail } from "@/lib/client";
+import {
+  MockEventSource,
+  installEventSource,
+  json,
+  notFound,
+  planFixture,
+  renderWithClient,
+  siteFixture,
+  stubFetch,
+} from "./helpers";
 
-/** Controllable EventSource stand-in: tests emit lines via `emit`. */
-class MockEventSource {
-  static instances: MockEventSource[] = [];
-  url: string;
-  onmessage: ((event: { data: string }) => void) | null = null;
-  closed = false;
+const detail = {
+  ...siteFixture(),
+  metrics: {
+    at: "2026-10-09T00:00:00Z",
+    cpu_seconds: 12.5,
+    memory_bytes: 128 * 1024 * 1024,
+    disk_bytes: 300 * 1024 * 1024,
+  },
+} as SiteDetail;
 
-  constructor(url: string) {
-    this.url = url;
-    MockEventSource.instances.push(this);
-  }
-
-  emit(data: string) {
-    this.onmessage?.({ data });
-  }
-
-  close() {
-    this.closed = true;
-  }
-}
-
-function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-const envBody = {
-  env: [
-    {
-      name: "PORT",
-      value: "20001",
-      masked: false,
-      secret: false,
-      once: false,
-      has_value: true,
-    },
-    {
-      name: "VYASA_ADMIN_PASSWORD",
-      value: "[MASKED_VALUE]",
-      masked: true,
-      secret: true,
-      once: true,
-      has_value: true,
-    },
-  ],
-};
-
-const backupsBody = {
-  backups: [
-    {
-      id: "b1",
-      site_id: "s1",
-      taken_at: "2026-10-05T00:00:00Z",
-      location: "/var/lib/setu/backups/s1/ts",
-      kind: "manual",
-      status: "completed",
-      size_bytes: 1024,
-    },
-  ],
-};
-
-const versionsBody = {
-  versions: [
-    {
-      id: "v2",
-      app_id: "hello",
-      version: "0.1.1",
-      channel: "stable",
-      published_at: "2026-10-02T00:00:00Z",
-    },
-    {
-      id: "v1",
-      app_id: "hello",
-      version: "0.1.0",
-      channel: "stable",
-      published_at: "2026-10-01T00:00:00Z",
-    },
-  ],
-};
-
-function renderWithClient(ui: React.ReactElement) {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={client}>
-      <ConfirmProvider>{ui}</ConfirmProvider>
-    </QueryClientProvider>,
-  );
-}
-
-describe("site detail tabs", () => {
+describe("site detail", () => {
   beforeEach(() => {
-    MockEventSource.instances = [];
-    vi.stubGlobal("EventSource", MockEventSource);
+    installEventSource();
   });
 
-  it("logs subscribe to SSE and append lines, pausing on demand", async () => {
+  it("overview shows status, version, links and metrics", () => {
+    renderWithClient(<SiteOverview site={detail} />);
+    expect(screen.getByText("running")).toBeInTheDocument();
+    expect(screen.getByText(/0\.1\.0/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "blog.example.com" })).toHaveAttribute(
+      "href",
+      "https://blog.example.com",
+    );
+    expect(screen.getByText("128.0 MiB")).toBeInTheDocument();
+    expect(screen.getByText("12.5 s")).toBeInTheDocument();
+    expect(screen.getByText("300.0 MiB")).toBeInTheDocument();
+  });
+
+  it("overview says when no metrics sample exists yet", () => {
+    renderWithClient(<SiteOverview site={{ ...detail, metrics: null }} />);
+    expect(screen.getByText(/no sample yet/i)).toBeInTheDocument();
+  });
+
+  it("logs: SSE append without duplicates", async () => {
+    const user = userEvent.setup();
     renderWithClient(<SiteLogs siteId="s1" />);
     await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
-    expect(MockEventSource.instances[0]?.url).toBe("/api/v1/sites/s1/logs");
+    const first = MockEventSource.latest();
+    expect(first.url).toBe("/api/v1/sites/s1/logs");
+    first.emit("GET / 200");
+    first.emit("GET /a 200");
+    first.emit("GET / 200");
+    const pre = await screen.findByTestId("site-logs");
+    await waitFor(() => expect(pre.textContent).toBe("GET / 200\nGET /a 200\nGET / 200"));
 
-    MockEventSource.instances[0]?.emit("first line");
-    MockEventSource.instances[0]?.emit("second line");
-    expect(await screen.findByText(/first line/)).toBeInTheDocument();
-    expect(screen.getByText(/second line/)).toBeInTheDocument();
-
-    const user = userEvent.setup();
+    // Pause and resume: a new connection replays the journal tail,
+    // which must not render twice; a genuinely new line appends.
     await user.click(screen.getByRole("button", { name: /pause/i }));
-    expect(MockEventSource.instances[0]?.closed).toBe(true);
-    // Buffered lines survive the pause.
-    expect(screen.getByText(/first line/)).toBeInTheDocument();
+    expect(first.closed).toBe(true);
     await user.click(screen.getByRole("button", { name: /resume/i }));
     await waitFor(() => expect(MockEventSource.instances).toHaveLength(2));
+    const second = MockEventSource.latest();
+    second.emit("GET /a 200");
+    second.emit("GET / 200");
+    second.emit("GET /b 200");
+    await waitFor(() =>
+      expect(pre.textContent).toBe("GET / 200\nGET /a 200\nGET / 200\nGET /b 200"),
+    );
+
+    // A browser auto-reconnect on the same instance replays too.
+    second.reopen();
+    second.emit("GET /b 200");
+    second.emit("GET /c 200");
+    await waitFor(() =>
+      expect(pre.textContent).toBe("GET / 200\nGET /a 200\nGET / 200\nGET /b 200\nGET /c 200"),
+    );
+  }, 20000);
+
+  it("limits: shows plan and current numbers", async () => {
+    stubFetch((url) => (url.endsWith("/api/v1/plans") ? json({ plans: [planFixture] }) : notFound()));
+    renderWithClient(<SiteLimits site={detail} />);
+    expect(await screen.findByText("standard")).toBeInTheDocument();
+    const memory = screen.getByRole("row", { name: /memory/i });
+    expect(within(memory).getByText("512 MB")).toBeInTheDocument();
+    expect(within(memory).getByText("128.0 MiB")).toBeInTheDocument();
+    const disk = screen.getByRole("row", { name: /disk/i });
+    expect(within(disk).getByText("5120 MB")).toBeInTheDocument();
+    expect(within(disk).getByText("300.0 MiB")).toBeInTheDocument();
+    const cpu = screen.getByRole("row", { name: /cpu/i });
+    expect(within(cpu).getByText(/100% of one core/)).toBeInTheDocument();
+    expect(within(cpu).getByText("12.5 s")).toBeInTheDocument();
   });
 
-  it("env masks secrets and reveals an editor only after confirm", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: unknown) => {
-        if (String(url).endsWith("/api/v1/sites/s1/env")) return json(envBody);
-        return new Response("not found", { status: 404 });
-      }),
-    );
-    const user = userEvent.setup();
-    renderWithClient(<SiteEnv siteId="s1" />);
-    await screen.findByText("VYASA_ADMIN_PASSWORD");
-
-    expect(screen.getByText("[MASKED_VALUE]")).toBeInTheDocument();
-    expect(screen.queryByText("sup3r-secret")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /reveal/i }));
-    // Confirm dialog appears before anything editable does.
-    expect(await screen.findByText(/will be visible on screen/i)).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText(/new value/i)).not.toBeInTheDocument();
-    await user.click(screen.getByTestId("confirm-accept"));
-    expect(await screen.findByPlaceholderText(/new value/i)).toBeInTheDocument();
-  });
-
-  it("env save puts the edited values and reports the restart job", async () => {
-    const puts: unknown[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: unknown, init?: RequestInit) => {
-        const path = String(url);
-        if (path.endsWith("/api/v1/sites/s1/env")) {
-          if (init?.method === "PUT") {
-            puts.push(JSON.parse(String(init.body)));
-            return json(
-              {
-                site: { id: "s1" },
-                job: { id: "job-env", status: "queued" },
-              },
-              202,
-            );
-          }
-          return json(envBody);
-        }
-        return new Response("not found", { status: 404 });
-      }),
-    );
-    const user = userEvent.setup();
-    const onSubmitted = vi.fn();
-    renderWithClient(<SiteEnv siteId="s1" onSubmitted={onSubmitted} />);
-    await screen.findByText("PORT");
-    await user.click(screen.getByRole("button", { name: /edit/i }));
-    await user.type(screen.getByLabelText(/new value for port/i), "20002");
-    await user.click(screen.getByRole("button", { name: /save changes/i }));
-    await waitFor(() => expect(puts).toHaveLength(1));
-    expect(puts[0]).toEqual({ env: { PORT: "20002" } });
-    expect(onSubmitted).toHaveBeenCalledWith("job-env");
-  });
-
-  it("backups trigger restore only after a confirmation naming the backup", async () => {
-    const posts: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: unknown, init?: RequestInit) => {
-        const path = String(url);
-        if (path.endsWith("/api/v1/sites/s1/backups")) return json(backupsBody);
-        if (path.endsWith("/restore") && init?.method === "POST") {
-          posts.push(path);
-          return json({ job: { id: "job-restore", status: "queued" } }, 202);
-        }
-        return new Response("not found", { status: 404 });
-      }),
-    );
+  it("danger: stop/delete confirmations", async () => {
+    const calls = stubFetch((url, method) => {
+      if (url.endsWith("/api/v1/sites/s1/stop") && method === "POST") {
+        return json({ site: detail, job: { id: "job-stop", status: "queued" } }, 202);
+      }
+      if (url.endsWith("/api/v1/sites/s1") && method === "DELETE") {
+        return json({ job: { id: "job-del", status: "queued" } }, 202);
+      }
+      return notFound();
+    });
     const user = userEvent.setup();
     const onJob = vi.fn();
-    renderWithClient(<SiteBackups siteId="s1" onJob={onJob} />);
-    await screen.findByText("b1");
-    await user.click(screen.getByRole("button", { name: /restore/i }));
-    // The confirmation names the backup under restore.
-    expect(await screen.findByText(/restore backup b1\?/i)).toBeInTheDocument();
-    expect(posts).toHaveLength(0);
-    await user.click(screen.getByTestId("confirm-accept"));
-    await waitFor(() => expect(posts).toHaveLength(1));
-    expect(posts[0]).toContain("/api/v1/sites/s1/backups/b1/restore");
-    expect(onJob).toHaveBeenCalledWith("job-restore");
+    const onDeleted = vi.fn();
+    renderWithClient(<SiteDanger site={detail} onJob={onJob} onDeleted={onDeleted} />);
+
+    // Stop: a confirmation naming the site; cancel sends nothing.
+    await user.click(screen.getByRole("button", { name: /^stop$/i }));
+    let dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/stop blog\?/i);
+    await user.click(within(dialog).getByRole("button", { name: /cancel/i }));
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    await user.click(screen.getByRole("button", { name: /^stop$/i }));
+    await user.click(await screen.findByTestId("confirm-accept"));
+    await waitFor(() => expect(onJob).toHaveBeenCalledWith("job-stop"));
+
+    // Delete: only once the site's name is typed.
+    await user.click(screen.getByRole("button", { name: /delete blog/i }));
+    dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/delete blog\?/i);
+    const accept = within(dialog).getByTestId("confirm-accept");
+    expect(accept).toBeDisabled();
+    await user.type(within(dialog).getByLabelText(/type blog to confirm/i), "blog");
+    expect(accept).toBeEnabled();
+    await user.click(accept);
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledWith("job-del"));
+    expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
+  }, 20000);
+});
+
+describe("site logs", () => {
+  beforeEach(() => {
+    installEventSource();
   });
 
-  it("updates list versions with the current highlighted and start an update", async () => {
-    const posts: unknown[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: unknown, init?: RequestInit) => {
-        const path = String(url);
-        if (path.endsWith("/api/v1/apps/hello/versions")) return json(versionsBody);
-        if (path.endsWith("/api/v1/sites/s1/update") && init?.method === "POST") {
-          posts.push(JSON.parse(String(init.body)));
-          return json(
-            { site: { id: "s1" }, job: { id: "job-update", status: "queued" } },
-            202,
-          );
-        }
-        return new Response("not found", { status: 404 });
-      }),
-    );
-    const user = userEvent.setup();
-    const onJob = vi.fn();
-    renderWithClient(
-      <SiteUpdates siteId="s1" appId="hello" currentVersion="0.1.0" onJob={onJob} />,
-    );
-    await screen.findByText("0.1.1");
-    expect(screen.getByText(/current/i)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /update to 0\.1\.1/i }));
-    // The update asks for confirmation naming the version; the dialog
-    // button shares the row button's label, so scope to the dialog.
-    const dialog = await screen.findByRole("dialog");
-    await user.click(
-      within(dialog).getByRole("button", { name: /update to 0\.1\.1/i }),
-    );
-    await waitFor(() => expect(posts).toHaveLength(1));
-    expect(posts[0]).toEqual({ version: "0.1.1" });
-    expect(onJob).toHaveBeenCalledWith("job-update");
+  it("another site starts a fresh buffer", async () => {
+    // Plain render (SiteLogs needs no providers) so rerender reuses the
+    // same component instance, as a route param change does.
+    const { rerender } = render(<SiteLogs siteId="s1" />);
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+    MockEventSource.latest().emit("from s1");
+    const pre = await screen.findByTestId("site-logs");
+    await waitFor(() => expect(pre.textContent).toBe("from s1"));
+    rerender(<SiteLogs siteId="s2" />);
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(2));
+    expect(MockEventSource.instances[0]?.closed).toBe(true);
+    MockEventSource.latest().emit("from s2");
+    await waitFor(() => expect(pre.textContent).toBe("from s2"));
   });
 });

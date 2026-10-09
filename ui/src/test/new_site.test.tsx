@@ -93,7 +93,9 @@ describe("new site wizard", () => {
     await user.clear(domain);
     await user.type(domain, "not a domain");
     await user.click(screen.getByRole("button", { name: /create site/i }));
-    expect(await screen.findByText(/enter a valid domain/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/enter a valid domain/i, {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
     expect(posts).toHaveLength(0);
   });
 

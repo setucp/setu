@@ -1,5 +1,5 @@
 import type { Job } from "@/lib/client";
-import { Badge } from "./ui/badge";
+import { StatusBadge, jobVariant } from "./StatusBadge";
 import {
   Table,
   TableBody,
@@ -8,13 +8,6 @@ import {
   TableHeader,
   TableRow,
 } from "./ui/table";
-
-const variantByStatus: Record<string, "success" | "warning" | "destructive" | "secondary"> = {
-  done: "success",
-  queued: "warning",
-  running: "warning",
-  failed: "destructive",
-};
 
 function JobRow({ job }: { job: Job }) {
   return (
@@ -41,7 +34,7 @@ function JobRow({ job }: { job: Job }) {
         )}
       </TableCell>
       <TableCell>
-        <Badge variant={variantByStatus[job.status] ?? "secondary"}>{job.status}</Badge>
+        <StatusBadge status={job.status} variants={jobVariant} />
       </TableCell>
       <TableCell className="max-w-64 truncate text-xs text-muted-foreground">
         {job.error ?? "—"}

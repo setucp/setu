@@ -2,6 +2,9 @@ import type { components } from "./api-types";
 
 export type Operator = components["schemas"]["OperatorOut"];
 export type Site = components["schemas"]["SiteOut"];
+export type SiteDetail = components["schemas"]["SiteDetailOut"];
+export type SiteMetric = components["schemas"]["SiteMetricOut"];
+export type RevealOut = components["schemas"]["RevealOut"];
 export type Server = components["schemas"]["ServerOut"];
 export type AppInfo = components["schemas"]["AppOut"];
 export type AppVersion = components["schemas"]["AppVersionOut"];
@@ -126,7 +129,7 @@ export const api = {
     return body.sites;
   },
 
-  getSite(id: string): Promise<Site> {
+  getSite(id: string): Promise<SiteDetail> {
     return request(`/api/v1/sites/${encodeURIComponent(id)}`);
   },
 
@@ -186,6 +189,13 @@ export const api = {
     });
   },
 
+  cordonServer(id: string, cordoned: boolean): Promise<Server> {
+    return request(`/api/v1/servers/${encodeURIComponent(id)}/cordon`, {
+      method: "POST",
+      body: JSON.stringify({ cordoned }),
+    });
+  },
+
   deleteServer(id: string): Promise<void> {
     return request(`/api/v1/servers/${encodeURIComponent(id)}`, {
       method: "DELETE",
@@ -234,6 +244,14 @@ export const api = {
     });
   },
 
+  /** Plaintext of one env value; the caller's password re-authenticates. */
+  revealEnv(siteId: string, name: string, password: string): Promise<RevealOut> {
+    return request(
+      `/api/v1/sites/${encodeURIComponent(siteId)}/env/${encodeURIComponent(name)}/reveal`,
+      { method: "POST", body: JSON.stringify({ password }) },
+    );
+  },
+
   async listBackups(siteId: string): Promise<Backup[]> {
     const body = await request<{ backups: Backup[] }>(
       `/api/v1/sites/${encodeURIComponent(siteId)}/backups`,
@@ -254,6 +272,13 @@ export const api = {
     );
   },
 
+  deleteBackup(siteId: string, backupId: string): Promise<{ job: Job }> {
+    return request(
+      `/api/v1/sites/${encodeURIComponent(siteId)}/backups/${encodeURIComponent(backupId)}`,
+      { method: "DELETE" },
+    );
+  },
+
   siteAction(
     id: string,
     action: "start" | "stop" | "restart" | "retry",
@@ -263,10 +288,14 @@ export const api = {
     });
   },
 
-  updateSite(id: string, version: string): Promise<SiteJobResponse> {
+  updateSite(
+    id: string,
+    version: string,
+    prompts: Record<string, string>,
+  ): Promise<SiteJobResponse> {
     return request(`/api/v1/sites/${encodeURIComponent(id)}/update`, {
       method: "POST",
-      body: JSON.stringify({ version }),
+      body: JSON.stringify({ version, prompts }),
     });
   },
 
@@ -285,6 +314,22 @@ export const api = {
     return request("/api/v1/operators", {
       method: "POST",
       body: JSON.stringify({ email, password, role }),
+    });
+  },
+
+  /** Own password needs `current_password`; the owner sets anyone else's. */
+  setOperatorPassword(
+    id: string,
+    password: string,
+    currentPassword?: string,
+  ): Promise<void> {
+    return request(`/api/v1/operators/${encodeURIComponent(id)}/password`, {
+      method: "PUT",
+      body: JSON.stringify(
+        currentPassword === undefined
+          ? { password }
+          : { current_password: currentPassword, password },
+      ),
     });
   },
 
