@@ -77,9 +77,14 @@ async fn main() {
         },
         Cmd::Backup { out } => backup(&out),
         Cmd::Openapi { out } => openapi(&out).await,
-        Cmd::Agent { cmd } => setu_agent::cli::run_agent(cmd)
-            .await
-            .map_err(|e| e.to_string()),
+        Cmd::Agent { cmd } => {
+            // The agent's own log (journald captures stderr); stdout
+            // stays clean for `doctor`'s table and install output.
+            init_tracing(true);
+            setu_agent::cli::run_agent(cmd)
+                .await
+                .map_err(|e| e.to_string())
+        }
         Cmd::Helper(args) => std::process::exit(setu_agent::helper::cli::main(args)),
     };
     if let Err(msg) = result {
@@ -102,13 +107,25 @@ async fn connect_and_migrate(config: &Config) -> Result<Db, String> {
     Ok(db)
 }
 
+/// `RUST_LOG` or `info`; ANSI colours only on a terminal (journald
+/// stores the raw bytes). `to_stderr` for the agent roles.
+fn init_tracing(to_stderr: bool) {
+    use std::io::IsTerminal as _;
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let builder = tracing_subscriber::fmt().with_env_filter(filter);
+    if to_stderr {
+        builder
+            .with_ansi(std::io::stderr().is_terminal())
+            .with_writer(std::io::stderr)
+            .init();
+    } else {
+        builder.with_ansi(std::io::stdout().is_terminal()).init();
+    }
+}
+
 async fn serve() -> Result<(), String> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    init_tracing(false);
     let config = load_config()?;
     let db = connect_and_migrate(&config).await?;
     db.plans().seed_default().await.map_err(|e| e.message)?;

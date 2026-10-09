@@ -262,8 +262,7 @@ async fn ensure_packages(sys: &dyn SystemCommands) -> Result<(), InstallError> {
             if i < 2 || std::env::consts::ARCH != "x86_64" {
                 return Err(step("apt")(e));
             }
-            tracing::warn!(error = %format!("{e:#}"), "Caddy apt repository failed; installing Caddy's release package");
-            eprintln!("setu: Caddy's apt repository failed ({e:#}); using {CADDY_DEB_URL}");
+            tracing::warn!(error = %format!("{e:#}"), url = CADDY_DEB_URL, "Caddy apt repository failed; installing Caddy's release package");
             for argv in caddy_deb_fallback_commands() {
                 let args: Vec<&str> = argv[1..].iter().map(String::as_str).collect();
                 sys.run(&argv[0], &args)
