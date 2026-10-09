@@ -233,13 +233,25 @@ pub fn local_install_command(listen: &Listen, public_url: &url::Url, tls_interna
                 addr.port()
             )
         }
-        Listen::Unix(_) => {
+        Listen::Unix(path) => {
             let mut cmd = format!(
                 "setu agent install --control-plane {}",
                 control_plane_url(public_url)
             );
+            // The agent on the panel's own box re-applies Caddy's base
+            // config: it must keep the panel route (reconciled from
+            // `agent.toml`) and, under `tls internal`, the internal issuer.
+            if let Some(host) = public_url.host_str() {
+                cmd.push_str(" --panel-host ");
+                cmd.push_str(host);
+                let upstream = format!("unix/{}", path.display());
+                if upstream != setu_agent::caddy::DEFAULT_PANEL_UPSTREAM {
+                    cmd.push_str(" --upstream ");
+                    cmd.push_str(&upstream);
+                }
+            }
             if tls_internal {
-                cmd.push_str(" --ca ");
+                cmd.push_str(" --tls internal --ca ");
                 cmd.push_str(CADDY_LOCAL_CA);
             }
             cmd
@@ -320,13 +332,20 @@ mod tests {
         let unix = Listen::Unix("/run/setu/http.sock".into());
         assert_eq!(
             local_install_command(&unix, &public, false),
-            "setu agent install --control-plane https://panel.example"
+            "setu agent install --control-plane https://panel.example --panel-host panel.example"
         );
         assert_eq!(
             local_install_command(&unix, &public, true),
             format!(
-                "setu agent install --control-plane https://panel.example --ca {CADDY_LOCAL_CA}"
+                "setu agent install --control-plane https://panel.example \
+                 --panel-host panel.example --tls internal --ca {CADDY_LOCAL_CA}"
             )
+        );
+        let other = Listen::Unix("/run/other/panel.sock".into());
+        assert_eq!(
+            local_install_command(&other, &public, false),
+            "setu agent install --control-plane https://panel.example \
+             --panel-host panel.example --upstream unix//run/other/panel.sock"
         );
     }
 }

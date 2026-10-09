@@ -267,7 +267,7 @@ async fn local_server_command_targets_loopback_or_public_url() {
     };
     assert_eq!(
         local(owner.clone()).await,
-        "setu agent install --control-plane https://panel.example"
+        "setu agent install --control-plane https://panel.example --panel-host panel.example"
     );
     unix.db
         .settings()
@@ -277,6 +277,7 @@ async fn local_server_command_targets_loopback_or_public_url() {
     assert_eq!(
         local(owner).await,
         "setu agent install --control-plane https://panel.example \
+         --panel-host panel.example --tls internal \
          --ca /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt"
     );
 }
