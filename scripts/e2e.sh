@@ -436,8 +436,21 @@ pass "agent kill mid-provision → redelivery → site 2 running"
 DEL_RESP=$(curl -s -b "$JAR" -X DELETE "$API/sites/$SITE_ID")
 DEL_JOB=$(echo "$DEL_RESP" | jq -r '.job.id // empty')
 [ -n "$DEL_JOB" ] || fail "DELETE site 1" "$DEL_RESP"
-wait_job "$API/jobs/$DEL_JOB" completed 180 \
-  || { dump_agent_debug || true; fail "delete job" "job $DEL_JOB did not complete"; }
+# The delete job removes the site row, cascading its own job row: the
+# job URL 404s on success (same contract the API test asserts), so poll
+# until `completed`, `failed`, or gone — gone means done.
+DEL_DONE="" DEL_STATUS="" DEL_CODE=""
+DEL_DEADLINE=$((SECONDS + 180))
+while [ $SECONDS -lt $DEL_DEADLINE ]; do
+  DEL_RESP2=$(curl -s -b "$JAR" -o "$E2E_DIR/del-job.json" -w '%{http_code}' "$API/jobs/$DEL_JOB") || DEL_RESP2="000"
+  DEL_CODE="$DEL_RESP2"
+  DEL_STATUS=$(jq -r '.status // empty' "$E2E_DIR/del-job.json" 2>/dev/null) || DEL_STATUS=""
+  if [ "$DEL_STATUS" = "completed" ] || [ "$DEL_CODE" = "404" ]; then DEL_DONE=1; break; fi
+  if [ "$DEL_STATUS" = "failed" ]; then break; fi
+  sleep 3
+done
+[ -n "$DEL_DONE" ] \
+  || { dump_agent_debug || true; fail "delete job" "job $DEL_JOB status=$DEL_STATUS code=$DEL_CODE"; }
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$API/sites/$SITE_ID")
 [ "$CODE" = "404" ] || fail "site row gone" "GET still $CODE"
 cexec sh -c "test ! -d /srv/setu/sites/${SITE_ID}" \
