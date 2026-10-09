@@ -175,6 +175,10 @@ pub async fn repost_unposted<H, P, C>(
     repost: &AtomicBool,
 ) {
     for result in agent.runtime().state().unposted() {
+        // The e2e (`agent_exit_mid_provision_recovers`) looks for this
+        // line: the command ran before the restart, its result is posted
+        // now, without running it again.
+        tracing::info!(cmd = %result.id, "posting the cached result");
         if !post_and_mark(agent, cp, &result, repost).await {
             break;
         }
