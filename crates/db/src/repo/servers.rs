@@ -101,8 +101,8 @@ impl std::fmt::Debug for Server {
     }
 }
 
-/// What the agent reports when it joins (the db-side input; proto's
-/// `JoinRequest` gains `nonce` in WS5, ledger R76).
+/// What the agent reports when it joins (the db-side input; the API
+/// maps proto's `JoinRequest`, nonce included, ledger R76).
 #[derive(Clone)]
 pub struct JoinInput {
     pub nonce: String,
@@ -399,23 +399,7 @@ impl<'a> Servers<'a> {
         .execute(&mut *tx)
         .await
         .map_err(map_db_error)?;
-        if !hb.metrics.is_empty() {
-            let owned: Vec<String> =
-                sqlx::query_scalar!("SELECT id FROM sites WHERE server_id = $1", id)
-                    .fetch_all(&mut *tx)
-                    .await
-                    .map_err(map_db_error)?;
-            let own: Vec<setu_proto::SiteMetric> = hb
-                .metrics
-                .iter()
-                .filter(|m| owned.contains(&m.site_id))
-                .cloned()
-                .collect();
-            if own.len() < hb.metrics.len() {
-                tracing::debug!(server_id = %id, "heartbeat ignored foreign metrics");
-            }
-            crate::repo::metrics::insert_metrics_tx(&mut tx, &own).await?;
-        }
+        crate::repo::metrics::insert_metrics_tx(&mut tx, id, hb.metrics).await?;
         tx.commit().await.map_err(map_db_error)?;
         let boot_changed = match (previous.boot_id.as_deref(), hb.boot_id) {
             (_, None) => false,

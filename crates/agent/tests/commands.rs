@@ -3,33 +3,38 @@
 
 use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use setu_agent::helper::{Ctx, FakeSystemctl, FakeUsers, Recording};
 use setu_agent::{AgentConfig, FakeCaddy, FakePostgres, LocalHelper, NativeRuntime, Paths};
-use setu_proto::{BinaryRef, Command, EnvVar, Limits, SiteSpec};
+use setu_proto::{
+    BinaryRef, Command, EnvVar, InventoryReport, Limits, LogsOutput, SiteSpec, Workdir,
+};
 
-fn test_site(root: &Path, site_id: &str, port: u16) -> SiteSpec {
+fn test_site(site_id: &str, port: u16) -> SiteSpec {
     let short = setu_common::short_id(site_id).to_lowercase();
-    let dir = root.join("srv/setu/sites").join(&short);
     SiteSpec {
         site_id: site_id.to_string(),
-        short_id: short.clone(),
-        user: format!("setu-site-{short}"),
-        data_dir: dir.join("data"),
-        run_dir: dir.join("run"),
+        short_id: short,
+        version: "0.1.0".to_string(),
         port,
-        exec: dir.join("bin").join("current").join("app"),
+        exec: "app".to_string(),
         args: vec!["serve".to_string()],
-        env_file: dir.join("env"),
+        workdir: Workdir::ExecDir,
+        dirs: vec!["media".to_string()],
         limits: Limits {
             memory_mb: 512,
             cpu_percent: 100,
             disk_mb: 5120,
         },
-        health_path: "/healthz".to_string(),
-        binary: None,
+        health: "/healthz".to_string(),
+        startup_grace_s: 5,
     }
+}
+
+/// `<root>/srv/setu/sites/<short>` (the agent derives it; tests peek).
+fn site_dir(root: &Path, site: &SiteSpec) -> PathBuf {
+    root.join("srv/setu/sites").join(&site.short_id)
 }
 
 type Rt = NativeRuntime<LocalHelper, FakePostgres, FakeCaddy>;
@@ -147,29 +152,35 @@ async fn every_command_kind_is_handled() {
 
     let id = "01jdispatch00000000000001";
     let short = "00000001";
-    let mut site = test_site(root, id, servers.health_port);
-    site.binary = Some(BinaryRef {
+    let site = test_site(id, servers.health_port);
+    let sdir = site_dir(root, &site);
+    let data = sdir.join("data");
+    let binary = BinaryRef {
+        version: "0.1.0".to_string(),
         url: servers.tarball_url.clone(),
         sha256: servers.tarball_sha.clone(),
         exec: "app".to_string(),
-        version: "0.1.0".to_string(),
-    });
-    // A backup dir with a file so the archive has something in it.
-    std::fs::create_dir_all(site.data_dir.join("media")).expect("mkdir media");
-    std::fs::write(site.data_dir.join("media").join("a.txt"), b"data").expect("write data");
-
-    // The control plane's path: only its last component is used.
-    let dest = Path::new("/var/lib/setu/backups").join(id).join("manual-1");
+    };
+    let backup_id = "01jbackup0000000000000001";
+    let s = || short.to_string();
     let commands = vec![
+        Command::SiteCreate { site: site.clone() },
         Command::CreateDatabase {
             db: "site_00000001".to_string(),
             role: "site_00000001".to_string(),
             password: "pw".to_string(),
         },
-        Command::Install { site: site.clone() },
+        Command::Install {
+            site: s(),
+            binary: binary.clone(),
+        },
+        Command::SwitchVersion {
+            site: s(),
+            version: "0.1.0".to_string(),
+        },
         Command::WriteUnit { site: site.clone() },
         Command::WriteEnv {
-            site: site.clone(),
+            site: s(),
             env: vec![EnvVar {
                 name: "APP_SECRET".to_string(),
                 value: "s3cret".to_string(),
@@ -177,70 +188,67 @@ async fn every_command_kind_is_handled() {
                 once: false,
             }],
         },
-        Command::Start {
-            site_id: id.to_string(),
-        },
-        Command::Status {
-            site_id: id.to_string(),
-        },
-        Command::Health {
-            site_id: id.to_string(),
-            port: servers.health_port,
-            path: "/healthz".to_string(),
-            timeout_s: 5,
-        },
+        Command::Start { site: s() },
+        Command::Status { site: s() },
+        Command::Health { site: site.clone() },
         Command::SetRoute {
+            site_short_id: s(),
             domain: "example.com".to_string(),
             port: servers.health_port,
-            site_short_id: Some(short.to_string()),
         },
         Command::Backup {
-            site: site.clone(),
+            site: s(),
             db: "site_00000001".to_string(),
             dirs: vec!["media".to_string()],
-            dest: dest.clone(),
+            backup_id: backup_id.to_string(),
         },
-        Command::Stop {
-            site_id: id.to_string(),
-        },
+        Command::Stop { site: s() },
         Command::Restore {
-            site: site.clone(),
+            site: s(),
             db: "site_00000001".to_string(),
-            src: dest.clone(),
+            role: "site_00000001".to_string(),
+            dirs: vec!["media".to_string()],
+            backup_id: backup_id.to_string(),
         },
         Command::FetchLogs {
-            site_id: id.to_string(),
+            site: s(),
+            cursor: None,
             lines: 10,
         },
         Command::Inventory,
-        Command::SwitchVersion {
-            site_id: id.to_string(),
-            version: "0.1.0".to_string(),
-        },
-        Command::Restart {
-            site_id: id.to_string(),
-        },
+        Command::Restart { site: s() },
         Command::RemoveRoute {
+            site_short_id: s(),
             domain: "example.com".to_string(),
-            site_short_id: Some(short.to_string()),
         },
-        Command::Remove { site: site.clone() },
+        Command::DeleteBackup {
+            site: s(),
+            backup_id: backup_id.to_string(),
+        },
+        Command::SiteRemove { site: s() },
         Command::DropDatabase {
             db: "site_00000001".to_string(),
             role: "site_00000001".to_string(),
         },
     ];
-    assert_eq!(commands.len(), 18, "test must cover every Command variant");
+    assert_eq!(commands.len(), 20, "test must cover every Command variant");
 
     let backup_dir = root
         .join("var/lib/setu/backups")
         .join(short)
-        .join("manual-1");
+        .join(backup_id);
     for cmd in &commands {
         let kind = setu_agent::command_kind(cmd);
-        if matches!(cmd, Command::Restore { .. }) {
-            // Prove restore really swaps: change the live data first.
-            std::fs::write(site.data_dir.join("media").join("a.txt"), b"changed").expect("write");
+        match cmd {
+            Command::Backup { .. } => {
+                // A file so the archive has something in it.
+                std::fs::write(data.join("media").join("a.txt"), b"data").expect("write data");
+            }
+            Command::Restore { .. } => {
+                // Prove restore really swaps: change the live data first.
+                std::fs::write(data.join("media").join("a.txt"), b"changed").expect("write");
+            }
+            _ => {}
         }
         let result = setu_agent::handle("cmd-test-id", cmd, &rt).await;
         if matches!(cmd, Command::FetchLogs { .. }) && !journalctl_available() {
@@ -253,13 +261,18 @@ async fn every_command_kind_is_handled() {
         );
         assert_eq!(result.id, "cmd-test-id");
         match cmd {
+            Command::SiteCreate { .. } => {
+                assert!(data.join("media").is_dir(), "needs.dirs from the spec");
+            }
             Command::Install { .. } => {
-                assert!(site
-                    .data_dir
-                    .parent()
-                    .expect("site")
-                    .join("bin/0.1.0/app")
-                    .is_file());
+                assert!(sdir.join("bin/0.1.0/app").is_file());
+                assert!(std::fs::symlink_metadata(sdir.join("bin/current")).is_err());
+            }
+            Command::SwitchVersion { .. } => {
+                assert_eq!(
+                    std::fs::read_link(sdir.join("bin/current")).expect("current"),
+                    PathBuf::from("0.1.0")
+                );
             }
             Command::Backup { .. } => {
                 assert!(
@@ -270,22 +283,42 @@ async fn every_command_kind_is_handled() {
                     backup_dir.join("dirs.tar.zst").is_file(),
                     "backup must archive dirs"
                 );
+                assert!(result.output["size_bytes"].as_u64().unwrap_or(0) > 0);
             }
             Command::Restore { .. } => {
                 assert_eq!(
-                    std::fs::read(site.data_dir.join("media").join("a.txt")).expect("read"),
+                    std::fs::read(data.join("media").join("a.txt")).expect("read"),
                     b"data"
                 );
+                assert!(rt
+                    .postgres()
+                    .calls()
+                    .contains(&"restore site_00000001 site_00000001".to_string()));
+            }
+            Command::FetchLogs { .. } => {
+                let out: LogsOutput =
+                    serde_json::from_value(result.output.clone()).expect("logs output");
+                let _ = out.cursor;
+            }
+            Command::Inventory => {
+                let inv: InventoryReport =
+                    serde_json::from_value(result.output.clone()).expect("inventory");
+                assert_eq!(inv.sites_on_disk, [short]);
+                assert_eq!(inv.routes, [format!("setu-site-{short}")]);
+                assert_eq!(inv.databases, ["site_00000001"]);
+                assert_eq!(inv.units.len(), 1);
+                assert_eq!(inv.units[0].short_id, short);
+                assert!(!inv.units[0].active, "stopped before inventory");
+            }
+            Command::DeleteBackup { .. } => {
+                assert!(!backup_dir.exists(), "delete_backup removes the dir");
+                assert_eq!(result.output["existed"], true);
             }
             _ => {}
         }
     }
-    assert!(!site.data_dir.exists(), "remove deletes the tree");
+    assert!(!sdir.exists(), "site_remove deletes the tree");
     assert_eq!(units.reloads(), 2, "one unit write + one removal");
-    assert!(
-        !Path::new("/var/lib/setu/backups").join(id).exists(),
-        "dest path never used"
-    );
 }
 
 #[tokio::test]
@@ -293,12 +326,18 @@ async fn write_env_sets_mode_0600() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (rt, _) = test_runtime(dir.path());
     let id = "01jenvtest000000000000001";
-    let site = test_site(dir.path(), id, 20011);
+    let site = test_site(id, 20011);
+    let env_file = site_dir(dir.path(), &site).join("env");
+    assert!(
+        setu_agent::handle("c0", &Command::SiteCreate { site: site.clone() }, &rt)
+            .await
+            .ok
+    );
 
     let result = setu_agent::handle(
         "cmd-env",
         &Command::WriteEnv {
-            site: site.clone(),
+            site: site.short_id.clone(),
             env: vec![
                 EnvVar {
                     name: "APP_PORT".to_string(),
@@ -319,7 +358,7 @@ async fn write_env_sets_mode_0600() {
     .await;
     assert!(result.ok, "write_env must succeed: {:?}", result.error);
 
-    let contents = std::fs::read_to_string(&site.env_file).expect("read env");
+    let contents = std::fs::read_to_string(&env_file).expect("read env");
     assert!(
         contents.contains("APP_PORT=\"20011\""),
         "env must name vars"
@@ -328,7 +367,7 @@ async fn write_env_sets_mode_0600() {
         contents.contains("APP_SECRET=\"s3cret-value\""),
         "file holds the real value"
     );
-    let mode = std::fs::metadata(&site.env_file)
+    let mode = std::fs::metadata(&env_file)
         .expect("meta")
         .permissions()
         .mode()
@@ -343,7 +382,7 @@ async fn write_env_sets_mode_0600() {
     let bad = setu_agent::handle(
         "cmd-env-bad",
         &Command::WriteEnv {
-            site,
+            site: site.short_id.clone(),
             env: vec![EnvVar {
                 name: "A".to_string(),
                 value: "x\nLEAKED=1".to_string(),
@@ -363,7 +402,7 @@ async fn redelivered_write_unit_is_a_noop_when_unchanged() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (rt, units) = test_runtime(dir.path());
     let id = "01jredeliver0000000000001";
-    let site = test_site(dir.path(), id, 20012);
+    let site = test_site(id, 20012);
 
     let first = setu_agent::handle("cmd-1", &Command::WriteUnit { site: site.clone() }, &rt).await;
     assert!(first.ok, "first write_unit: {:?}", first.error);
@@ -387,15 +426,15 @@ async fn redelivered_write_unit_is_a_noop_when_unchanged() {
 }
 
 /// `SetRoute`/`RemoveRoute` address the Caddy route `setu-site-<short>`
-/// (spec §4) and are refused without the short id (ledger R71).
+/// (spec §4); a malformed short id is refused.
 #[tokio::test]
 async fn route_commands_key_off_the_site_short_id() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (rt, _units) = test_runtime(dir.path());
     let set = Command::SetRoute {
+        site_short_id: "abcd1234".to_string(),
         domain: "a.example.test".to_string(),
         port: 20001,
-        site_short_id: Some("abcd1234".to_string()),
     };
     let r = setu_agent::handle("c1", &set, &rt).await;
     assert!(r.ok, "{:?}", r.error);
@@ -407,22 +446,21 @@ async fn route_commands_key_off_the_site_short_id() {
         "127.0.0.1:20001"
     );
 
-    let no_short = Command::SetRoute {
-        domain: "b.example.test".to_string(),
-        port: 20002,
-        site_short_id: None,
-    };
-    let r = setu_agent::handle("c2", &no_short, &rt).await;
-    assert!(!r.ok);
     let bad_short = Command::RemoveRoute {
+        site_short_id: "../etc".to_string(),
         domain: "a.example.test".to_string(),
-        site_short_id: Some("../etc".to_string()),
     };
     assert!(!setu_agent::handle("c3", &bad_short, &rt).await.ok);
+    let empty_short = Command::SetRoute {
+        site_short_id: String::new(),
+        domain: "b.example.test".to_string(),
+        port: 20002,
+    };
+    assert!(!setu_agent::handle("c2", &empty_short, &rt).await.ok);
 
     let remove = Command::RemoveRoute {
+        site_short_id: "abcd1234".to_string(),
         domain: "a.example.test".to_string(),
-        site_short_id: Some("abcd1234".to_string()),
     };
     assert!(setu_agent::handle("c4", &remove, &rt).await.ok);
     assert!(
@@ -430,4 +468,27 @@ async fn route_commands_key_off_the_site_short_id() {
         "idempotent"
     );
     assert!(rt.caddy().admin().routes().is_empty());
+}
+
+/// `DeleteBackup` refuses a hostile id and is idempotent.
+#[tokio::test]
+async fn delete_backup_refuses_traversal_and_repeats_ok() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (rt, _units) = test_runtime(dir.path());
+    let victim = dir.path().join("var/lib/setu/backups/abcd1234/keep");
+    std::fs::create_dir_all(&victim).expect("mkdir");
+    for bad in ["../abcd1234/keep", "..", "a/b"] {
+        let cmd = Command::DeleteBackup {
+            site: "abcd1234".to_string(),
+            backup_id: bad.to_string(),
+        };
+        assert!(!setu_agent::handle("d1", &cmd, &rt).await.ok, "{bad}");
+    }
+    let cmd = Command::DeleteBackup {
+        site: "abcd1234".to_string(),
+        backup_id: "gone".to_string(),
+    };
+    let r = setu_agent::handle("d2", &cmd, &rt).await;
+    assert!(r.ok && r.output["existed"] == false);
+    assert!(victim.is_dir());
 }

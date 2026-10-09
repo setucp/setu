@@ -5,8 +5,6 @@
 //! Pre-mutation failure (`stop`) leaves the site `running`; anything at
 //! or after `restore` marks it `failed` (the data was already touched).
 
-use std::path::PathBuf;
-
 use setu_common::AppError;
 use setu_proto::Command;
 
@@ -21,8 +19,9 @@ pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), App
     }
     let manifest = load_manifest(&ctx.db, &site.app_id, &site.app_version).await?;
     let plan = ctx.db.plans().get(&site.plan_id).await?;
-    // Same as backup: no env resolution (no prompts on this job, none
-    // needed — the env file already on disk is untouched by restore).
+    // No env resolution (no prompts on this job, none needed — the env
+    // file already on disk is untouched by restore); the spec is for
+    // `health`.
     let spec = build_spec(&plan, &site, &manifest)?;
     let server_id = site.server_id.clone();
 
@@ -33,7 +32,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), App
         ctx,
         &server_id,
         Command::Stop {
-            site_id: site.id.clone(),
+            site: site.short_id.clone(),
         },
     )
     .await
@@ -63,12 +62,11 @@ pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), App
         "restore",
         &server_id,
         Command::Restore {
-            site: spec,
+            site: site.short_id.clone(),
             db: site.db_name.clone(),
-            src: PathBuf::from(crate::update::backup_dest(
-                &backup.site_short_id,
-                &backup.id,
-            )),
+            role: site.db_role.clone(),
+            dirs: manifest.backup.dirs.clone(),
+            backup_id: backup.id.clone(),
         },
     )
     .await?;
@@ -78,7 +76,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), App
         "start",
         &server_id,
         Command::Start {
-            site_id: site.id.clone(),
+            site: site.short_id.clone(),
         },
     )
     .await?;
@@ -87,12 +85,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), App
         site_id,
         "health",
         &server_id,
-        Command::Health {
-            site_id: site.id.clone(),
-            port: site.port as u16,
-            path: manifest.app.health.clone(),
-            timeout_s: u64::from(manifest.app.startup_grace_s),
-        },
+        Command::Health { site: spec },
     )
     .await?;
 

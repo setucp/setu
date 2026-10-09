@@ -178,6 +178,7 @@ async fn setup_local_server_returns_install_command() {
         .post(srv.url("/agent/v1/join"))
         .json(&json!({
             "join_token": join_token,
+            "nonce": "setup-nonce",
             "hostname": name,
             "arch": "x86_64",
             "os": "linux",

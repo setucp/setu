@@ -10,5 +10,5 @@ pub mod validate;
 
 pub use config::{Config, ConfigError, Listen, SecretKey};
 pub use error::{AppError, ErrorCode};
-pub use ids::{is_short_id, new_id, short_id};
+pub use ids::{is_short_id, new_id, random_hex, short_id};
 pub use seal::{SealError, Sealer};

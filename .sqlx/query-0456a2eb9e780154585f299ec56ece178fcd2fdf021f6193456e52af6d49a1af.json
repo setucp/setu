@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE agent_commands\n             SET status = 'delivered', delivered_at = now(), attempts = attempts + 1\n             WHERE id = (\n                 SELECT id FROM agent_commands\n                 WHERE server_id = $1 AND status = 'queued' AND expires_at > now()\n                 ORDER BY created_at, id\n                 FOR UPDATE SKIP LOCKED\n                 LIMIT 1\n             )\n             RETURNING id, command, created_at, attempts",
+  "query": "UPDATE agent_commands\n             SET status = 'delivered', delivered_at = now(), attempts = attempts + 1\n             WHERE id = (\n                 SELECT id FROM agent_commands\n                 WHERE server_id = $1 AND status = 'queued' AND expires_at > now()\n                 ORDER BY created_at, id\n                 FOR UPDATE SKIP LOCKED\n                 LIMIT 1\n             )\n             RETURNING id, site_short_id, command, created_at, expires_at",
   "describe": {
     "columns": [
       {
@@ -16,6 +16,17 @@
       },
       {
         "ordinal": 1,
+        "name": "site_short_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_commands",
+            "name": "site_short_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
         "name": "command",
         "type_info": "Jsonb",
         "origin": {
@@ -26,7 +37,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -37,13 +48,13 @@
         }
       },
       {
-        "ordinal": 3,
-        "name": "attempts",
-        "type_info": "Int4",
+        "ordinal": 4,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
         "origin": {
           "Table": {
             "table": "agent_commands",
-            "name": "attempts"
+            "name": "expires_at"
           }
         }
       }
@@ -55,10 +66,11 @@
     },
     "nullable": [
       false,
+      true,
       false,
       false,
       false
     ]
   },
-  "hash": "d25d8ae0948af620469f90c16b85f91a0602c89a2575e5c1176ab9804ec2931d"
+  "hash": "0456a2eb9e780154585f299ec56ece178fcd2fdf021f6193456e52af6d49a1af"
 }

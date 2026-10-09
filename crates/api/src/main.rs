@@ -5,10 +5,8 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use setu_api::session_store::PgSessionStore;
 use setu_common::{Config, Sealer};
 use setu_db::Db;
 use setu_jobs::DbAgentClient;
@@ -114,22 +112,21 @@ async fn serve() -> Result<(), String> {
     let db = connect_and_migrate(&config).await?;
     db.plans().seed_default().await.map_err(|e| e.message)?;
     let sealer = Sealer::new(&config.secret_key);
-    let agent: Arc<dyn setu_jobs::AgentClient> =
-        Arc::new(DbAgentClient::new(db.clone(), Duration::from_secs(120)));
+    let agent: Arc<dyn setu_jobs::AgentClient> = Arc::new(DbAgentClient::new(db.clone()));
     let state = setu_api::AppState::new(db.clone(), sealer.clone(), config.clone(), agent.clone());
-    // Job runner with concurrency 4 (plan Task 9).
-    let _runner = setu_jobs::Runner::spawn(db.clone(), agent, sealer, 4);
-    // Periodic session-expiry cleanup.
-    let store = PgSessionStore::new(db.pool().clone());
-    tokio::spawn(async move {
-        let mut timer = tokio::time::interval(Duration::from_secs(15 * 60));
-        loop {
-            timer.tick().await;
-            if let Err(e) = store.delete_expired().await {
-                tracing::error!(error = %e, "session cleanup failed");
-            }
-        }
-    });
+    let clock: Arc<dyn setu_jobs::Clock> = Arc::new(setu_jobs::SystemClock);
+    // Job runner (leases, renewal, two installs per server) and the
+    // scheduler (nightly backups, retention, metric/command/session
+    // pruning), both spec §6 defaults.
+    let _runner = setu_jobs::Runner::spawn(
+        db.clone(),
+        agent,
+        sealer,
+        clock.clone(),
+        setu_jobs::RunnerConfig::default(),
+    );
+    let _scheduler =
+        setu_jobs::Scheduler::spawn(db.clone(), clock, setu_jobs::SchedulerConfig::default());
     let app = setu_api::rest::router(state);
     // Unix-socket serving (behind Caddy) arrives with the listen module
     // (rev3 WS8); until then only TCP is served.

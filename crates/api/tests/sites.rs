@@ -268,8 +268,10 @@ async fn create_site_returns_job_and_provisions_to_running() {
     assert_eq!(
         srv.agent.transcript(),
         vec![
+            "site_create",
             "create_database",
             "install",
+            "switch_version",
             "write_unit",
             "write_env",
             "start",
@@ -905,8 +907,10 @@ async fn crash_after_health_before_route_is_failed() {
     assert_eq!(
         srv.agent.transcript(),
         vec![
+            "site_create",
             "create_database",
             "install",
+            "switch_version",
             "write_unit",
             "write_env",
             "start",

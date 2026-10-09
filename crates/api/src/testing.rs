@@ -112,7 +112,16 @@ impl TestServer {
         // hand. Cost if wrong: every site test would reimplement the
         // claim/dispatch loop).
         let runner_agent: Arc<dyn setu_jobs::AgentClient> = Arc::new(agent.clone());
-        let runner = setu_jobs::Runner::spawn(db.clone(), runner_agent, sealer, 4);
+        let runner = setu_jobs::Runner::spawn(
+            db.clone(),
+            runner_agent,
+            sealer,
+            Arc::new(setu_jobs::SystemClock),
+            setu_jobs::RunnerConfig {
+                idle_poll: Duration::from_millis(100),
+                ..setu_jobs::RunnerConfig::default()
+            },
+        );
         let app = crate::rest::router(state);
         tokio::spawn(async move {
             axum::serve(

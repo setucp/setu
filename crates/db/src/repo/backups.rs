@@ -165,4 +165,36 @@ impl<'a> Backups<'a> {
         .await
         .map_err(map_db_error)
     }
+
+    /// `pre_*` backups taken before `cutoff` (the scheduler passes its
+    /// clock's now minus 30 days).
+    pub async fn pre_taken_before(&self, cutoff: DateTime<Utc>) -> Result<Vec<Backup>, AppError> {
+        sqlx::query_as!(
+            Backup,
+            "SELECT id, site_id, server_id, site_short_id, site_name, domain, kind, taken_at,
+                    size_bytes, status FROM backups
+             WHERE kind IN ('pre_update', 'pre_restore', 'pre_delete')
+               AND status <> 'deleted'
+               AND taken_at < $1
+             ORDER BY taken_at, id",
+            cutoff,
+        )
+        .fetch_all(self.pool)
+        .await
+        .map_err(map_db_error)
+    }
+
+    /// When the site's newest `scheduled` backup (any status) was taken.
+    pub async fn latest_scheduled_at(
+        &self,
+        site_id: &str,
+    ) -> Result<Option<DateTime<Utc>>, AppError> {
+        sqlx::query_scalar!(
+            "SELECT max(taken_at) FROM backups WHERE site_id = $1 AND kind = 'scheduled'",
+            site_id,
+        )
+        .fetch_one(self.pool)
+        .await
+        .map_err(map_db_error)
+    }
 }

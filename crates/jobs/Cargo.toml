@@ -27,3 +27,4 @@ setu-db = { path = "../db" }
 setu-testkit = { path = "../testkit" }
 tokio.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true

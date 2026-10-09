@@ -45,6 +45,7 @@ async fn joined(srv: &TestServer, name: &str) -> (String, String) {
         .post(srv.url("/agent/v1/join"))
         .json(&json!({
             "join_token": join_token,
+            "nonce": "nonce-joined",
             "hostname": "web-1",
             "arch": "x86_64",
             "os": "linux",
@@ -91,6 +92,7 @@ async fn join_with_used_token_is_401() {
     let join_body = || {
         json!({
             "join_token": join_token,
+            "nonce": "nonce-1",
             "hostname": "web-1",
             "arch": "x86_64",
             "os": "linux",
@@ -109,8 +111,8 @@ async fn join_with_used_token_is_401() {
     assert_eq!(first.status(), reqwest::StatusCode::OK);
     let first: Value = first.json().await.expect("join body is json");
 
-    // Spec §5: a retry inside 60 s with the same nonce (empty until WS5
-    // adds `JoinRequest.nonce`, ledger R76) gets the same server token.
+    // Spec §5: a retry inside 60 s with the same nonce gets the same
+    // server token; a bystander's different nonce is refused.
     let retry = agent
         .post(srv.url("/agent/v1/join"))
         .json(&join_body())
@@ -120,6 +122,24 @@ async fn join_with_used_token_is_401() {
     assert_eq!(retry.status(), reqwest::StatusCode::OK);
     let retry: Value = retry.json().await.expect("retry body is json");
     assert_eq!(retry["server_token"], first["server_token"]);
+    let mut other = join_body();
+    other["nonce"] = json!("nonce-bystander");
+    let stolen = agent
+        .post(srv.url("/agent/v1/join"))
+        .json(&other)
+        .send()
+        .await
+        .expect("bystander join sends");
+    assert_eq!(stolen.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let mut empty = join_body();
+    empty["nonce"] = json!("");
+    let no_nonce = agent
+        .post(srv.url("/agent/v1/join"))
+        .json(&empty)
+        .send()
+        .await
+        .expect("nonce-less join sends");
+    assert_eq!(no_nonce.status(), reqwest::StatusCode::BAD_REQUEST);
 
     // Past the window the single-use token is spent: 401 with the envelope.
     sqlx::query("UPDATE servers SET joined_at = now() - interval '61 seconds' WHERE id = $1")
@@ -142,6 +162,7 @@ async fn join_with_used_token_is_401() {
         .post(srv.url("/agent/v1/join"))
         .json(&json!({
             "join_token": "setu_join_bogus",
+            "nonce": "nonce-1",
             "hostname": "web-1",
             "arch": "x86_64",
             "os": "linux",
@@ -205,7 +226,7 @@ async fn commands_long_poll_returns_when_enqueued() {
             &server_id,
             None,
             &setu_proto::Command::Status {
-                site_id: "site-1".to_string(),
+                site: "abcd1234".to_string(),
             },
             Duration::from_secs(120),
         )
@@ -231,15 +252,15 @@ async fn result_completes_wait() {
 
     // `DbAgentClient::call` (the production jobs path) blocks in `wait`
     // until the agent posts the result over HTTP.
-    let caller = setu_jobs::DbAgentClient::new(srv.db.clone(), Duration::from_secs(10));
+    let caller = setu_jobs::DbAgentClient::new(srv.db.clone());
     let call = tokio::spawn(async move {
         caller
             .call(
                 &server_id,
+                Some("abcd1239"),
                 setu_proto::Command::Status {
-                    site_id: "site-9".to_string(),
+                    site: "abcd1239".to_string(),
                 },
-                Duration::from_secs(10),
             )
             .await
     });
@@ -255,6 +276,13 @@ async fn result_completes_wait() {
     assert_eq!(poll.status(), reqwest::StatusCode::OK);
     let cmd: Value = poll.json().await.expect("command body is json");
     let cmd_id = cmd["id"].as_str().expect("command id").to_string();
+    // The envelope carries the site key and the per-kind TTL (2 min).
+    assert_eq!(cmd["site_short_id"], json!("abcd1239"));
+    let created =
+        chrono::DateTime::parse_from_rfc3339(cmd["created_at"].as_str().unwrap()).unwrap();
+    let expires =
+        chrono::DateTime::parse_from_rfc3339(cmd["expires_at"].as_str().unwrap()).unwrap();
+    assert_eq!((expires - created).num_seconds(), 120);
 
     // A result for an unknown id is 404 with the envelope.
     let missing = agent
@@ -328,12 +356,13 @@ async fn heartbeat_marks_online_and_stores_metrics() {
         .bearer_auth(&server_token)
         .json(&json!({
             "agent_version": "0.1.0",
+            "boot_id": "boot-1",
             "load1": 0.5,
             "mem_free_mb": 1024,
             "disk_free_mb": 2048,
             "units": [],
             "metrics": [{
-                "site_id": site.id,
+                "short_id": site.short_id,
                 "at": chrono::Utc::now().to_rfc3339(),
                 "cpu_seconds": 1.5,
                 "memory_bytes": 1024,
@@ -372,6 +401,21 @@ async fn redelivered_command_is_idempotent() {
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
     let (server_id, server_token) = joined(&srv, "redeliver").await;
     let agent = agent_client();
+    let beat = |boot: &'static str| {
+        agent
+            .post(srv.url("/agent/v1/heartbeat"))
+            .bearer_auth(&server_token)
+            .json(&json!({
+                "agent_version": "0.1.0", "boot_id": boot, "load1": 0.0,
+                "mem_free_mb": 1, "disk_free_mb": 1, "units": [], "metrics": [],
+            }))
+            .send()
+    };
+    // The agent's first heartbeat names its boot.
+    assert_eq!(
+        beat("boot-1").await.expect("hb").status(),
+        reqwest::StatusCode::NO_CONTENT
+    );
 
     let enqueued = srv
         .db
@@ -380,7 +424,7 @@ async fn redelivered_command_is_idempotent() {
             &server_id,
             None,
             &setu_proto::Command::Status {
-                site_id: "site-1".to_string(),
+                site: "abcd1234".to_string(),
             },
             Duration::from_secs(120),
         )
@@ -407,15 +451,28 @@ async fn redelivered_command_is_idempotent() {
         .expect("drain poll sends");
     assert_eq!(drained.status(), reqwest::StatusCode::NO_CONTENT);
 
-    // A new agent boot requeues delivered commands (spec §5): the same
-    // command id comes back with attempts = 2 (first delivery + redelivery).
-    let requeued = srv
-        .db
-        .commands()
-        .requeue_delivered(&server_id)
+    // A heartbeat from the same process changes nothing; one with a new
+    // `boot_id` (the agent restarted) requeues delivered commands (spec
+    // §5): the same command id comes back.
+    assert_eq!(
+        beat("boot-1").await.expect("hb").status(),
+        reqwest::StatusCode::NO_CONTENT
+    );
+    let still = agent
+        .get(srv.url("/agent/v1/commands?wait=0"))
+        .bearer_auth(&server_token)
+        .send()
         .await
-        .expect("requeue delivered");
-    assert_eq!(requeued, 1);
+        .expect("poll sends");
+    assert_eq!(
+        still.status(),
+        reqwest::StatusCode::NO_CONTENT,
+        "same boot id: no requeue"
+    );
+    assert_eq!(
+        beat("boot-2").await.expect("hb").status(),
+        reqwest::StatusCode::NO_CONTENT
+    );
 
     let second = agent
         .get(srv.url("/agent/v1/commands?wait=0"))
@@ -426,11 +483,12 @@ async fn redelivered_command_is_idempotent() {
     assert_eq!(second.status(), reqwest::StatusCode::OK);
     let second_body: Value = second.json().await.expect("body is json");
     assert_eq!(second_body["id"].as_str().expect("id"), enqueued.id);
-    assert_eq!(
-        second_body["attempts"],
-        json!(2),
-        "redelivered command must carry attempts = 2"
+    assert!(
+        second_body.get("attempts").is_none(),
+        "no delivery counter on the wire"
     );
+    let row = srv.db.commands().get(&enqueued.id).await.expect("row");
+    assert_eq!(row.attempts, 2, "first delivery + redelivery");
 }
 
 #[tokio::test]
@@ -448,7 +506,7 @@ async fn result_is_scoped_to_authed_server() {
             &server_b,
             None,
             &setu_proto::Command::Status {
-                site_id: "site-1".to_string(),
+                site: "abcd1234".to_string(),
             },
             Duration::from_secs(120),
         )
@@ -503,7 +561,7 @@ async fn result_repeat_post_is_idempotent_no_overwrite() {
             &server_id,
             None,
             &setu_proto::Command::Status {
-                site_id: "site-1".to_string(),
+                site: "abcd1234".to_string(),
             },
             Duration::from_secs(120),
         )
@@ -601,14 +659,15 @@ async fn heartbeat_ignores_foreign_site_metrics() {
         .bearer_auth(&token_a)
         .json(&json!({
             "agent_version": "0.1.0",
+            "boot_id": "boot-1",
             "load1": 0.5,
             "mem_free_mb": 1024,
             "disk_free_mb": 2048,
             "units": [],
             "metrics": [
-                {"site_id": site_own.id, "at": at, "cpu_seconds": 1.0, "memory_bytes": 1, "disk_bytes": 1},
-                {"site_id": site_foreign.id, "at": at, "cpu_seconds": 9.0, "memory_bytes": 9, "disk_bytes": 9},
-                {"site_id": "does-not-exist", "at": at, "cpu_seconds": 5.0, "memory_bytes": 5, "disk_bytes": 5},
+                {"short_id": site_own.short_id, "at": at, "cpu_seconds": 1.0, "memory_bytes": 1, "disk_bytes": 1},
+                {"short_id": site_foreign.short_id, "at": at, "cpu_seconds": 9.0, "memory_bytes": 9, "disk_bytes": 9},
+                {"short_id": "zzzz9999", "at": at, "cpu_seconds": 5.0, "memory_bytes": 5, "disk_bytes": 5},
             ],
         }))
         .send()

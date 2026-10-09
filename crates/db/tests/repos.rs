@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use setu_common::{ErrorCode, Sealer};
 use setu_db::{CreateError, Db, JoinError, JoinInput, NewPlan, NewSite, WaitError};
-use setu_proto::{Command, CommandResult, EnvVar, Limits, SiteSpec};
+use setu_proto::{Command, CommandResult, EnvVar};
 use setu_testkit::TestDb;
 
 async fn test_db() -> (TestDb, Db) {
@@ -100,27 +100,6 @@ async fn site(db: &Db) -> setu_db::Site {
         .expect("create site")
 }
 
-fn spec() -> SiteSpec {
-    SiteSpec {
-        site_id: "s".to_string(),
-        short_id: "abcd1234".to_string(),
-        user: "setu-site-abcd1234".to_string(),
-        data_dir: "/srv/setu/sites/abcd1234/data".into(),
-        run_dir: "/srv/setu/sites/abcd1234/run".into(),
-        port: 20000,
-        exec: "/srv/setu/sites/abcd1234/bin/current/hello".into(),
-        args: vec![],
-        env_file: "/srv/setu/sites/abcd1234/env".into(),
-        limits: Limits {
-            memory_mb: 512,
-            cpu_percent: 100,
-            disk_mb: 1024,
-        },
-        health_path: "/health".to_string(),
-        binary: None,
-    }
-}
-
 const PW: &str = "pw-SECRET-1";
 const ENV_SECRET: &str = "env-SECRET-2";
 
@@ -132,7 +111,7 @@ fn secret_commands() -> [Command; 2] {
             password: PW.to_string(),
         },
         Command::WriteEnv {
-            site: spec(),
+            site: "abcd1234".to_string(),
             env: vec![EnvVar {
                 name: "TOKEN".to_string(),
                 value: ENV_SECRET.to_string(),
@@ -158,6 +137,16 @@ async fn assert_redacted(db: &Db, id: &str) {
         Some("write_env") => assert!(row.command["env"][0]["value"].is_null()),
         other => panic!("unexpected kind {other:?}"),
     }
+    // The SQL function and proto's agent-side `redact()` agree exactly.
+    let original = secret_commands()
+        .into_iter()
+        .find(|c| Some(c.kind()) == row.command["kind"].as_str())
+        .expect("known command");
+    assert_eq!(
+        row.command,
+        original.redact(),
+        "SQL and proto redaction differ"
+    );
 }
 
 fn result(id: &str, ok: bool) -> CommandResult {
@@ -357,8 +346,8 @@ async fn join_token_expires() {
 async fn heartbeat_reports_boot_change_and_keeps_own_metrics() {
     let (_test, db) = test_db().await;
     let site = site(&db).await;
-    let metric = |site_id: &str| setu_proto::SiteMetric {
-        site_id: site_id.to_string(),
+    let metric = |short_id: &str| setu_proto::SiteMetric {
+        short_id: short_id.to_string(),
         at: chrono::Utc::now(),
         cpu_seconds: 1.5,
         memory_bytes: 10,
@@ -370,7 +359,7 @@ async fn heartbeat_reports_boot_change_and_keeps_own_metrics() {
         metrics: m,
     };
     let metrics: &'static [setu_proto::SiteMetric] =
-        Box::leak(vec![metric(&site.id), metric("foreign")].into_boxed_slice());
+        Box::leak(vec![metric(&site.short_id), metric("zzzz9999")].into_boxed_slice());
     let first = db
         .servers()
         .heartbeat(&site.server_id, &hb("b1", metrics))
@@ -782,7 +771,7 @@ async fn next_for_marks_expired() {
     let (test, db) = test_db().await;
     let server = online_server(&db, 4096, false).await;
     let start = |id: &str| Command::Start {
-        site_id: id.to_string(),
+        site: id.to_string(),
     };
     let old = db
         .commands()
@@ -807,7 +796,8 @@ async fn next_for_marks_expired() {
         .unwrap()
         .expect("live one");
     assert_eq!(got.id, live.id);
-    assert_eq!(got.attempts, 1);
+    assert_eq!(got.site_short_id, None);
+    assert_eq!(db.commands().get(&live.id).await.unwrap().attempts, 1);
     assert_eq!(db.commands().get(&old.id).await.unwrap().status, "expired");
     assert_eq!(
         db.commands().get(&live.id).await.unwrap().status,
@@ -920,7 +910,7 @@ async fn requeue_delivered_requeues_only_delivered() {
         .unwrap()
         .expect("redelivered");
     assert_eq!(again.id, delivered.id);
-    assert_eq!(again.attempts, 2);
+    assert_eq!(db.commands().get(&again.id).await.unwrap().attempts, 2);
 }
 
 #[tokio::test]

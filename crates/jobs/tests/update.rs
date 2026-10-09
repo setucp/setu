@@ -110,7 +110,7 @@ async fn update_rolls_back_when_health_fails() {
         ["switch_version", "start"].map(str::to_string)
     );
     let switches = agent.switch_versions();
-    assert_eq!(switches.as_slice(), ["0.1.1", "0.1.0"]);
+    assert_eq!(switches.as_slice(), ["0.1.0", "0.1.1", "0.1.0"]);
 
     let site = fx.db.sites().get(&fx.site_id).await.unwrap();
     assert_eq!(site.status, "running");
@@ -146,9 +146,9 @@ async fn update_rollback_switch_back_failure_marks_failed() {
     let (_test_db, fx, agent) = provisioned().await;
     publish_version(&fx.db, &manifest_toml("0.1.1")).await;
     // Health fails so rollback runs; the rollback's switch-back (the
-    // second SwitchVersion call) fails too.
+    // third SwitchVersion call: provision, update, rollback) fails too.
     agent.fail_next_with("health", "health check failed");
-    agent.fail_with("switch_version", 2, "switch-back failed");
+    agent.fail_with("switch_version", 3, "switch-back failed");
     let (ctx, _logs) = ctx_with_logs(fx.db.clone(), &agent);
 
     let err = update::run(&ctx, &fx.site_id, "0.1.1")

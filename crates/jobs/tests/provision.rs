@@ -24,8 +24,10 @@ async fn provision_happy_path_issues_commands_in_order() {
     assert_eq!(
         kinds(&agent.transcript()),
         [
+            "site_create",
             "create_database",
             "install",
+            "switch_version",
             "write_unit",
             "write_env",
             "start",
@@ -51,6 +53,33 @@ async fn provision_happy_path_issues_commands_in_order() {
         "second WriteEnv drops once secrets"
     );
     assert!(writes[0].len() > writes[1].len());
+
+    // Secrets travel only in the commands that need them.
+    let db_url = writes[0]
+        .iter()
+        .find(|v| v.name == "HELLO_DATABASE_URL")
+        .expect("db url")
+        .value
+        .clone();
+    let password = db_url
+        .split(':')
+        .nth(2)
+        .and_then(|rest| rest.split('@').next())
+        .expect("password in url")
+        .to_string();
+    assert_eq!(
+        agent.saw_secret(&password),
+        ["create_database", "write_env", "write_env"]
+    );
+    // Install carries the binary ref; every TTL follows the kind.
+    for (kind, ttl) in agent.ttls() {
+        let want = match kind.as_str() {
+            "install" => 15 * 60,
+            "health" => 90 + 30,
+            _ => 2 * 60,
+        };
+        assert_eq!(ttl.as_secs(), want, "{kind}");
+    }
 
     // Sealed copy is stored: secrets carry the `v1:` prefix, flags kept.
     let stored = site.env;
@@ -110,7 +139,10 @@ async fn provision_failure_at_install_marks_failed_with_step() {
     let site = fx.db.sites().get(&fx.site_id).await.unwrap();
     assert_eq!(site.status, "failed");
     assert_eq!(site.failed_step.as_deref(), Some("install"));
-    assert_eq!(kinds(&agent.transcript()), ["create_database", "install"]);
+    assert_eq!(
+        kinds(&agent.transcript()),
+        ["site_create", "create_database", "install"]
+    );
 
     let lines = logs.lock().expect("log lock");
     assert!(
@@ -142,8 +174,10 @@ async fn crash_after_health_before_route_is_failed() {
     assert_eq!(
         kinds(&transcript),
         [
+            "site_create",
             "create_database",
             "install",
+            "switch_version",
             "write_unit",
             "write_env",
             "start",
@@ -202,13 +236,15 @@ async fn retry_from_failed_reruns_all_steps() {
     assert_eq!(site.failed_step, None);
 
     let transcript = agent.transcript();
-    assert_eq!(transcript.len(), 2 + 9, "transcript: {transcript:?}");
+    assert_eq!(transcript.len(), 3 + 11, "transcript: {transcript:?}");
     assert_eq!(agent.call_count("install"), 2);
     assert_eq!(
-        kinds(&transcript[2..]),
+        kinds(&transcript[3..]),
         [
+            "site_create",
             "create_database",
             "install",
+            "switch_version",
             "write_unit",
             "write_env",
             "start",

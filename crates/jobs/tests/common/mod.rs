@@ -202,3 +202,51 @@ pub fn ctx_with_logs(db: Db, agent: &FakeAgent) -> (JobCtx, Arc<Mutex<Vec<String
     );
     (ctx, lines)
 }
+
+/// Another `provisioning` site of the fixture's app and plan on the
+/// same server.
+pub async fn add_site(db: &Db, like: &str, domain: &str) -> String {
+    let base = db.sites().get(like).await.unwrap();
+    let plan = db.plans().get(&base.plan_id).await.unwrap();
+    db.sites()
+        .create(&NewSite {
+            name: domain.to_string(),
+            app_id: base.app_id.clone(),
+            app_version: base.app_version.clone(),
+            server_id: Some(base.server_id.clone()),
+            plan_id: base.plan_id.clone(),
+            domain: domain.to_string(),
+            owner_email: "owner@example.com".to_string(),
+            env_sealed: json!([]),
+            plan_memory_mb: i64::from(plan.memory_mb),
+        })
+        .await
+        .unwrap()
+        .id
+}
+
+/// Poll until the job leaves `queued`/`running` (or `within` passes).
+pub async fn wait_job(db: &Db, job_id: &str, within: std::time::Duration) -> setu_db::Job {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        let job = db.jobs().get(job_id).await.unwrap();
+        if job.status == "done" || job.status == "failed" {
+            return job;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "job {job_id} still {} after {within:?}",
+            job.status
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// Run one SQL statement with a single text parameter.
+pub async fn exec(test_db: &setu_testkit::TestDb, sql: &str, arg: &str) {
+    sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+        .bind(arg)
+        .execute(&test_db.pool)
+        .await
+        .unwrap();
+}

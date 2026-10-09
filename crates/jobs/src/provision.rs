@@ -1,8 +1,10 @@
 //! Provision state machine (spec §5).
 //!
-//! Named steps: `validate`, `create_database`, `install`, `write_unit`,
-//! `write_env`, `start`, `health`, `set_route`, `verify_status`,
-//! `finish`. Any failure marks the site `failed` with the step name.
+//! Named steps: `validate`, `site_create`, `create_database`, `install`
+//! (holding one of the server's two install slots), `switch_version`,
+//! `write_unit`, `write_env`, `start`, `health`, `set_route`,
+//! `verify_status`, `finish` (WS6 reorders these into spec §6's twelve
+//! with a stored cursor). Any failure marks the site `failed` with the step name.
 //! Re-running from `failed` restarts from scratch: every agent command
 //! is idempotent, so this is safe.
 //!
@@ -42,8 +44,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
     let server_id = site.server_id.clone();
     let domain = site.domain.clone();
     // Route id `setu-site-<short>` on the agent (ledger R71).
-    let route_short = Some(site.short_id.clone());
-    let port = site.port;
+    let short = site.short_id.clone();
 
     let prep = match prepare_site(ctx, &site).await {
         Ok(prep) => {
@@ -53,6 +54,16 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
         Err(e) => return Err(fail(ctx, site_id, "validate", e).await),
     };
 
+    agent_step(
+        ctx,
+        site_id,
+        "site_create",
+        &server_id,
+        Command::SiteCreate {
+            site: prep.spec.clone(),
+        },
+    )
+    .await?;
     agent_step(
         ctx,
         site_id,
@@ -71,7 +82,19 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
         "install",
         &server_id,
         Command::Install {
-            site: prep.spec.clone(),
+            site: short.clone(),
+            binary: prep.binary.clone(),
+        },
+    )
+    .await?;
+    agent_step(
+        ctx,
+        site_id,
+        "switch_version",
+        &server_id,
+        Command::SwitchVersion {
+            site: short.clone(),
+            version: prep.spec.version.clone(),
         },
     )
     .await?;
@@ -91,7 +114,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
         "write_env",
         &server_id,
         Command::WriteEnv {
-            site: prep.spec.clone(),
+            site: short.clone(),
             env: prep.env_all.clone(),
         },
     )
@@ -102,7 +125,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
         "start",
         &server_id,
         Command::Start {
-            site_id: site.id.clone(),
+            site: short.clone(),
         },
     )
     .await?;
@@ -112,10 +135,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
         "health",
         &server_id,
         Command::Health {
-            site_id: site.id.clone(),
-            port: port as u16,
-            path: prep.manifest.app.health.clone(),
-            timeout_s: u64::from(prep.manifest.app.startup_grace_s),
+            site: prep.spec.clone(),
         },
     )
     .await?;
@@ -127,9 +147,9 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
         ctx,
         &server_id,
         Command::SetRoute {
+            site_short_id: short.clone(),
             domain: domain.clone(),
-            port: port as u16,
-            site_short_id: route_short.clone(),
+            port: prep.spec.port,
         },
     )
     .await
@@ -140,7 +160,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
                     ctx,
                     &server_id,
                     Command::WriteEnv {
-                        site: prep.spec.clone(),
+                        site: short.clone(),
                         env: prep.env_persistent.clone(),
                     },
                 )
@@ -155,8 +175,8 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
                             ctx,
                             &server_id,
                             Command::RemoveRoute {
+                                site_short_id: short.clone(),
                                 domain: domain.clone(),
-                                site_short_id: route_short.clone(),
                             },
                         )
                         .await;
@@ -176,8 +196,8 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
                             ctx,
                             &server_id,
                             Command::RemoveRoute {
+                                site_short_id: short.clone(),
                                 domain: domain.clone(),
-                                site_short_id: route_short.clone(),
                             },
                         )
                         .await;
@@ -209,7 +229,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
         ctx,
         &server_id,
         Command::Status {
-            site_id: site.id.clone(),
+            site: short.clone(),
         },
     )
     .await
@@ -229,8 +249,8 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
                 ctx,
                 &server_id,
                 Command::RemoveRoute {
+                    site_short_id: short.clone(),
                     domain: domain.clone(),
-                    site_short_id: route_short.clone(),
                 },
             )
             .await;
@@ -254,8 +274,8 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
                 ctx,
                 &server_id,
                 Command::RemoveRoute {
+                    site_short_id: short.clone(),
                     domain: domain.clone(),
-                    site_short_id: route_short.clone(),
                 },
             )
             .await;

@@ -75,10 +75,13 @@ pub async fn join(
     State(state): State<AppState>,
     ApiJson(body): ApiJson<JoinRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    // proto's `JoinRequest` gains `nonce` in WS5; until then every agent
-    // joins with the empty nonce (ledger R76).
+    // The agent's random nonce: a retry within 60 s with the same nonce
+    // gets the same token, any other nonce is refused (spec §5, R76).
+    if body.nonce.is_empty() || body.nonce.len() > 128 {
+        return Err(AppError::validation("join nonce must be 1-128 characters"));
+    }
     let input = setu_db::JoinInput {
-        nonce: String::new(),
+        nonce: body.nonce.clone(),
         hostname: body.hostname.clone(),
         public_ip: None,
         arch: body.arch.clone(),
@@ -213,8 +216,9 @@ pub async fn heartbeat(
     ApiJson(body): ApiJson<Heartbeat>,
 ) -> Result<impl IntoResponse, AppError> {
     let server = agent_server(&headers, &state).await?;
-    // proto's `Heartbeat` gains `boot_id` in WS5 (until then `None`,
-    // so `boot_changed` stays false).
+    // A new `boot_id` (agent restart or host reboot) requeues every
+    // command delivered to the old process (spec §5).
+    let boot_id = (!body.boot_id.is_empty()).then_some(body.boot_id.as_str());
     let outcome = state
         .db
         .servers()
@@ -222,7 +226,7 @@ pub async fn heartbeat(
             &server.id,
             &setu_db::HeartbeatInput {
                 agent_version: &body.agent_version,
-                boot_id: None,
+                boot_id,
                 metrics: &body.metrics,
             },
         )

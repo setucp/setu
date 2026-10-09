@@ -8,6 +8,13 @@ pub fn new_id() -> String {
     ulid::Ulid::new().to_string().to_lowercase()
 }
 
+/// `n` bytes from the OS-seeded thread RNG, hex-encoded (nonces).
+pub fn random_hex(n: usize) -> String {
+    let mut bytes = vec![0u8; n];
+    rand::RngCore::fill_bytes(&mut rand::rng(), &mut bytes);
+    hex::encode(bytes)
+}
+
 /// Last 8 chars of an id (or the whole string when shorter).
 pub fn short_id(id: &str) -> String {
     if id.len() <= 8 {

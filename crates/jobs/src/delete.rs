@@ -1,33 +1,24 @@
 //! Delete state machine (spec §5): stop, remove the route, drop the
 //! database, remove the files, delete the row.
 //!
-//! Steps: `stop`, `remove_route`, `drop_database`, `remove`, `finish`.
+//! Steps: `stop`, `remove_route`, `drop_database`, `site_remove`,
+//! `finish` (WS6 adds the `pre_delete` backup first).
 //! `stop` and `remove_route` failures are ignored (the unit/route may
 //! already be gone); anything later marks the site `failed`.
 
 use setu_common::{AppError, ErrorCode};
 use setu_proto::Command;
 
-use crate::{build_spec, call_agent, fail, load_manifest, log_step, minimal_spec, JobCtx};
+use crate::{call_agent, fail, log_step, JobCtx};
 
 /// Delete the site; ends with the row gone.
 pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
     let site = ctx.db.sites().get(site_id).await?;
     let server_id = site.server_id.clone();
     let domain = site.domain.clone();
-    // Route id `setu-site-<short>` on the agent (ledger R71).
-    let route_short = Some(site.short_id.clone());
+    // Every command keys off the short id: no manifest or plan needed.
+    let short = site.short_id.clone();
     let db_name = site.db_name.clone();
-
-    // `build_spec` needs no prompts (Stop/Remove key off `site_id`);
-    // fall back to `minimal_spec` when the manifest/plan is gone.
-    let spec = match load_manifest(&ctx.db, &site.app_id, &site.app_version).await {
-        Ok(manifest) => match ctx.db.plans().get(&site.plan_id).await {
-            Ok(plan) => build_spec(&plan, &site, &manifest).unwrap_or_else(|_| minimal_spec(&site)),
-            Err(_) => minimal_spec(&site),
-        },
-        Err(_) => minimal_spec(&site),
-    };
 
     let _ = ctx.db.sites().set_status(site_id, "deleting", None).await;
 
@@ -36,7 +27,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
         ctx,
         &server_id,
         Command::Stop {
-            site_id: site.id.clone(),
+            site: short.clone(),
         },
     )
     .await
@@ -58,8 +49,8 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
         ctx,
         &server_id,
         Command::RemoveRoute {
+            site_short_id: short.clone(),
             domain: domain.clone(),
-            site_short_id: route_short.clone(),
         },
     )
     .await
@@ -112,9 +103,9 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
         Err(e) => return Err(fail(ctx, site_id, "drop_database", e.into()).await),
     }
 
-    match call_agent(ctx, &server_id, Command::Remove { site: spec }).await {
+    match call_agent(ctx, &server_id, Command::SiteRemove { site: short }).await {
         Ok(result) if result.ok => {
-            log_step(ctx, "remove", true, None).await;
+            log_step(ctx, "site_remove", true, None).await;
         }
         Ok(result) => {
             let msg = result
@@ -123,12 +114,12 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
             return Err(fail(
                 ctx,
                 site_id,
-                "remove",
+                "site_remove",
                 AppError::new(ErrorCode::Internal, msg),
             )
             .await);
         }
-        Err(e) => return Err(fail(ctx, site_id, "remove", e.into()).await),
+        Err(e) => return Err(fail(ctx, site_id, "site_remove", e.into()).await),
     }
 
     match ctx.db.sites().delete(site_id).await {

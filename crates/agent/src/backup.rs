@@ -1,15 +1,13 @@
 //! Backup and restore of one site into
-//! `/var/lib/setu/backups/<short>/<name>/{db.dump,dirs.tar.zst}`.
+//! `/var/lib/setu/backups/<short>/<backup_id>/{db.dump,dirs.tar.zst}`.
 //!
-//! The agent writes and reads the archive itself; the helper streams the
-//! data dirs (`backup` on stdout, `restore` on stdin). Until WS5/WS6 move
-//! to `backup_id`, `<name>` is the last component of the control plane's
-//! `dest`/`src` path (validated); the rest of that path is ignored, so
-//! the control plane cannot steer where anything is written.
+//! The agent writes and reads the archive itself (the backups tree is
+//! `setu`-owned, so deleting a backup needs no helper verb); the helper
+//! streams the data dirs (`backup` on stdout, `restore` on stdin). The
+//! directory name is the control plane's `backup_id`, validated as one
+//! safe path component; nothing else path-like arrives.
 
 use std::path::{Path, PathBuf};
-
-use setu_proto::SiteSpec;
 
 use crate::helper_client::Helper;
 use crate::paths::check_short;
@@ -21,31 +19,28 @@ pub const DIRS_ARCHIVE: &str = "dirs.tar.zst";
 /// Database dump name inside a backup dir.
 pub const DB_DUMP: &str = "db.dump";
 
-/// `[A-Za-z0-9._-]{1,64}`, not `.`/`..`: the backup's directory name.
-pub fn backup_name(p: &Path) -> anyhow::Result<String> {
-    let name = p
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default()
-        .to_string();
-    let ok = !name.is_empty()
-        && name.len() <= 64
-        && name != "."
-        && name != ".."
-        && name
+/// `[A-Za-z0-9._-]{1,64}`, not `.`/`..`: a backup id usable as one
+/// directory name.
+pub fn check_backup_id(id: &str) -> anyhow::Result<()> {
+    let ok = !id.is_empty()
+        && id.len() <= 64
+        && id != "."
+        && id != ".."
+        && id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
     if ok {
-        Ok(name)
+        Ok(())
     } else {
-        anyhow::bail!("invalid backup name")
+        anyhow::bail!("invalid backup id")
     }
 }
 
-/// `<backups_root>/<short>/<name>`.
-pub fn backup_dir(backups_root: &Path, short: &str, location: &Path) -> anyhow::Result<PathBuf> {
+/// `<backups_root>/<short>/<backup_id>`.
+pub fn backup_dir(backups_root: &Path, short: &str, backup_id: &str) -> anyhow::Result<PathBuf> {
     check_short(short)?;
-    Ok(backups_root.join(short).join(backup_name(location)?))
+    check_backup_id(backup_id)?;
+    Ok(backups_root.join(short).join(backup_id))
 }
 
 /// Distinct first components of a tar.zst's entries (validated dirs).
@@ -74,16 +69,15 @@ pub fn top_level_dirs(archive: &[u8]) -> anyhow::Result<Vec<String>> {
 }
 
 /// Take a backup: `pg_dump` (stdout) into `db.dump`, helper `backup` into
-/// `dirs.tar.zst`. Returns the backup dir.
+/// `dirs.tar.zst`. Returns the backup dir and its size in bytes.
 pub async fn backup_site<H: Helper, P: PostgresAdmin, C>(
     rt: &NativeRuntime<H, P, C>,
-    site: &SiteSpec,
+    short: &str,
     db: &str,
     dirs: &[String],
-    dest: &Path,
-) -> anyhow::Result<PathBuf> {
-    let short = &site.short_id;
-    let dir = backup_dir(&rt.config().backups_root, short, dest)?;
+    backup_id: &str,
+) -> anyhow::Result<(PathBuf, u64)> {
+    let dir = backup_dir(&rt.config().backups_root, short, backup_id)?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", dir.display()))?;
     // The agent's own files (`setu`, 0750): `pg_dump` writes to stdout,
@@ -99,36 +93,54 @@ pub async fn backup_site<H: Helper, P: PostgresAdmin, C>(
     let archive = rt.backup_dirs(short, dirs).await?;
     crate::config::atomic_write(&dir.join(DIRS_ARCHIVE), &archive)
         .map_err(|e| anyhow::anyhow!("cannot write {DIRS_ARCHIVE}: {e}"))?;
-    Ok(dir)
+    Ok((dir, (dump.len() + archive.len()) as u64))
 }
 
 /// Restore a backup (the caller stopped the site): the database is
-/// replaced from `db.dump` (drop with force, create, `pg_restore` as the
-/// site role `site_<short>`), then helper `restore` of the dirs in
-/// `dirs.tar.zst`. WS5 adds `Restore.role`; until then the role is the
-/// site's by construction (ledger R81).
+/// replaced from `db.dump` (drop with force, create, `pg_restore` as
+/// `role`), then helper `restore` of the requested `dirs` that the
+/// archive holds.
 pub async fn restore_site<H: Helper, P: PostgresAdmin, C>(
     rt: &NativeRuntime<H, P, C>,
-    site: &SiteSpec,
+    short: &str,
     db: &str,
-    src: &Path,
+    role: &str,
+    dirs: &[String],
+    backup_id: &str,
 ) -> anyhow::Result<()> {
-    let short = &site.short_id;
-    let dir = backup_dir(&rt.config().backups_root, short, src)?;
+    let dir = backup_dir(&rt.config().backups_root, short, backup_id)?;
     let dump = std::fs::read(dir.join(DB_DUMP))
         .map_err(|e| anyhow::anyhow!("backup has no readable {DB_DUMP}: {e}"))?;
-    let role = format!("site_{short}");
-    rt.postgres().restore_replace(db, &role, dump).await?;
+    rt.postgres().restore_replace(db, role, dump).await?;
     let archive_path = dir.join(DIRS_ARCHIVE);
     if archive_path.is_file() {
         let archive = std::fs::read(&archive_path)
             .map_err(|e| anyhow::anyhow!("cannot read {DIRS_ARCHIVE}: {e}"))?;
-        let dirs = top_level_dirs(&archive)?;
-        if !dirs.is_empty() {
-            rt.restore_dirs(short, &dirs, archive).await?;
+        let present = top_level_dirs(&archive)?;
+        let wanted: Vec<String> = dirs
+            .iter()
+            .filter(|d| present.contains(d))
+            .cloned()
+            .collect();
+        if !wanted.is_empty() {
+            rt.restore_dirs(short, &wanted, archive).await?;
         }
     }
     Ok(())
+}
+
+/// Delete one backup's directory (idempotent: a missing one is fine).
+/// The backups tree is the agent's own, so no helper verb is involved.
+pub fn delete_backup(backups_root: &Path, short: &str, backup_id: &str) -> anyhow::Result<bool> {
+    let dir = backup_dir(backups_root, short, backup_id)?;
+    match std::fs::symlink_metadata(&dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => anyhow::bail!("cannot inspect backup: {e}"),
+        // `remove_dir_all` never follows a symlink: it removes the link.
+        Ok(_) => std::fs::remove_dir_all(&dir)
+            .map(|()| true)
+            .map_err(|e| anyhow::anyhow!("cannot delete backup: {e}")),
+    }
 }
 
 #[cfg(test)]
@@ -136,14 +148,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backup_names_are_one_safe_component() {
+    fn backup_ids_are_one_safe_component() {
         assert_eq!(
-            backup_name(Path::new("/var/lib/setu/backups/x/manual-1700000000")).expect("ok"),
-            "manual-1700000000"
+            backup_dir(Path::new("/b"), "abcd1234", "01JBACKUP0000000000000001").expect("ok"),
+            PathBuf::from("/b/abcd1234/01JBACKUP0000000000000001")
         );
-        for bad in ["/", "..", "/a/..", "/a/b c", "/a/b\nc"] {
-            backup_name(Path::new(bad)).expect_err(bad);
+        for bad in ["", ".", "..", "a/b", "../x", "b c", "b\nc", &"x".repeat(65)] {
+            check_backup_id(bad).expect_err(bad);
         }
-        backup_dir(Path::new("/b"), "../evil0", Path::new("/x/y")).expect_err("short");
+        backup_dir(Path::new("/b"), "../evil0", "x").expect_err("short");
+    }
+
+    #[test]
+    fn delete_backup_removes_only_that_dir_and_is_idempotent() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let keep = root.path().join("abcd1234/keep");
+        let gone = root.path().join("abcd1234/gone");
+        std::fs::create_dir_all(&keep).expect("mk");
+        std::fs::create_dir_all(&gone).expect("mk");
+        std::fs::write(gone.join(DB_DUMP), b"x").expect("w");
+        assert!(delete_backup(root.path(), "abcd1234", "gone").expect("delete"));
+        assert!(!gone.exists() && keep.exists());
+        assert!(!delete_backup(root.path(), "abcd1234", "gone").expect("again"));
+        // A symlinked backup dir: the link goes, its target stays.
+        let outside = tempfile::tempdir().expect("tempdir");
+        std::fs::write(outside.path().join("precious"), b"y").expect("w");
+        std::os::unix::fs::symlink(outside.path(), root.path().join("abcd1234/link")).expect("ln");
+        delete_backup(root.path(), "abcd1234", "link").expect("delete link");
+        assert!(outside.path().join("precious").exists());
+        delete_backup(root.path(), "abcd1234", "../keep").expect_err("traversal");
     }
 }

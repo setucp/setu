@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use setu_proto::{CommandEnvelope, CommandResult, Heartbeat, SiteMetric, UnitState};
+use setu_proto::{CommandEnvelope, CommandResult, Heartbeat, SiteMetric};
 
 use crate::caddy::CaddySocket;
 use crate::config::AgentConfig;
@@ -106,6 +106,27 @@ fn parse_df_avail(text: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// This agent process's boot id: the kernel's
+/// `/proc/sys/kernel/random/boot_id` plus a nonce drawn once per process,
+/// so both a host reboot and an agent restart change it (spec §5: the
+/// control plane then requeues the server's delivered commands).
+pub fn boot_id() -> String {
+    static NONCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let nonce = NONCE.get_or_init(setu_common::new_id);
+    boot_id_from(Path::new("/proc/sys/kernel/random/boot_id"), nonce)
+}
+
+fn boot_id_from(kernel: &Path, nonce: &str) -> String {
+    let kernel = std::fs::read_to_string(kernel)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if kernel.is_empty() {
+        nonce.to_string()
+    } else {
+        format!("{kernel}-{nonce}")
+    }
+}
+
 /// Collect one heartbeat for `rt`: unit state and metrics per site from
 /// the helper's `unit show` plus the unit's cgroup files.
 pub async fn collect_heartbeat<H, P, C>(rt: &NativeRuntime<H, P, C>) -> Heartbeat
@@ -117,8 +138,8 @@ where
     let state = StateFile::load(&rt.config().state_path).unwrap_or_default();
     let mut units = Vec::new();
     let mut metrics = Vec::new();
-    for site_id in state.sites.keys() {
-        let status = match rt.status_inner(site_id).await {
+    for short in state.sites.keys() {
+        let status = match rt.status_inner(short).await {
             Ok(st) => st,
             Err(_) => crate::runtime::RuntimeStatus {
                 sub: "unknown".to_string(),
@@ -126,14 +147,15 @@ where
             },
         };
         let m = crate::metrics::read_site_metric(&status);
-        units.push(UnitState {
-            site_id: site_id.clone(),
+        units.push(setu_proto::UnitState {
+            short_id: short.clone(),
             active: status.active,
             sub: status.sub,
             pid: status.pid,
+            restarts: status.n_restarts,
         });
         metrics.push(SiteMetric {
-            site_id: site_id.clone(),
+            short_id: short.clone(),
             at: chrono::Utc::now(),
             cpu_seconds: m.cpu_seconds,
             memory_bytes: m.memory_bytes,
@@ -142,6 +164,7 @@ where
     }
     Heartbeat {
         agent_version: env!("CARGO_PKG_VERSION").to_string(),
+        boot_id: boot_id(),
         load1: read_load1(),
         mem_free_mb: read_mem_free_mb(),
         disk_free_mb: disk_free_mb(&rt.config().sites_root).await,
@@ -285,6 +308,17 @@ mod tests {
         assert_eq!(read_mem_from(&f), Some(1000));
         std::fs::write(&f, "MemTotal: 8192000 kB\nMemFree: 512000 kB\n").expect("write");
         assert_eq!(read_mem_from(&f), Some(500));
+    }
+
+    #[test]
+    fn boot_id_joins_kernel_id_and_process_nonce() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let f = dir.path().join("boot_id");
+        std::fs::write(&f, "6f1c-kernel\n").expect("write");
+        assert_eq!(boot_id_from(&f, "n1"), "6f1c-kernel-n1");
+        assert_ne!(boot_id_from(&f, "n1"), boot_id_from(&f, "n2"));
+        assert_eq!(boot_id_from(&dir.path().join("missing"), "n1"), "n1");
+        assert_eq!(boot_id(), boot_id(), "stable within one process");
     }
 
     #[test]

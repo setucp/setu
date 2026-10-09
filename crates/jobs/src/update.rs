@@ -14,16 +14,14 @@
 //!   and prompt values kept, `value`/`from` re-resolved, `once` values
 //!   never re-emitted (they stay sealed in storage for reveal).
 
-use std::path::PathBuf;
-
 use setu_common::{AppError, ErrorCode};
 use setu_db::Site;
 use setu_manifest::{EnvSource, EnvSpec, Manifest};
 use setu_proto::Command;
 
 use crate::{
-    build_site, call_agent, fail, job_prompts, load_manifest, log_step, require_ok, resolve_error,
-    resolve_input, sealed_env, stored_plaintext, to_proto_envs, JobCtx,
+    build_site, call_agent, call_install, fail, job_prompts, load_manifest, log_step, require_ok,
+    resolve_error, resolve_input, sealed_env, stored_plaintext, to_proto_envs, JobCtx,
 };
 
 /// Update the site to `to_version`.
@@ -57,10 +55,10 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
     // Prompt answers ride on the job payload (the API recovers them from
     // the site's provision job); direct `run` callers resolve without.
     let prompts = job_prompts(ctx).await;
-    let old_built = match build_site(&plan, &site, &old_manifest, &prompts) {
-        Ok(b) => b,
-        Err(e) => return Err(fail(ctx, site_id, "validate", e).await),
-    };
+    // The old version must still be buildable: rollback returns to it.
+    if let Err(e) = crate::build_spec(&plan, &site, &old_manifest) {
+        return Err(fail(ctx, site_id, "validate", e).await);
+    }
     let new_built = match build_site(&plan, &site, &new_manifest, &prompts) {
         Ok(b) => b,
         Err(e) => return Err(fail(ctx, site_id, "validate", e).await),
@@ -130,7 +128,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
     log_step(ctx, "validate", true, None).await;
     ctx.db.sites().set_status(site_id, "updating", None).await?;
 
-    if let Err(e) = pre_update_backup(ctx, &site, &old_manifest, &old_built.spec).await {
+    if let Err(e) = pre_update_backup(ctx, &site, &old_manifest).await {
         log_step(ctx, "backup", false, Some(&e.message.clone())).await;
         let _ = ctx.db.sites().set_status(site_id, "running", None).await;
         return Err(e);
@@ -139,16 +137,22 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
 
     // Install beside the old version BEFORE stopping: checksum (or any
     // install) failure leaves the old site untouched and `running`.
-    if let Err(e) = update_call(
+    let installed = match call_install(
         ctx,
-        "install",
         &server_id,
         Command::Install {
-            site: new_built.spec.clone(),
+            site: site.short_id.clone(),
+            binary: new_built.binary.clone(),
         },
     )
     .await
     {
+        Ok(result) => require_ok(result)
+            .map(|_| ())
+            .map_err(|msg| AppError::new(ErrorCode::Internal, msg)),
+        Err(e) => Err(AppError::from(e)),
+    };
+    if let Err(e) = installed {
         return abort_running(ctx, site_id, "install", e).await;
     }
     log_step(ctx, "install", true, None).await;
@@ -156,9 +160,8 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
     // Write the merged env BEFORE stopping: the old process keeps its
     // loaded env and is unaffected by the file swap. On failure the
     // previous file is restored best-effort and the old site stays up.
-    if let Err(e) = write_env_file(ctx, &server_id, &new_built.spec, &to_proto_envs(&merged)).await
-    {
-        let _ = write_env_file(ctx, &server_id, &old_built.spec, &current_proto).await;
+    if let Err(e) = write_env_file(ctx, &server_id, &site.short_id, &to_proto_envs(&merged)).await {
+        let _ = write_env_file(ctx, &server_id, &site.short_id, &current_proto).await;
         return abort_running(ctx, site_id, "write_env", e).await;
     }
     log_step(ctx, "write_env", true, None).await;
@@ -168,21 +171,12 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
         "stop",
         &server_id,
         Command::Stop {
-            site_id: site.id.clone(),
+            site: site.short_id.clone(),
         },
     )
     .await
     {
-        return Err(rollback(
-            ctx,
-            &site,
-            &old_version,
-            "stop",
-            e,
-            &old_built.spec,
-            &current_proto,
-        )
-        .await);
+        return Err(rollback(ctx, &site, &old_version, "stop", e, &current_proto).await);
     }
     log_step(ctx, "stop", true, None).await;
 
@@ -191,7 +185,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
         "switch_version",
         &server_id,
         Command::SwitchVersion {
-            site_id: site.id.clone(),
+            site: site.short_id.clone(),
             version: to_version.to_string(),
         },
     )
@@ -203,7 +197,6 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
             &old_version,
             "switch_version",
             e,
-            &old_built.spec,
             &current_proto,
         )
         .await);
@@ -215,21 +208,12 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
         "start",
         &server_id,
         Command::Start {
-            site_id: site.id.clone(),
+            site: site.short_id.clone(),
         },
     )
     .await
     {
-        return Err(rollback(
-            ctx,
-            &site,
-            &old_version,
-            "start",
-            e,
-            &old_built.spec,
-            &current_proto,
-        )
-        .await);
+        return Err(rollback(ctx, &site, &old_version, "start", e, &current_proto).await);
     }
     log_step(ctx, "start", true, None).await;
 
@@ -238,24 +222,12 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
         "health",
         &server_id,
         Command::Health {
-            site_id: site.id.clone(),
-            port: site.port as u16,
-            path: new_manifest.app.health.clone(),
-            timeout_s: u64::from(new_manifest.app.startup_grace_s),
+            site: new_built.spec.clone(),
         },
     )
     .await
     {
-        return Err(rollback(
-            ctx,
-            &site,
-            &old_version,
-            "health",
-            e,
-            &old_built.spec,
-            &current_proto,
-        )
-        .await);
+        return Err(rollback(ctx, &site, &old_version, "health", e, &current_proto).await);
     }
     log_step(ctx, "health", true, None).await;
 
@@ -281,14 +253,14 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
 async fn write_env_file(
     ctx: &JobCtx,
     server_id: &str,
-    spec: &setu_proto::SiteSpec,
+    short: &str,
     env: &[setu_proto::EnvVar],
 ) -> Result<(), AppError> {
     match call_agent(
         ctx,
         server_id,
         Command::WriteEnv {
-            site: spec.clone(),
+            site: short.to_string(),
             env: env.to_vec(),
         },
     )
@@ -342,12 +314,11 @@ async fn rollback(
     old_version: &str,
     step: &str,
     cause: AppError,
-    old_spec: &setu_proto::SiteSpec,
     old_env: &[setu_proto::EnvVar],
 ) -> AppError {
     let cause_msg = cause.message.clone();
     log_step(ctx, step, false, Some(&cause_msg)).await;
-    if write_env_file(ctx, &site.server_id, old_spec, old_env)
+    if write_env_file(ctx, &site.server_id, &site.short_id, old_env)
         .await
         .is_err()
     {
@@ -358,7 +329,7 @@ async fn rollback(
             ctx,
             &site.server_id,
             Command::SwitchVersion {
-                site_id: site.id.clone(),
+                site: site.short_id.clone(),
                 version: old_version.to_string(),
             },
         )
@@ -372,7 +343,7 @@ async fn rollback(
                 ctx,
                 &site.server_id,
                 Command::Start {
-                    site_id: site.id.clone(),
+                    site: site.short_id.clone(),
                 },
             )
             .await
@@ -405,22 +376,16 @@ async fn rollback(
 
 /// `pre_update` backup row plus the agent `Backup` call. Failure aborts
 /// the update before anything mutates.
-async fn pre_update_backup(
-    ctx: &JobCtx,
-    site: &Site,
-    manifest: &Manifest,
-    spec: &setu_proto::SiteSpec,
-) -> Result<(), AppError> {
+async fn pre_update_backup(ctx: &JobCtx, site: &Site, manifest: &Manifest) -> Result<(), AppError> {
     let row = ctx.db.backups().create(site, "pre_update").await?;
-    let dest = backup_dest(&site.short_id, &row.id);
     match call_agent(
         ctx,
         &site.server_id,
         Command::Backup {
-            site: spec.clone(),
+            site: site.short_id.clone(),
             db: site.db_name.clone(),
             dirs: manifest.backup.dirs.clone(),
-            dest: PathBuf::from(&dest),
+            backup_id: row.id.clone(),
         },
     )
     .await
@@ -448,10 +413,4 @@ async fn pre_update_backup(
             Err(AppError::from(e))
         }
     }
-}
-
-/// `/var/lib/setu/backups/<short>/<backup_id>` (spec §3). The agent uses
-/// only the last component (ledger R65) until WS5 sends `backup_id`.
-pub(crate) fn backup_dest(short_id: &str, backup_id: &str) -> String {
-    format!("/var/lib/setu/backups/{short_id}/{backup_id}")
 }

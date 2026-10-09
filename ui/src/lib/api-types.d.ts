@@ -542,8 +542,9 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Live logs as SSE (viewer and above): `FetchLogs` every 2 s, unseen
-         *     lines since the cursor render as `data: <line>` events. The stream
+         * Live logs as SSE (viewer and above): `FetchLogs` every 2 s with the
+         *     journal cursor of the previous page, so each line renders once as a
+         *     `data: <line>` event. The stream
          *     ends when the client disconnects (a failed send breaks the loop) or
          *     when the agent call fails (an `error` event first).
          */
@@ -740,6 +741,7 @@ export interface components {
         };
         /** @description One downloadable binary release. */
         BinaryRef: {
+            /** @description Path of the executable inside the archive (relative). */
             exec: string;
             sha256: string;
             url: string;
@@ -747,6 +749,10 @@ export interface components {
         };
         /** @description Idempotent agent commands, JSON-tagged by `kind` (snake_case). */
         Command: {
+            /** @enum {string} */
+            kind: "site_create";
+            site: components["schemas"]["SiteSpec"];
+        } | {
             db: string;
             /** @enum {string} */
             kind: "create_database";
@@ -758,9 +764,15 @@ export interface components {
             kind: "drop_database";
             role: string;
         } | {
+            binary: components["schemas"]["BinaryRef"];
             /** @enum {string} */
             kind: "install";
-            site: components["schemas"]["SiteSpec"];
+            site: string;
+        } | {
+            /** @enum {string} */
+            kind: "switch_version";
+            site: string;
+            version: string;
         } | {
             /** @enum {string} */
             kind: "write_unit";
@@ -769,88 +781,87 @@ export interface components {
             env: components["schemas"]["EnvVar"][];
             /** @enum {string} */
             kind: "write_env";
-            site: components["schemas"]["SiteSpec"];
+            site: string;
         } | {
             /** @enum {string} */
             kind: "start";
-            site_id: string;
+            site: string;
         } | {
             /** @enum {string} */
             kind: "stop";
-            site_id: string;
+            site: string;
         } | {
             /** @enum {string} */
             kind: "restart";
-            site_id: string;
+            site: string;
         } | {
             /** @enum {string} */
             kind: "status";
-            site_id: string;
+            site: string;
         } | {
             /** @enum {string} */
             kind: "health";
-            path: string;
-            /** Format: int32 */
-            port: number;
-            site_id: string;
-            /** Format: int64 */
-            timeout_s: number;
+            site: components["schemas"]["SiteSpec"];
         } | {
             domain: string;
             /** @enum {string} */
             kind: "set_route";
             /** Format: int32 */
             port: number;
-            site_short_id?: string | null;
+            site_short_id: string;
         } | {
             domain: string;
             /** @enum {string} */
             kind: "remove_route";
-            site_short_id?: string | null;
+            site_short_id: string;
         } | {
+            backup_id: string;
             db: string;
-            dest: string;
             dirs: string[];
             /** @enum {string} */
             kind: "backup";
-            site: components["schemas"]["SiteSpec"];
+            site: string;
         } | {
+            backup_id: string;
             db: string;
+            dirs: string[];
             /** @enum {string} */
             kind: "restore";
-            site: components["schemas"]["SiteSpec"];
-            src: string;
+            role: string;
+            site: string;
+        } | {
+            backup_id: string;
+            /** @enum {string} */
+            kind: "delete_backup";
+            site: string;
         } | {
             /** @enum {string} */
-            kind: "remove";
-            site: components["schemas"]["SiteSpec"];
+            kind: "site_remove";
+            site: string;
         } | {
-            /** @enum {string} */
-            kind: "switch_version";
-            site_id: string;
-            version: string;
-        } | {
+            cursor?: string | null;
             /** @enum {string} */
             kind: "fetch_logs";
             /** Format: int32 */
             lines: number;
-            site_id: string;
+            site: string;
         } | {
             /** @enum {string} */
             kind: "inventory";
         };
         /**
          * @description A command in flight: stable `id` so redelivery is idempotent.
-         *     `attempts` counts deliveries (`next_for` bumps it; `requeue_stale`
-         *     only resets `delivered_at`), so the agent can tell a retry apart.
+         *     The wire has no delivery counter (ledger R85): the agent dedupes by
+         *     id; `agent_commands.attempts` stays a control-plane diagnostic.
          */
         CommandEnvelope: {
-            /** Format: int32 */
-            attempts: number;
             command: components["schemas"]["Command"];
             /** Format: date-time */
             created_at: string;
+            /** Format: date-time */
+            expires_at: string;
             id: string;
+            site_short_id?: string | null;
         };
         /** @description The agent's report for one command id. */
         CommandResult: {
@@ -931,9 +942,13 @@ export interface components {
         HealthOut: {
             status: string;
         };
-        /** @description Agent heartbeat posted every 15 s. */
+        /**
+         * @description Agent heartbeat posted every 15 s. `boot_id` changes whenever the
+         *     agent process (or the host) restarts.
+         */
         Heartbeat: {
             agent_version: string;
+            boot_id: string;
             /** Format: int64 */
             disk_free_mb: number;
             /** Format: double */
@@ -979,7 +994,11 @@ export interface components {
             /** Format: int64 */
             limit?: number | null;
         };
-        /** @description First contact: the agent redeems a single-use join token. */
+        /**
+         * @description First contact: the agent redeems a single-use join token with a
+         *     random `nonce` (a retry within 60 s with the same nonce gets the same
+         *     server token; another nonce is refused).
+         */
         JoinRequest: {
             arch: string;
             /** Format: int32 */
@@ -990,6 +1009,7 @@ export interface components {
             join_token: string;
             /** Format: int64 */
             memory_mb: number;
+            nonce: string;
             os: string;
         };
         /** @description Control-plane answer to a join: the long-lived server identity. */
@@ -1136,7 +1156,7 @@ export interface components {
             disk_bytes: number;
             /** Format: int64 */
             memory_bytes: number;
-            site_id: string;
+            short_id: string;
         };
         /** @description One site row (the sealed `env` is never included; see `./env`). */
         SiteOut: {
@@ -1159,28 +1179,37 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
-        /** @description Everything the agent needs to materialise one site. */
+        /**
+         * @description Everything the agent needs to materialise one site. No paths, no
+         *     user, no env file: the agent derives them from `short_id` (spec §4).
+         */
         SiteSpec: {
             args: string[];
-            binary?: null | components["schemas"]["BinaryRef"];
-            data_dir: string;
-            env_file: string;
+            /** @description Directories under `data/` (manifest `needs.dirs`). */
+            dirs: string[];
+            /** @description Executable inside `bin/<version>/` (relative, validated). */
             exec: string;
-            health_path: string;
+            /** @description Health path polled on `127.0.0.1:<port>`. */
+            health: string;
             limits: components["schemas"]["Limits"];
             /** Format: int32 */
             port: number;
-            run_dir: string;
             short_id: string;
             site_id: string;
-            user: string;
+            /** Format: int32 */
+            startup_grace_s: number;
+            /** @description The version `bin/current` should run. */
+            version: string;
+            workdir: components["schemas"]["Workdir"];
         };
-        /** @description One systemd unit's state as observed by the agent. */
+        /** @description One site unit's state as observed by the agent. */
         UnitState: {
             active: boolean;
             /** Format: int32 */
             pid?: number | null;
-            site_id: string;
+            /** Format: int32 */
+            restarts: number;
+            short_id: string;
             sub: string;
         };
         UpdatePlanRequest: {
@@ -1198,6 +1227,11 @@ export interface components {
             errors: components["schemas"]["ManifestErrorOut"][];
             ok: boolean;
         };
+        /**
+         * @description The unit's working directory (mirrors the manifest's `run.workdir`).
+         * @enum {string}
+         */
+        Workdir: "exec_dir" | "bin" | "data";
     };
     responses: never;
     parameters: never;

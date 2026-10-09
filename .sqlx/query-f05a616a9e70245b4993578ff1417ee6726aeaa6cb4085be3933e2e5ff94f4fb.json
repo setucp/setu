@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO agent_commands (id, server_id, site_short_id, command, expires_at)\n             VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5))\n             RETURNING id, created_at",
+  "query": "INSERT INTO agent_commands (id, server_id, site_short_id, command, expires_at)\n             VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5))\n             RETURNING id, created_at, expires_at",
   "describe": {
     "columns": [
       {
@@ -24,6 +24,17 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "ordinal": 2,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "agent_commands",
+            "name": "expires_at"
+          }
+        }
       }
     ],
     "parameters": {
@@ -37,8 +48,9 @@
     },
     "nullable": [
       false,
+      false,
       false
     ]
   },
-  "hash": "cd04241671e1a3086c2781b6748d69d6d7075d04c5579903b635eff1ab66eea6"
+  "hash": "f05a616a9e70245b4993578ff1417ee6726aeaa6cb4085be3933e2e5ff94f4fb"
 }

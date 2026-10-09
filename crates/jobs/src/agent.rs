@@ -1,37 +1,44 @@
 //! [`AgentClient`]: one typed call to a server's agent.
 //!
-//! Production path ([`DbAgentClient`]) enqueues into `agent_commands` and
-//! blocks in `wait` (the Task 8 HTTP long-poll completes it); tests use
+//! Production path ([`DbAgentClient`]) enqueues into `agent_commands`
+//! with the command's own TTL ([`Command::default_timeout`]) and blocks
+//! in `wait`; the agent long-polls and posts the result. Tests use
 //! [`testing::FakeAgent`], a scripted in-memory agent.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use setu_common::{AppError, ErrorCode};
 use setu_db::{Db, WaitError};
 use setu_proto::{Command, CommandResult};
 
-/// One typed agent call. Every command is idempotent, so callers may
-/// retry freely after [`AgentError::Timeout`].
+/// One typed agent call. The TTL (`expires_at` and the wait) comes from
+/// [`Command::default_timeout`]; `site_short` is the agent's per-site
+/// FIFO key (`CommandEnvelope.site_short_id`).
 #[async_trait]
 pub trait AgentClient: Send + Sync {
     async fn call(
         &self,
         server_id: &str,
+        site_short: Option<&str>,
         cmd: Command,
-        timeout: Duration,
     ) -> Result<CommandResult, AgentError>;
 }
 
 /// Failures of one agent call.
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
-    /// No result within the timeout: the command may still be running on
-    /// the agent; re-queue/redeliver is safe (idempotent commands).
+    /// No result within the TTL: the command was cancelled, so it is
+    /// never delivered late; the job's retry issues a fresh command.
     #[error("agent timed out")]
     Timeout,
-    /// The command could not be delivered or awaited at all.
+    /// Someone else cancelled the command while we waited.
+    #[error("agent command was cancelled")]
+    Cancelled,
+    /// The agent never picked the command up before `expires_at`.
+    #[error("agent command expired before delivery")]
+    Expired,
+    /// The command could not be queued or awaited at all.
     #[error("agent unreachable: {0}")]
     Unreachable(String),
     /// The agent ran the command and reported failure.
@@ -39,11 +46,22 @@ pub enum AgentError {
     Failed(String),
 }
 
+impl AgentError {
+    /// Worth one fresh command (spec §5: the job's single retry).
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::Timeout | Self::Expired)
+    }
+}
+
 impl From<AgentError> for AppError {
     fn from(e: AgentError) -> Self {
         match e {
             AgentError::Timeout => {
                 AppError::agent_unreachable("agent timed out waiting for command")
+            }
+            AgentError::Cancelled => AppError::agent_unreachable("agent command was cancelled"),
+            AgentError::Expired => {
+                AppError::agent_unreachable("agent did not pick the command up in time")
             }
             AgentError::Unreachable(msg) => AppError::agent_unreachable(msg),
             // Operator-visible job errors keep the agent's one-line
@@ -53,47 +71,21 @@ impl From<AgentError> for AppError {
     }
 }
 
-/// Snake-case `kind` tag for a command, matching the proto `kind` tag.
-/// [`testing::FakeAgent`] records these in its transcript.
+/// Snake-case `kind` tag for a command (proto's [`Command::kind`]).
 pub fn command_kind(cmd: &Command) -> &'static str {
-    match cmd {
-        Command::CreateDatabase { .. } => "create_database",
-        Command::DropDatabase { .. } => "drop_database",
-        Command::Install { .. } => "install",
-        Command::WriteUnit { .. } => "write_unit",
-        Command::WriteEnv { .. } => "write_env",
-        Command::Start { .. } => "start",
-        Command::Stop { .. } => "stop",
-        Command::Restart { .. } => "restart",
-        Command::Status { .. } => "status",
-        Command::Health { .. } => "health",
-        Command::SetRoute { .. } => "set_route",
-        Command::RemoveRoute { .. } => "remove_route",
-        Command::Backup { .. } => "backup",
-        Command::Restore { .. } => "restore",
-        Command::Remove { .. } => "remove",
-        Command::SwitchVersion { .. } => "switch_version",
-        Command::FetchLogs { .. } => "fetch_logs",
-        Command::Inventory => "inventory",
-    }
+    cmd.kind()
 }
 
-/// Production client: enqueue the command and wait for the agent's
-/// result (posted via the Task 8 HTTP endpoints). The command expires
-/// after the call's timeout; a wait timeout cancels it (so it is never
-/// delivered late, spec §5) and maps to [`AgentError::Timeout`] so the
-/// job's own retry issues a fresh command.
+/// Production client: enqueue with the command's TTL, wait as long, and
+/// on a wait timeout cancel the command (redacted, never delivered late,
+/// spec §5) and report [`AgentError::Timeout`].
 pub struct DbAgentClient {
     db: Db,
-    default_timeout: Duration,
 }
 
 impl DbAgentClient {
-    pub fn new(db: Db, default_timeout: Duration) -> Self {
-        Self {
-            db,
-            default_timeout,
-        }
+    pub fn new(db: Db) -> Self {
+        Self { db }
     }
 }
 
@@ -102,22 +94,17 @@ impl AgentClient for DbAgentClient {
     async fn call(
         &self,
         server_id: &str,
+        site_short: Option<&str>,
         cmd: Command,
-        timeout: Duration,
     ) -> Result<CommandResult, AgentError> {
-        let effective = if timeout.is_zero() {
-            self.default_timeout
-        } else {
-            timeout
-        };
-        // `site_short_id` arrives with proto's `site_short_id()` in WS5.
+        let ttl = cmd.default_timeout();
         let envelope = self
             .db
             .commands()
-            .enqueue(server_id, None, &cmd, effective)
+            .enqueue(server_id, site_short, &cmd, ttl)
             .await
             .map_err(|e| AgentError::Unreachable(e.message))?;
-        let result = match self.db.commands().wait(&envelope.id, effective).await {
+        let result = match self.db.commands().wait(&envelope.id, ttl).await {
             Ok(result) => result,
             Err(WaitError::Timeout) => {
                 if let Err(e) = self.db.commands().cancel(&envelope.id).await {
@@ -125,9 +112,8 @@ impl AgentClient for DbAgentClient {
                 }
                 return Err(AgentError::Timeout);
             }
-            Err(WaitError::Cancelled) | Err(WaitError::Expired) => {
-                return Err(AgentError::Timeout);
-            }
+            Err(WaitError::Cancelled) => return Err(AgentError::Cancelled),
+            Err(WaitError::Expired) => return Err(AgentError::Expired),
             Err(WaitError::Db(e)) => return Err(AgentError::Unreachable(e.message)),
         };
         if result.ok {
@@ -142,92 +128,144 @@ impl AgentClient for DbAgentClient {
     }
 }
 
-/// Scripted in-memory agent for state-machine tests.
+/// Test doubles: [`FakeAgent`] and [`FixedClock`].
 pub mod testing {
     use super::*;
     use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
+    use std::time::Duration;
 
+    use chrono::{DateTime, Utc};
     use setu_proto::EnvVar;
 
+    pub use crate::clock::Clock;
+
+    /// A clock the test sets and advances.
+    #[derive(Debug, Clone)]
+    pub struct FixedClock(Arc<Mutex<DateTime<Utc>>>);
+
+    impl FixedClock {
+        pub fn new(at: DateTime<Utc>) -> Self {
+            Self(Arc::new(Mutex::new(at)))
+        }
+
+        pub fn set(&self, at: DateTime<Utc>) {
+            *self.0.lock().expect("clock lock") = at;
+        }
+
+        pub fn advance(&self, by: chrono::Duration) {
+            let mut at = self.0.lock().expect("clock lock");
+            *at += by;
+        }
+    }
+
+    impl Clock for FixedClock {
+        fn now(&self) -> DateTime<Utc> {
+            *self.0.lock().expect("clock lock")
+        }
+    }
+
+    #[derive(Default)]
     struct FakeInner {
         transcript: Vec<String>,
+        /// Serialized commands, in call order (for [`FakeAgent::saw_secret`]).
+        commands: Vec<serde_json::Value>,
+        ttls: Vec<(String, Duration)>,
         calls: HashMap<String, usize>,
         /// `kind -> (nth call, message)`: that call returns `ok: false`.
         fail_at: HashMap<String, (usize, String)>,
-        timeout_once: HashSet<String>,
-        timed_out: HashSet<String>,
-        status_active: bool,
+        /// `(kind, nth)`: that call returns [`AgentError::Timeout`].
+        timeout_at: HashSet<(String, usize)>,
+        delays: HashMap<String, Duration>,
+        in_flight: HashMap<String, usize>,
+        max_in_flight: HashMap<String, usize>,
+        status_inactive: bool,
         write_envs: Vec<Vec<EnvVar>>,
         switch_versions: Vec<String>,
         log_lines: Vec<String>,
     }
 
-    /// Scripted agent: records every call's kind name, returns `ok`
-    /// results by default. Clone shares the transcript via `Arc<Mutex>`,
-    /// so the handle kept by the test observes the calls made through
-    /// the `Arc<dyn AgentClient>` held by [`crate::JobCtx`].
+    /// Scripted agent: records every call, returns `ok` results by
+    /// default. Clones share state, so the handle kept by the test
+    /// observes the calls made through the `Arc<dyn AgentClient>` held
+    /// by [`crate::JobCtx`].
     #[derive(Clone)]
     pub struct FakeAgent {
         inner: Arc<Mutex<FakeInner>>,
+    }
+
+    /// Decrements the in-flight count even when the call is dropped
+    /// mid-delay (an aborted runner).
+    struct InFlight {
+        inner: Arc<Mutex<FakeInner>>,
+        kind: String,
+    }
+
+    impl Drop for InFlight {
+        fn drop(&mut self) {
+            if let Ok(mut inner) = self.inner.lock() {
+                if let Some(n) = inner.in_flight.get_mut(&self.kind) {
+                    *n = n.saturating_sub(1);
+                }
+            }
+        }
     }
 
     impl FakeAgent {
         pub fn new() -> Self {
             Self {
                 inner: Arc::new(Mutex::new(FakeInner {
-                    transcript: Vec::new(),
-                    calls: HashMap::new(),
-                    fail_at: HashMap::new(),
-                    timeout_once: HashSet::new(),
-                    timed_out: HashSet::new(),
-                    status_active: true,
-                    write_envs: Vec::new(),
-                    switch_versions: Vec::new(),
                     log_lines: vec![
                         "fake log line 1".to_string(),
                         "fake log line 2".to_string(),
                         "fake log line 3".to_string(),
                     ],
+                    ..FakeInner::default()
                 })),
             }
         }
 
-        /// Kind names in call order (see [`command_kind`]).
+        fn lock(&self) -> std::sync::MutexGuard<'_, FakeInner> {
+            self.inner.lock().expect("fake agent lock")
+        }
+
+        /// Kind names in call order (see [`Command::kind`]).
         pub fn transcript(&self) -> Vec<String> {
-            self.inner
-                .lock()
-                .expect("fake agent lock")
-                .transcript
-                .clone()
+            self.lock().transcript.clone()
+        }
+
+        /// `(kind, TTL)` of every call, in order.
+        pub fn ttls(&self) -> Vec<(String, Duration)> {
+            self.lock().ttls.clone()
+        }
+
+        /// Kinds of the calls whose command carried `secret` anywhere.
+        pub fn saw_secret(&self, secret: &str) -> Vec<String> {
+            self.lock()
+                .commands
+                .iter()
+                .filter(|c| c.to_string().contains(secret))
+                .map(|c| c["kind"].as_str().unwrap_or_default().to_string())
+                .collect()
         }
 
         /// `env` payload of each `WriteEnv` call, in order.
         pub fn write_env_calls(&self) -> Vec<Vec<EnvVar>> {
-            self.inner
-                .lock()
-                .expect("fake agent lock")
-                .write_envs
-                .clone()
+            self.lock().write_envs.clone()
         }
 
         /// `version` payload of each `SwitchVersion` call, in order.
         pub fn switch_versions(&self) -> Vec<String> {
-            self.inner
-                .lock()
-                .expect("fake agent lock")
-                .switch_versions
-                .clone()
+            self.lock().switch_versions.clone()
         }
 
         pub fn call_count(&self, kind: &str) -> usize {
-            self.inner
-                .lock()
-                .expect("fake agent lock")
-                .calls
-                .get(kind)
-                .copied()
-                .unwrap_or(0)
+            self.lock().calls.get(kind).copied().unwrap_or(0)
+        }
+
+        /// Most calls of `kind` ever in flight at once.
+        pub fn max_concurrent(&self, kind: &str) -> usize {
+            self.lock().max_in_flight.get(kind).copied().unwrap_or(0)
         }
 
         /// The nth call of `kind` (1-based) returns `ok: false`.
@@ -237,9 +275,7 @@ pub mod testing {
 
         /// [`fail_at`](Self::fail_at) with an explicit error message.
         pub fn fail_with(&self, kind: &str, nth: usize, msg: &str) {
-            self.inner
-                .lock()
-                .expect("fake agent lock")
+            self.lock()
                 .fail_at
                 .insert(kind.to_string(), (nth, msg.to_string()));
         }
@@ -256,24 +292,102 @@ pub mod testing {
             self.fail_with(kind, nth, msg);
         }
 
-        /// The next call of `kind` returns [`AgentError::Timeout`];
-        /// the retry then succeeds (redelivery test).
+        /// The nth call of `kind` (1-based) returns [`AgentError::Timeout`].
+        pub fn timeout_at(&self, kind: &str, nth: usize) {
+            self.lock().timeout_at.insert((kind.to_string(), nth));
+        }
+
+        /// The next call of `kind` times out; the retry then succeeds.
         pub fn timeout_once(&self, kind: &str) {
-            self.inner
-                .lock()
-                .expect("fake agent lock")
-                .timeout_once
-                .insert(kind.to_string());
+            let nth = self.call_count(kind) + 1;
+            self.timeout_at(kind, nth);
+        }
+
+        /// Every call of `kind` takes `by` before answering.
+        pub fn delay(&self, kind: &str, by: Duration) {
+            self.lock().delays.insert(kind.to_string(), by);
         }
 
         /// What `Status` reports (`active: true` by default).
         pub fn set_status_active(&self, active: bool) {
-            self.inner.lock().expect("fake agent lock").status_active = active;
+            self.lock().status_inactive = !active;
         }
 
         /// What `FetchLogs` reports (three canned lines by default).
         pub fn set_log_lines(&self, lines: Vec<String>) {
-            self.inner.lock().expect("fake agent lock").log_lines = lines;
+            self.lock().log_lines = lines;
+        }
+
+        /// Record the call; the scripted reply plus how long to wait.
+        fn script(&self, cmd: &Command) -> (Result<CommandResult, AgentError>, Option<Duration>) {
+            let mut inner = self.lock();
+            let kind = cmd.kind().to_string();
+            let n = {
+                let n = inner.calls.entry(kind.clone()).or_insert(0);
+                *n += 1;
+                *n
+            };
+            inner.transcript.push(kind.clone());
+            inner
+                .commands
+                .push(serde_json::to_value(cmd).unwrap_or_default());
+            inner.ttls.push((kind.clone(), cmd.default_timeout()));
+            let delay = inner.delays.get(&kind).copied();
+            if inner.timeout_at.contains(&(kind.clone(), n)) {
+                return (Err(AgentError::Timeout), delay);
+            }
+            if let Some((nth, msg)) = inner.fail_at.get(&kind) {
+                if *nth == n {
+                    let reply = CommandResult {
+                        id: setu_common::new_id(),
+                        ok: false,
+                        output: serde_json::Value::Null,
+                        log: "fake failure".to_string(),
+                        error: Some(msg.clone()),
+                    };
+                    return (Ok(reply), delay);
+                }
+            }
+            match cmd {
+                Command::WriteEnv { env, .. } => inner.write_envs.push(env.clone()),
+                Command::SwitchVersion { version, .. } => {
+                    inner.switch_versions.push(version.clone());
+                }
+                _ => {}
+            }
+            let output = match cmd {
+                Command::Status { .. } => serde_json::json!({"active": !inner.status_inactive}),
+                // Cursor `fake-<n>`: the lines after the first n.
+                Command::FetchLogs { cursor, lines, .. } => {
+                    let from = cursor
+                        .as_deref()
+                        .and_then(|c| c.strip_prefix("fake-"))
+                        .and_then(|n| n.parse::<usize>().ok())
+                        .unwrap_or(0)
+                        .min(inner.log_lines.len());
+                    let take = usize::try_from(*lines).unwrap_or(usize::MAX);
+                    let page: Vec<String> =
+                        inner.log_lines[from..].iter().take(take).cloned().collect();
+                    let next = from + page.len();
+                    serde_json::to_value(setu_proto::LogsOutput {
+                        lines: page,
+                        cursor: Some(format!("fake-{next}")),
+                    })
+                    .unwrap_or_default()
+                }
+                Command::Inventory => {
+                    serde_json::to_value(setu_proto::InventoryReport::default()).unwrap_or_default()
+                }
+                _ => serde_json::json!({}),
+            };
+            let reply = CommandResult {
+                id: setu_common::new_id(),
+                ok: true,
+                output,
+                log: "fake ok".to_string(),
+                error: None,
+            };
+            (Ok(reply), delay)
         }
     }
 
@@ -288,49 +402,29 @@ pub mod testing {
         async fn call(
             &self,
             _server_id: &str,
+            _site_short: Option<&str>,
             cmd: Command,
-            _timeout: Duration,
         ) -> Result<CommandResult, AgentError> {
-            let mut inner = self.inner.lock().expect("fake agent lock");
-            let kind = command_kind(&cmd).to_string();
-            let n = inner.calls.entry(kind.clone()).or_insert(0);
-            *n += 1;
-            let n = *n;
-            inner.transcript.push(kind.clone());
-            if inner.timeout_once.contains(&kind) && !inner.timed_out.contains(&kind) {
-                inner.timed_out.insert(kind);
-                return Err(AgentError::Timeout);
-            }
-            if let Some((nth, msg)) = inner.fail_at.get(&kind) {
-                if *nth == n {
-                    return Ok(CommandResult {
-                        id: setu_common::new_id(),
-                        ok: false,
-                        output: serde_json::Value::Null,
-                        log: "fake failure".to_string(),
-                        error: Some(msg.clone()),
-                    });
+            let (reply, delay) = self.script(&cmd);
+            let kind = cmd.kind().to_string();
+            let _guard = {
+                let mut inner = self.lock();
+                let now = {
+                    let n = inner.in_flight.entry(kind.clone()).or_insert(0);
+                    *n += 1;
+                    *n
+                };
+                let max = inner.max_in_flight.entry(kind.clone()).or_insert(0);
+                *max = (*max).max(now);
+                InFlight {
+                    inner: self.inner.clone(),
+                    kind,
                 }
-            }
-            match &cmd {
-                Command::WriteEnv { env, .. } => inner.write_envs.push(env.clone()),
-                Command::SwitchVersion { version, .. } => {
-                    inner.switch_versions.push(version.clone());
-                }
-                _ => {}
-            }
-            let output = match &cmd {
-                Command::Status { .. } => serde_json::json!({"active": inner.status_active}),
-                Command::FetchLogs { .. } => serde_json::json!({"lines": inner.log_lines}),
-                _ => serde_json::json!({}),
             };
-            Ok(CommandResult {
-                id: setu_common::new_id(),
-                ok: true,
-                output,
-                log: "fake ok".to_string(),
-                error: None,
-            })
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
+            reply
         }
     }
 }

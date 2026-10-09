@@ -8,9 +8,10 @@
 mod native;
 
 pub use native::NativeRuntime;
-use setu_proto::SiteSpec;
+use setu_proto::{BinaryRef, SiteSpec};
 
-/// Site id: `setu-site@<id>.service`, `setu-site-<id>` user.
+/// The site's 8-char short id: `setu-site@<short>.service`,
+/// `setu-site-<short>` user.
 pub type SiteId = String;
 
 /// Unit state as observed by the runtime (helper `unit show`).
@@ -72,7 +73,7 @@ pub struct LogStream {
 /// this same trait; both produce a systemd unit.
 #[async_trait::async_trait]
 pub trait Runtime {
-    async fn install(&self, site: &SiteSpec) -> anyhow::Result<()>;
+    async fn install(&self, site: &SiteSpec, binary: &BinaryRef) -> anyhow::Result<()>;
     async fn write_unit(&self, site: &SiteSpec) -> anyhow::Result<()>;
     async fn start(&self, id: SiteId) -> anyhow::Result<()>;
     async fn stop(&self, id: SiteId) -> anyhow::Result<()>;

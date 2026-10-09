@@ -28,10 +28,21 @@ impl<'a> Metrics<'a> {
         Self { pool }
     }
 
-    /// Upsert a batch of samples (heartbeats may resend). Returns the
-    /// number of rows processed.
-    pub async fn insert_batch(&self, metrics: &[setu_proto::SiteMetric]) -> Result<u64, AppError> {
-        insert_metrics(self.pool, metrics).await
+    /// Upsert a batch of one server's samples (heartbeats may resend).
+    /// Samples name sites by short id; a short id that is not a site on
+    /// `server_id` is ignored. Returns the number of rows written.
+    pub async fn insert_batch(
+        &self,
+        server_id: &str,
+        metrics: &[setu_proto::SiteMetric],
+    ) -> Result<u64, AppError> {
+        if metrics.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self.pool.begin().await.map_err(map_db_error)?;
+        let count = insert_metrics_tx(&mut tx, server_id, metrics).await?;
+        tx.commit().await.map_err(map_db_error)?;
+        Ok(count)
     }
 
     /// The site's newest sample, if any.
@@ -61,28 +72,31 @@ impl<'a> Metrics<'a> {
     }
 }
 
-/// Shared by [`Metrics::insert_batch`] and the servers heartbeat path.
-pub(crate) async fn insert_metrics(
-    pool: &PgPool,
+/// Insert one server's batch inside the caller's transaction (the
+/// heartbeat path commits the server update and the metrics together).
+/// Short ids resolve against that server's sites only, so an agent can
+/// never write another server's metrics.
+pub(crate) async fn insert_metrics_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    server_id: &str,
     metrics: &[setu_proto::SiteMetric],
 ) -> Result<u64, AppError> {
     if metrics.is_empty() {
         return Ok(0);
     }
-    let mut tx = pool.begin().await.map_err(map_db_error)?;
-    let count = insert_metrics_tx(&mut tx, metrics).await?;
-    tx.commit().await.map_err(map_db_error)?;
-    Ok(count)
-}
-
-/// Insert a batch inside the caller's transaction (the heartbeat path
-/// commits the server update and the metrics together atomically).
-pub(crate) async fn insert_metrics_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    metrics: &[setu_proto::SiteMetric],
-) -> Result<u64, AppError> {
+    let owned = sqlx::query!(
+        "SELECT id, short_id FROM sites WHERE server_id = $1",
+        server_id
+    )
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(map_db_error)?;
     let mut count = 0u64;
     for m in metrics {
+        let Some(site) = owned.iter().find(|r| r.short_id == m.short_id) else {
+            tracing::debug!(server_id = %server_id, "heartbeat ignored a foreign metric");
+            continue;
+        };
         sqlx::query!(
             "INSERT INTO site_metrics (site_id, at, cpu_seconds, memory_bytes, disk_bytes)
              VALUES ($1, $2, $3, $4, $5)
@@ -90,11 +104,11 @@ pub(crate) async fn insert_metrics_tx(
                SET cpu_seconds = excluded.cpu_seconds,
                    memory_bytes = excluded.memory_bytes,
                    disk_bytes = excluded.disk_bytes",
-            m.site_id,
+            site.id,
             m.at,
             m.cpu_seconds,
-            m.memory_bytes as i64,
-            m.disk_bytes as i64,
+            i64::try_from(m.memory_bytes).unwrap_or(i64::MAX),
+            i64::try_from(m.disk_bytes).unwrap_or(i64::MAX),
         )
         .execute(&mut **tx)
         .await

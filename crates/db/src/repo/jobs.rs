@@ -268,4 +268,20 @@ impl<'a> Jobs<'a> {
         .await
         .map_err(map_db_error)
     }
+
+    /// An active (`queued`/`running`) `delete_backup` job for this backup.
+    pub async fn active_delete_backup(&self, backup_id: &str) -> Result<Option<Job>, AppError> {
+        sqlx::query_as!(
+            Job,
+            "SELECT id, kind, site_id, server_id, status, payload, attempts, locked_by,
+                       locked_until, log, error, created_at, started_at, finished_at FROM jobs
+             WHERE kind = 'delete_backup' AND status IN ('queued', 'running')
+               AND payload->>'backup_id' = $1
+             LIMIT 1",
+            backup_id,
+        )
+        .fetch_optional(self.pool)
+        .await
+        .map_err(map_db_error)
+    }
 }

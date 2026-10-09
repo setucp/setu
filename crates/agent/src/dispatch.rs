@@ -4,13 +4,12 @@
 //!
 //! Result logs never carry env values or passwords.
 
-use setu_proto::{Command, CommandResult};
+use setu_proto::{Command, CommandResult, InventoryReport, LogsOutput, UnitState};
 
 use crate::caddy::CaddyAdmin;
-use crate::helper::unit_name;
 use crate::helper_client::Helper;
 use crate::postgres::PostgresAdmin;
-use crate::runtime::NativeRuntime;
+use crate::runtime::{NativeRuntime, RuntimeStatus};
 
 fn ok(id: &str, output: serde_json::Value, log: &str) -> CommandResult {
     CommandResult {
@@ -48,6 +47,10 @@ where
     C: CaddyAdmin,
 {
     match cmd {
+        Command::SiteCreate { site } => match rt.site_create(site).await {
+            Ok(()) => ok(cmd_id, serde_json::json!({}), "site_create ok"),
+            Err(e) => err(cmd_id, "site_create failed", e),
+        },
         Command::CreateDatabase { db, role, password } => {
             match rt.postgres().create_or_alter(db, role, password).await {
                 Ok(()) => ok(cmd_id, serde_json::json!({"db": db}), "create_database ok"),
@@ -58,7 +61,7 @@ where
             Ok(()) => ok(cmd_id, serde_json::json!({"db": db}), "drop_database ok"),
             Err(e) => err(cmd_id, "drop_database failed", e),
         },
-        Command::Install { site } => match rt.install_version(site).await {
+        Command::Install { site, binary } => match rt.install_version(site, binary).await {
             Ok(version) => ok(
                 cmd_id,
                 serde_json::json!({"version": version}),
@@ -66,6 +69,16 @@ where
             ),
             Err(e) => err(cmd_id, "install failed", e),
         },
+        Command::SwitchVersion { site, version } => {
+            match rt.switch_version_inner(site, version).await {
+                Ok(changed) => ok(
+                    cmd_id,
+                    serde_json::json!({"version": version, "changed": changed}),
+                    "switch_version ok",
+                ),
+                Err(e) => err(cmd_id, "switch_version failed", e),
+            }
+        }
         Command::WriteUnit { site } => match rt.write_unit_inner(site).await {
             Ok(changed) => ok(
                 cmd_id,
@@ -82,19 +95,19 @@ where
             ),
             Err(e) => err(cmd_id, "write_env failed", e),
         },
-        Command::Start { site_id } => match rt.start_inner(site_id).await {
+        Command::Start { site } => match rt.start_inner(site).await {
             Ok(()) => ok(cmd_id, serde_json::json!({}), "start ok"),
             Err(e) => err(cmd_id, "start failed", e),
         },
-        Command::Stop { site_id } => match rt.stop_inner(site_id).await {
+        Command::Stop { site } => match rt.stop_inner(site).await {
             Ok(()) => ok(cmd_id, serde_json::json!({}), "stop ok"),
             Err(e) => err(cmd_id, "stop failed", e),
         },
-        Command::Restart { site_id } => match rt.restart_inner(site_id).await {
+        Command::Restart { site } => match rt.restart_inner(site).await {
             Ok(()) => ok(cmd_id, serde_json::json!({}), "restart ok"),
             Err(e) => err(cmd_id, "restart failed", e),
         },
-        Command::Status { site_id } => match rt.status_inner(site_id).await {
+        Command::Status { site } => match rt.status_inner(site).await {
             Ok(st) => ok(
                 cmd_id,
                 serde_json::json!({
@@ -108,24 +121,16 @@ where
             ),
             Err(e) => err(cmd_id, "status failed", e),
         },
-        Command::Health {
-            site_id,
-            port,
-            path,
-            timeout_s,
-        } => {
-            let timeout = std::time::Duration::from_secs((*timeout_s).clamp(1, 300));
-            match rt.health_inner(site_id, *port, path, timeout).await {
-                Ok(status) => ok(cmd_id, serde_json::json!({"http": status}), "health ok"),
-                Err(e) => err(cmd_id, "health failed", e),
-            }
-        }
+        Command::Health { site } => match rt.health_inner(site).await {
+            Ok(status) => ok(cmd_id, serde_json::json!({"http": status}), "health ok"),
+            Err(e) => err(cmd_id, "health failed", e),
+        },
         Command::SetRoute {
+            site_short_id,
             domain,
             port,
-            site_short_id,
         } => {
-            let id = match route_id_for(site_short_id.as_deref()) {
+            let id = match crate::caddy::site_route_id(site_short_id) {
                 Ok(id) => id,
                 Err(e) => return err(cmd_id, "set_route failed", e),
             };
@@ -140,10 +145,10 @@ where
             }
         }
         Command::RemoveRoute {
-            domain,
             site_short_id,
+            domain,
         } => {
-            let id = match route_id_for(site_short_id.as_deref()) {
+            let id = match crate::caddy::site_route_id(site_short_id) {
                 Ok(id) => id,
                 Err(e) => return err(cmd_id, "remove_route failed", e),
             };
@@ -160,94 +165,116 @@ where
             site,
             db,
             dirs,
-            dest,
-        } => match crate::backup::backup_site(rt, site, db, dirs, dest).await {
-            Ok(dir) => ok(cmd_id, serde_json::json!({"dest": dir}), "backup ok"),
+            backup_id,
+        } => match crate::backup::backup_site(rt, site, db, dirs, backup_id).await {
+            Ok((_, size)) => ok(
+                cmd_id,
+                serde_json::json!({"backup_id": backup_id, "size_bytes": size}),
+                "backup ok",
+            ),
             Err(e) => err(cmd_id, "backup failed", e),
         },
-        Command::Restore { site, db, src } => {
-            match crate::backup::restore_site(rt, site, db, src).await {
-                Ok(()) => ok(cmd_id, serde_json::json!({"src": src}), "restore ok"),
-                Err(e) => err(cmd_id, "restore failed", e),
-            }
-        }
-        Command::Remove { site } => match rt.remove_inner(&site.site_id).await {
-            Ok(()) => ok(cmd_id, serde_json::json!({}), "remove ok"),
-            Err(e) => err(cmd_id, "remove failed", e),
+        Command::Restore {
+            site,
+            db,
+            role,
+            dirs,
+            backup_id,
+        } => match crate::backup::restore_site(rt, site, db, role, dirs, backup_id).await {
+            Ok(()) => ok(
+                cmd_id,
+                serde_json::json!({"backup_id": backup_id}),
+                "restore ok",
+            ),
+            Err(e) => err(cmd_id, "restore failed", e),
         },
-        Command::SwitchVersion { site_id, version } => {
-            match rt.switch_version_inner(site_id, version).await {
-                Ok(changed) => ok(
+        Command::DeleteBackup { site, backup_id } => {
+            match crate::backup::delete_backup(&rt.config().backups_root, site, backup_id) {
+                Ok(existed) => ok(
                     cmd_id,
-                    serde_json::json!({"version": version, "changed": changed}),
-                    "switch_version ok",
+                    serde_json::json!({"backup_id": backup_id, "existed": existed}),
+                    "delete_backup ok",
                 ),
-                Err(e) => err(cmd_id, "switch_version failed", e),
+                Err(e) => err(cmd_id, "delete_backup failed", e),
             }
         }
-        Command::FetchLogs { site_id, lines } => {
-            match rt.logs_inner(site_id, None, (*lines).clamp(1, 5000)).await {
-                Ok(stream) => ok(
-                    cmd_id,
-                    serde_json::json!({"lines": stream.lines, "cursor": stream.next}),
-                    "fetch_logs ok",
-                ),
-                Err(e) => err(cmd_id, "fetch_logs failed", e),
-            }
-        }
-        Command::Inventory => {
-            let state = crate::state::StateFile::load(&rt.config().state_path);
-            match state {
-                Ok(s) => {
-                    let sites: Vec<serde_json::Value> = s
-                        .sites
-                        .iter()
-                        .map(|(id, e)| {
-                            let unit = unit_name(&setu_common::short_id(id).to_lowercase());
-                            serde_json::json!({
-                                "site_id": id,
-                                "unit": unit,
-                                "port": e.port,
-                                "db": e.db,
-                                "version": e.version,
-                            })
-                        })
-                        .collect();
-                    ok(cmd_id, serde_json::json!({"sites": sites}), "inventory ok")
-                }
-                Err(e) => err(cmd_id, "inventory failed", e),
-            }
-        }
+        Command::SiteRemove { site } => match rt.remove_inner(site).await {
+            Ok(()) => ok(cmd_id, serde_json::json!({}), "site_remove ok"),
+            Err(e) => err(cmd_id, "site_remove failed", e),
+        },
+        Command::FetchLogs {
+            site,
+            cursor,
+            lines,
+        } => match rt
+            .logs_inner(site, cursor.as_deref(), (*lines).clamp(1, 5000))
+            .await
+        {
+            Ok(stream) => ok(
+                cmd_id,
+                serde_json::to_value(LogsOutput {
+                    lines: stream.lines,
+                    cursor: stream.next,
+                })
+                .unwrap_or_default(),
+                "fetch_logs ok",
+            ),
+            Err(e) => err(cmd_id, "fetch_logs failed", e),
+        },
+        Command::Inventory => match inventory(rt).await {
+            Ok(report) => ok(
+                cmd_id,
+                serde_json::to_value(report).unwrap_or_default(),
+                "inventory ok",
+            ),
+            Err(e) => err(cmd_id, "inventory failed", e),
+        },
     }
 }
 
-/// Route id `setu-site-<short>`; a route command without the site's
-/// short id is refused rather than keyed off the domain (ledger R71).
-fn route_id_for(short: Option<&str>) -> anyhow::Result<String> {
-    let short = short.ok_or_else(|| anyhow::anyhow!("route command without site_short_id"))?;
-    crate::caddy::site_route_id(short)
+/// What is on this host: unit states of the known sites, site trees,
+/// Caddy route ids and `site_*` databases.
+pub async fn inventory<H, P, C>(rt: &NativeRuntime<H, P, C>) -> anyhow::Result<InventoryReport>
+where
+    H: Helper,
+    P: PostgresAdmin + Send + Sync,
+    C: CaddyAdmin,
+{
+    let state = crate::state::StateFile::load(&rt.config().state_path)?;
+    let mut units = Vec::new();
+    for short in state.sites.keys() {
+        units.push(unit_state(rt, short).await);
+    }
+    Ok(InventoryReport {
+        units,
+        sites_on_disk: rt.sites_on_disk(),
+        routes: rt.caddy().list_route_ids().await?,
+        databases: rt.postgres().list_databases().await?,
+    })
 }
 
-/// Snake-case kind tag, mirroring the proto `kind` tag (for transcripts).
+/// One site's unit state (`unknown` when the helper cannot say).
+pub async fn unit_state<H, P, C>(rt: &NativeRuntime<H, P, C>, short: &str) -> UnitState
+where
+    H: Helper,
+{
+    let status = rt
+        .status_inner(short)
+        .await
+        .unwrap_or_else(|_| RuntimeStatus {
+            sub: "unknown".to_string(),
+            ..Default::default()
+        });
+    UnitState {
+        short_id: short.to_string(),
+        active: status.active,
+        sub: status.sub,
+        pid: status.pid,
+        restarts: status.n_restarts,
+    }
+}
+
+/// Snake-case kind tag (proto's [`Command::kind`], for transcripts).
 pub fn command_kind(cmd: &Command) -> &'static str {
-    match cmd {
-        Command::CreateDatabase { .. } => "create_database",
-        Command::DropDatabase { .. } => "drop_database",
-        Command::Install { .. } => "install",
-        Command::WriteUnit { .. } => "write_unit",
-        Command::WriteEnv { .. } => "write_env",
-        Command::Start { .. } => "start",
-        Command::Stop { .. } => "stop",
-        Command::Restart { .. } => "restart",
-        Command::Status { .. } => "status",
-        Command::Health { .. } => "health",
-        Command::SetRoute { .. } => "set_route",
-        Command::RemoveRoute { .. } => "remove_route",
-        Command::Backup { .. } => "backup",
-        Command::Restore { .. } => "restore",
-        Command::Remove { .. } => "remove",
-        Command::SwitchVersion { .. } => "switch_version",
-        Command::FetchLogs { .. } => "fetch_logs",
-        Command::Inventory => "inventory",
-    }
+    cmd.kind()
 }

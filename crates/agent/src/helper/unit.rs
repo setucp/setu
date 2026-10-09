@@ -22,21 +22,12 @@ pub const DROPIN_TEMPLATE: &str = include_str!("../../assets/dropin.conf.tmpl");
 /// Drop-in file name inside `setu-site@<short>.service.d/`.
 pub const DROPIN_NAME: &str = "10-setu.conf";
 
-/// `WorkingDirectory=` choice (mirrors the manifest's `run.workdir`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Workdir {
-    /// The directory holding `exec` inside `bin/current`.
-    #[default]
-    ExecDir,
-    /// `bin/current`.
-    Bin,
-    /// The site's `data/`.
-    Data,
-}
+/// `WorkingDirectory=` choice: proto's mirror of the manifest's
+/// `run.workdir` (`exec_dir` | `bin` | `data`), one type end to end.
+pub use setu_proto::Workdir;
 
-/// `write-unit` input: helper-local (proto's `SiteSpec` still carries
-/// paths until WS5; nothing path-like crosses sudo).
+/// `write-unit` input: helper-local, built by the agent from proto's
+/// `SiteSpec` (nothing path-like crosses sudo).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UnitInput {

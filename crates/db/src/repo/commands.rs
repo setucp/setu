@@ -101,7 +101,7 @@ impl<'a> Commands<'a> {
         let row = sqlx::query!(
             "INSERT INTO agent_commands (id, server_id, site_short_id, command, expires_at)
              VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5))
-             RETURNING id, created_at",
+             RETURNING id, created_at, expires_at",
             setu_common::new_id(),
             server_id,
             site_short_id,
@@ -118,9 +118,10 @@ impl<'a> Commands<'a> {
         tx.commit().await.map_err(map_db_error)?;
         Ok(setu_proto::CommandEnvelope {
             id: row.id,
+            site_short_id: site_short_id.map(str::to_string),
             created_at: row.created_at,
+            expires_at: row.expires_at,
             command: command.clone(),
-            attempts: 0,
         })
     }
 
@@ -149,7 +150,7 @@ impl<'a> Commands<'a> {
                  FOR UPDATE SKIP LOCKED
                  LIMIT 1
              )
-             RETURNING id, command, created_at, attempts",
+             RETURNING id, site_short_id, command, created_at, expires_at",
             server_id,
         )
         .fetch_optional(self.pool)
@@ -162,9 +163,10 @@ impl<'a> Commands<'a> {
             })?;
             Ok(setu_proto::CommandEnvelope {
                 id: r.id,
+                site_short_id: r.site_short_id,
                 created_at: r.created_at,
+                expires_at: r.expires_at,
                 command,
-                attempts: r.attempts,
             })
         })
         .transpose()

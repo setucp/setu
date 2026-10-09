@@ -908,7 +908,6 @@ pub async fn env_put(
         .version(&site.app_id, &site.app_version)
         .await?;
     let manifest = load_manifest(&version)?;
-    let plan = state.db.plans().get(&site.plan_id).await?;
 
     // Validate keys against the manifest: Value/Prompt only.
     let mut secrets: BTreeMap<String, bool> = BTreeMap::new();
@@ -991,16 +990,15 @@ pub async fn env_put(
             once: *once,
         })
         .collect();
-    let spec = env_site_spec(&site, &manifest, &plan);
     if let Err(e) = state
         .agent
         .call(
             &site.server_id,
+            Some(&site.short_id),
             setu_proto::Command::WriteEnv {
-                site: spec,
+                site: site.short_id.clone(),
                 env: proto_env,
             },
-            Duration::from_secs(120),
         )
         .await
     {
@@ -1030,45 +1028,9 @@ pub async fn env_put(
     ))
 }
 
-/// Minimal agent spec for the env `WriteEnv`: keyed off `site_id`, so
-/// the agent finds the right env file. Fills limits/health/exec from
-/// the plan and manifest where available, defaults otherwise.
-fn env_site_spec(
-    site: &setu_db::Site,
-    manifest: &setu_manifest::Manifest,
-    plan: &setu_db::Plan,
-) -> setu_proto::SiteSpec {
-    let site_dir = std::path::PathBuf::from(format!("/srv/setu/sites/{}", site.short_id));
-    let data_dir = site_dir.join("data");
-    let (exec, args) = match manifest.run.target(setu_manifest::Target::X86_64Linux) {
-        Some(t) => (
-            site_dir.join("bin").join("current").join(&t.exec),
-            manifest.run.args.clone(),
-        ),
-        None => (site_dir.join("bin").join("current").join("app"), Vec::new()),
-    };
-    setu_proto::SiteSpec {
-        site_id: site.id.clone(),
-        short_id: site.short_id.clone(),
-        user: format!("setu-site-{}", site.short_id),
-        data_dir,
-        run_dir: site_dir.join("run"),
-        port: site.port as u16,
-        exec,
-        args,
-        env_file: site_dir.join("env"),
-        limits: setu_proto::Limits {
-            memory_mb: u32::try_from(plan.memory_mb).unwrap_or(512),
-            cpu_percent: u32::try_from(plan.cpu_percent).unwrap_or(100),
-            disk_mb: u32::try_from(plan.disk_mb).unwrap_or(5120),
-        },
-        health_path: manifest.app.health.clone(),
-        binary: None,
-    }
-}
-
-/// Live logs as SSE (viewer and above): `FetchLogs` every 2 s, unseen
-/// lines since the cursor render as `data: <line>` events. The stream
+/// Live logs as SSE (viewer and above): `FetchLogs` every 2 s with the
+/// journal cursor of the previous page, so each line renders once as a
+/// `data: <line>` event. The stream
 /// ends when the client disconnects (a failed send breaks the loop) or
 /// when the agent call fails (an `error` event first).
 #[utoipa::path(
@@ -1089,21 +1051,22 @@ pub async fn logs(
     require_role(&session, &state.db, Role::Viewer).await?;
     let site = state.db.sites().get(&id).await?;
     let server_id = site.server_id.clone();
-    let site_id = site.id.clone();
+    let short = site.short_id.clone();
 
     let (mut tx, rx) = mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(32);
     let agent = state.agent.clone();
     tokio::spawn(async move {
-        let mut cursor = 0usize;
+        let mut cursor: Option<String> = None;
         loop {
             let call = agent
                 .call(
                     &server_id,
+                    Some(&short),
                     setu_proto::Command::FetchLogs {
-                        site_id: site_id.clone(),
+                        site: short.clone(),
+                        cursor: cursor.clone(),
                         lines: 200,
                     },
-                    Duration::from_secs(30),
                 )
                 .await;
             match call {
@@ -1119,32 +1082,17 @@ pub async fn logs(
                             .await;
                         break;
                     }
-                    let lines: Vec<String> = result
-                        .output
-                        .get("lines")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|v| v.as_str().map(str::to_string))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    // The agent returns a sliding window (`lines` caps the
-                    // tail); once the log outgrows it, `len()` stops
-                    // advancing past `cursor`. A shrunk window means
-                    // rotation/truncation: restart from 0 so the stream
-                    // resends the current window once instead of going
-                    // silent forever.
-                    if lines.len() < cursor {
-                        cursor = 0;
-                    }
-                    for line in lines.iter().skip(cursor) {
+                    let page: setu_proto::LogsOutput =
+                        serde_json::from_value(result.output).unwrap_or_default();
+                    for line in &page.lines {
                         let chunk = format!("data: {line}\n\n");
                         if tx.send(Ok(axum::body::Bytes::from(chunk))).await.is_err() {
                             return;
                         }
                     }
-                    cursor = lines.len().max(cursor);
+                    if page.cursor.is_some() {
+                        cursor = page.cursor;
+                    }
                 }
                 Err(e) => {
                     let _ = tx

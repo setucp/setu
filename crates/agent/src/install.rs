@@ -398,6 +398,8 @@ async fn join_control_plane(opts: &InstallOpts) -> Result<(), InstallError> {
     let request = JoinRequest {
         // The token itself is never logged (proto Debug redacts).
         join_token: opts.join_token.clone(),
+        // Fresh per attempt until WS7 keeps one nonce across retries.
+        nonce: setu_common::random_hex(16),
         hostname: hostname(),
         arch: std::env::consts::ARCH.to_string(),
         os: std::env::consts::OS.to_string(),

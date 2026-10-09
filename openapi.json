@@ -1978,7 +1978,7 @@
         "tags": [
           "super::sites"
         ],
-        "summary": "Live logs as SSE (viewer and above): `FetchLogs` every 2 s, unseen\nlines since the cursor render as `data: <line>` events. The stream\nends when the client disconnects (a failed send breaks the loop) or\nwhen the agent call fails (an `error` event first).",
+        "summary": "Live logs as SSE (viewer and above): `FetchLogs` every 2 s with the\njournal cursor of the previous page, so each line renders once as a\n`data: <line>` event. The stream\nends when the client disconnects (a failed send breaks the loop) or\nwhen the agent call fails (an `error` event first).",
         "operationId": "logs",
         "parameters": [
           {
@@ -2652,14 +2652,15 @@
         "type": "object",
         "description": "One downloadable binary release.",
         "required": [
+          "version",
           "url",
           "sha256",
-          "exec",
-          "version"
+          "exec"
         ],
         "properties": {
           "exec": {
-            "type": "string"
+            "type": "string",
+            "description": "Path of the executable inside the archive (relative)."
           },
           "sha256": {
             "type": "string"
@@ -2674,6 +2675,24 @@
       },
       "Command": {
         "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "site_create"
+                ]
+              },
+              "site": {
+                "$ref": "#/components/schemas/SiteSpec"
+              }
+            }
+          },
           {
             "type": "object",
             "required": [
@@ -2726,9 +2745,13 @@
             "type": "object",
             "required": [
               "site",
+              "binary",
               "kind"
             ],
             "properties": {
+              "binary": {
+                "$ref": "#/components/schemas/BinaryRef"
+              },
               "kind": {
                 "type": "string",
                 "enum": [
@@ -2736,7 +2759,29 @@
                 ]
               },
               "site": {
-                "$ref": "#/components/schemas/SiteSpec"
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "version",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "switch_version"
+                ]
+              },
+              "site": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
               }
             }
           },
@@ -2779,14 +2824,14 @@
                 ]
               },
               "site": {
-                "$ref": "#/components/schemas/SiteSpec"
+                "type": "string"
               }
             }
           },
           {
             "type": "object",
             "required": [
-              "site_id",
+              "site",
               "kind"
             ],
             "properties": {
@@ -2796,7 +2841,7 @@
                   "start"
                 ]
               },
-              "site_id": {
+              "site": {
                 "type": "string"
               }
             }
@@ -2804,7 +2849,7 @@
           {
             "type": "object",
             "required": [
-              "site_id",
+              "site",
               "kind"
             ],
             "properties": {
@@ -2814,7 +2859,7 @@
                   "stop"
                 ]
               },
-              "site_id": {
+              "site": {
                 "type": "string"
               }
             }
@@ -2822,7 +2867,7 @@
           {
             "type": "object",
             "required": [
-              "site_id",
+              "site",
               "kind"
             ],
             "properties": {
@@ -2832,7 +2877,7 @@
                   "restart"
                 ]
               },
-              "site_id": {
+              "site": {
                 "type": "string"
               }
             }
@@ -2840,7 +2885,7 @@
           {
             "type": "object",
             "required": [
-              "site_id",
+              "site",
               "kind"
             ],
             "properties": {
@@ -2850,7 +2895,7 @@
                   "status"
                 ]
               },
-              "site_id": {
+              "site": {
                 "type": "string"
               }
             }
@@ -2858,10 +2903,7 @@
           {
             "type": "object",
             "required": [
-              "site_id",
-              "port",
-              "path",
-              "timeout_s",
+              "site",
               "kind"
             ],
             "properties": {
@@ -2871,27 +2913,15 @@
                   "health"
                 ]
               },
-              "path": {
-                "type": "string"
-              },
-              "port": {
-                "type": "integer",
-                "format": "int32",
-                "minimum": 0
-              },
-              "site_id": {
-                "type": "string"
-              },
-              "timeout_s": {
-                "type": "integer",
-                "format": "int64",
-                "minimum": 0
+              "site": {
+                "$ref": "#/components/schemas/SiteSpec"
               }
             }
           },
           {
             "type": "object",
             "required": [
+              "site_short_id",
               "domain",
               "port",
               "kind"
@@ -2912,16 +2942,14 @@
                 "minimum": 0
               },
               "site_short_id": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+                "type": "string"
               }
             }
           },
           {
             "type": "object",
             "required": [
+              "site_short_id",
               "domain",
               "kind"
             ],
@@ -2936,10 +2964,7 @@
                 ]
               },
               "site_short_id": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+                "type": "string"
               }
             }
           },
@@ -2949,14 +2974,14 @@
               "site",
               "db",
               "dirs",
-              "dest",
+              "backup_id",
               "kind"
             ],
             "properties": {
-              "db": {
+              "backup_id": {
                 "type": "string"
               },
-              "dest": {
+              "db": {
                 "type": "string"
               },
               "dirs": {
@@ -2972,7 +2997,7 @@
                 ]
               },
               "site": {
-                "$ref": "#/components/schemas/SiteSpec"
+                "type": "string"
               }
             }
           },
@@ -2981,12 +3006,23 @@
             "required": [
               "site",
               "db",
-              "src",
+              "role",
+              "dirs",
+              "backup_id",
               "kind"
             ],
             "properties": {
+              "backup_id": {
+                "type": "string"
+              },
               "db": {
                 "type": "string"
+              },
+              "dirs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               },
               "kind": {
                 "type": "string",
@@ -2994,10 +3030,32 @@
                   "restore"
                 ]
               },
-              "site": {
-                "$ref": "#/components/schemas/SiteSpec"
+              "role": {
+                "type": "string"
               },
-              "src": {
+              "site": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "backup_id",
+              "kind"
+            ],
+            "properties": {
+              "backup_id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "delete_backup"
+                ]
+              },
+              "site": {
                 "type": "string"
               }
             }
@@ -3012,32 +3070,10 @@
               "kind": {
                 "type": "string",
                 "enum": [
-                  "remove"
+                  "site_remove"
                 ]
               },
               "site": {
-                "$ref": "#/components/schemas/SiteSpec"
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "site_id",
-              "version",
-              "kind"
-            ],
-            "properties": {
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "switch_version"
-                ]
-              },
-              "site_id": {
-                "type": "string"
-              },
-              "version": {
                 "type": "string"
               }
             }
@@ -3045,11 +3081,17 @@
           {
             "type": "object",
             "required": [
-              "site_id",
+              "site",
               "lines",
               "kind"
             ],
             "properties": {
+              "cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "kind": {
                 "type": "string",
                 "enum": [
@@ -3061,7 +3103,7 @@
                 "format": "int32",
                 "minimum": 0
               },
-              "site_id": {
+              "site": {
                 "type": "string"
               }
             }
@@ -3085,18 +3127,14 @@
       },
       "CommandEnvelope": {
         "type": "object",
-        "description": "A command in flight: stable `id` so redelivery is idempotent.\n`attempts` counts deliveries (`next_for` bumps it; `requeue_stale`\nonly resets `delivered_at`), so the agent can tell a retry apart.",
+        "description": "A command in flight: stable `id` so redelivery is idempotent.\nThe wire has no delivery counter (ledger R85): the agent dedupes by\nid; `agent_commands.attempts` stays a control-plane diagnostic.",
         "required": [
           "id",
           "created_at",
-          "command",
-          "attempts"
+          "expires_at",
+          "command"
         ],
         "properties": {
-          "attempts": {
-            "type": "integer",
-            "format": "int32"
-          },
           "command": {
             "$ref": "#/components/schemas/Command"
           },
@@ -3104,8 +3142,18 @@
             "type": "string",
             "format": "date-time"
           },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
           "id": {
             "type": "string"
+          },
+          "site_short_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -3400,9 +3448,10 @@
       },
       "Heartbeat": {
         "type": "object",
-        "description": "Agent heartbeat posted every 15 s.",
+        "description": "Agent heartbeat posted every 15 s. `boot_id` changes whenever the\nagent process (or the host) restarts.",
         "required": [
           "agent_version",
+          "boot_id",
           "load1",
           "mem_free_mb",
           "disk_free_mb",
@@ -3411,6 +3460,9 @@
         ],
         "properties": {
           "agent_version": {
+            "type": "string"
+          },
+          "boot_id": {
             "type": "string"
           },
           "disk_free_mb": {
@@ -3553,9 +3605,10 @@
       },
       "JoinRequest": {
         "type": "object",
-        "description": "First contact: the agent redeems a single-use join token.",
+        "description": "First contact: the agent redeems a single-use join token with a\nrandom `nonce` (a retry within 60 s with the same nonce gets the same\nserver token; another nonce is refused).",
         "required": [
           "join_token",
+          "nonce",
           "hostname",
           "arch",
           "os",
@@ -3587,6 +3640,9 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "nonce": {
+            "type": "string"
           },
           "os": {
             "type": "string"
@@ -4042,7 +4098,7 @@
         "type": "object",
         "description": "One per-site metrics sample.",
         "required": [
-          "site_id",
+          "short_id",
           "at",
           "cpu_seconds",
           "memory_bytes",
@@ -4067,7 +4123,7 @@
             "format": "int64",
             "minimum": 0
           },
-          "site_id": {
+          "short_id": {
             "type": "string"
           }
         }
@@ -4147,19 +4203,19 @@
       },
       "SiteSpec": {
         "type": "object",
-        "description": "Everything the agent needs to materialise one site.",
+        "description": "Everything the agent needs to materialise one site. No paths, no\nuser, no env file: the agent derives them from `short_id` (spec §4).",
         "required": [
           "site_id",
           "short_id",
-          "user",
-          "data_dir",
-          "run_dir",
+          "version",
           "port",
           "exec",
           "args",
-          "env_file",
+          "workdir",
+          "dirs",
           "limits",
-          "health_path"
+          "health",
+          "startup_grace_s"
         ],
         "properties": {
           "args": {
@@ -4168,27 +4224,20 @@
               "type": "string"
             }
           },
-          "binary": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/BinaryRef"
-              }
-            ]
-          },
-          "data_dir": {
-            "type": "string"
-          },
-          "env_file": {
-            "type": "string"
+          "dirs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Directories under `data/` (manifest `needs.dirs`)."
           },
           "exec": {
-            "type": "string"
+            "type": "string",
+            "description": "Executable inside `bin/<version>/` (relative, validated)."
           },
-          "health_path": {
-            "type": "string"
+          "health": {
+            "type": "string",
+            "description": "Health path polled on `127.0.0.1:<port>`."
           },
           "limits": {
             "$ref": "#/components/schemas/Limits"
@@ -4198,27 +4247,34 @@
             "format": "int32",
             "minimum": 0
           },
-          "run_dir": {
-            "type": "string"
-          },
           "short_id": {
             "type": "string"
           },
           "site_id": {
             "type": "string"
           },
-          "user": {
-            "type": "string"
+          "startup_grace_s": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "version": {
+            "type": "string",
+            "description": "The version `bin/current` should run."
+          },
+          "workdir": {
+            "$ref": "#/components/schemas/Workdir"
           }
         }
       },
       "UnitState": {
         "type": "object",
-        "description": "One systemd unit's state as observed by the agent.",
+        "description": "One site unit's state as observed by the agent.",
         "required": [
-          "site_id",
+          "short_id",
           "active",
-          "sub"
+          "sub",
+          "restarts"
         ],
         "properties": {
           "active": {
@@ -4232,7 +4288,12 @@
             "format": "int32",
             "minimum": 0
           },
-          "site_id": {
+          "restarts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "short_id": {
             "type": "string"
           },
           "sub": {
@@ -4303,6 +4364,15 @@
             "type": "boolean"
           }
         }
+      },
+      "Workdir": {
+        "type": "string",
+        "description": "The unit's working directory (mirrors the manifest's `run.workdir`).",
+        "enum": [
+          "exec_dir",
+          "bin",
+          "data"
+        ]
       }
     }
   }

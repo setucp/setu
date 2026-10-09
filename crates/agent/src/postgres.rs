@@ -26,6 +26,8 @@ pub trait PostgresAdmin: Send + Sync {
     /// create again (role password untouched), `pg_restore --no-owner
     /// --role=<role>` from stdin.
     async fn restore_replace(&self, db: &str, role: &str, dump: Vec<u8>) -> anyhow::Result<()>;
+    /// Databases named `site_*` (for `Inventory`).
+    async fn list_databases(&self) -> anyhow::Result<Vec<String>>;
 }
 
 /// What a finished process returned.
@@ -294,6 +296,29 @@ impl<R: CommandRunner> PostgresAdmin for PsqlSudo<R> {
         .await
         .map(|_| ())
     }
+
+    async fn list_databases(&self) -> anyhow::Result<Vec<String>> {
+        let out = self
+            .exec(
+                "psql",
+                &[
+                    "-X",
+                    "-q",
+                    "-At",
+                    "-c",
+                    "SELECT datname FROM pg_database WHERE datname LIKE 'site\\_%' ORDER BY 1",
+                ],
+                &[],
+                None,
+            )
+            .await?;
+        Ok(String::from_utf8_lossy(&out)
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -356,6 +381,12 @@ impl PostgresAdmin for FakePostgres {
         }
         inner.databases.insert(db.to_string(), role.to_string());
         Ok(())
+    }
+
+    async fn list_databases(&self) -> anyhow::Result<Vec<String>> {
+        let mut dbs: Vec<String> = self.lock().databases.keys().cloned().collect();
+        dbs.sort();
+        Ok(dbs)
     }
 }
 

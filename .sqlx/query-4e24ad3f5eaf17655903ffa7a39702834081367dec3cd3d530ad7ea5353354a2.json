@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id FROM sites WHERE server_id = $1",
+  "query": "SELECT id, short_id FROM sites WHERE server_id = $1",
   "describe": {
     "columns": [
       {
@@ -13,6 +13,17 @@
             "name": "id"
           }
         }
+      },
+      {
+        "ordinal": 1,
+        "name": "short_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "short_id"
+          }
+        }
       }
     ],
     "parameters": {
@@ -21,8 +32,9 @@
       ]
     },
     "nullable": [
+      false,
       false
     ]
   },
-  "hash": "48048a3d648cd090c5d4cb83f54aeff9dc83cd6f44dc03f720a986e03638c202"
+  "hash": "4e24ad3f5eaf17655903ffa7a39702834081367dec3cd3d530ad7ea5353354a2"
 }
