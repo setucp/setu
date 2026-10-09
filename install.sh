@@ -1,221 +1,289 @@
 #!/usr/bin/env bash
-# Installs Setu on a fresh Ubuntu 24.04 server (run as root):
-# downloads the checked release archive, installs the single `setu`
-# binary to /opt/setu, creates a local Postgres database, writes
-# /etc/setu/setu.toml, and starts setu.service. Prints the setup URL.
+# Setu installer (spec §8). Run as root on a fresh Ubuntu 24.04 x86_64
+# server:
 #
-#   curl -fsSL https://github.com/vyasa-cms/setu/releases/latest/download/install.sh | sh
+#   curl -fsSLO https://github.com/vyasa-cms/setu/releases/latest/download/install.sh
+#   sudo bash install.sh --panel-host setu.example.com
+#
+# It downloads the release archive and SHA256SUMS, verifies the archive,
+# installs /opt/setu/setu (root 0755), creates the `setu` user, installs
+# PostgreSQL 16, creates the `setu` database and role (generated password,
+# `REVOKE CONNECT … FROM PUBLIC`), writes /etc/setu/setu.toml (0600), lets
+# `setu agent install-system --caddy-only` install and configure Caddy
+# (the panel route to /run/setu/http.sock), writes and starts
+# setu.service, waits for /healthz through Caddy, and prints the setup URL
+# with the one-time setup token. Re-running it keeps the existing
+# setu.toml (database password and secret key) and changes nothing else
+# that is already in place.
 #
 # Options:
-#   --version X.Y.Z     Setu version to install (default: latest release)
-#   --public-url URL    public URL of this panel, e.g. https://setu.example.com
-#                       (default: http://<first non-loopback IP>:7000)
-#   --no-start          install everything but do not start the service
-#
-# Environment overrides (mostly for testing):
-#   SETU_RELEASE_BASE_URL   release root, e.g. https://github.com/vyasa-cms/setu/releases/download
-#                           (default; point at a local file server in tests)
-#   SETU_VERSION            same as --version
-#   SETU_PUBLIC_URL         same as --public-url
+#   --panel-host <dns>    the panel's DNS name (Caddy obtains a certificate
+#                         for it); required unless --tls internal is given
+#   --tls internal        Caddy issues from its internal CA instead of ACME;
+#                         without --panel-host the panel host is this
+#                         machine's primary IP address
+#   --version <v>         release to install (default: the latest)
+#   --archive-url <url>   take the archive from <url> (tests; needs --sums-url)
+#   --sums-url <url>      take SHA256SUMS from <url> (tests; needs --archive-url)
 set -euo pipefail
 
 REPO="vyasa-cms/setu"
-RELEASE_BASE_URL="${SETU_RELEASE_BASE_URL:-https://github.com/${REPO}/releases/download}"
-VERSION="${SETU_VERSION:-}"
-PUBLIC_URL="${SETU_PUBLIC_URL:-}"
-NO_START=0
+TARGET="x86_64-unknown-linux-musl"
+CONF=/etc/setu/setu.toml
+UNIT=/etc/systemd/system/setu.service
+SOCKET=/run/setu/http.sock
+TOKEN_FILE=/var/lib/setu/setup-token
+CADDY_CA=/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt
+
+PANEL_HOST=""
+TLS=""
+VERSION=""
+ARCHIVE_URL=""
+SUMS_URL=""
+
+say() { printf '%s\n' "$*"; }
+warn() { printf 'install.sh: warning: %s\n' "$*" >&2; }
+fail() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
+usage() { sed -n '2,/^set -euo/p' "$0" | sed -e '/^set -euo/d' -e 's/^# \{0,1\}//'; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --panel-host) PANEL_HOST="${2:?--panel-host needs a value}"; shift 2 ;;
+        --tls) TLS="${2:?--tls needs a value}"; shift 2 ;;
         --version) VERSION="${2:?--version needs a value}"; shift 2 ;;
-        --public-url) PUBLIC_URL="${2:?--public-url needs a value}"; shift 2 ;;
-        --no-start) NO_START=1; shift ;;
-        *) echo "install.sh: unknown argument $1 (see --version, --public-url, --no-start)" >&2; exit 1 ;;
+        --archive-url) ARCHIVE_URL="${2:?--archive-url needs a value}"; shift 2 ;;
+        --sums-url) SUMS_URL="${2:?--sums-url needs a value}"; shift 2 ;;
+        -h | --help) usage; exit 0 ;;
+        *) fail "unknown argument $1 (see --help)" ;;
     esac
 done
 
-say() { printf '%s\n' "$*"; }
-fail() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
+[[ -z "$TLS" || "$TLS" == internal ]] || fail "--tls takes only 'internal'"
+[[ -n "$PANEL_HOST" || "$TLS" == internal ]] || fail "pass --panel-host <dns> or --tls internal"
+[[ -z "$ARCHIVE_URL" && -z "$SUMS_URL" ]] || [[ -n "$ARCHIVE_URL" && -n "$SUMS_URL" ]] ||
+    fail "--archive-url and --sums-url go together"
+VERSION="${VERSION#v}"
 
-[[ "$(id -u)" == "0" ]] || fail "run as root"
+# ---------------------------------------------------------------- checks
 
-# Fresh machines (and minimal containers) may lack even curl: install
-# the essentials via apt when it exists, else fail naming the tool.
-missing=()
-for tool in curl tar openssl sudo hostname; do
-    command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
-done
-if [[ "${#missing[@]}" -gt 0 ]]; then
-    if command -v apt-get >/dev/null 2>&1; then
-        say "Installing essentials (${missing[*]}) via apt"
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update -qq
-        apt-get install -y -qq curl ca-certificates tar openssl sudo hostname
-    else
-        fail "needs ${missing[*]} (no apt-get to install them)"
+[[ "$(id -u)" == 0 ]] || fail "run as root"
+[[ "$(uname -s)" == Linux ]] || fail "Linux only"
+[[ "$(uname -m)" == x86_64 ]] || fail "x86_64 only (this is $(uname -m))"
+[[ -r /etc/os-release ]] || fail "no /etc/os-release: Ubuntu 24.04 is required"
+os_id="$(. /etc/os-release && echo "${ID:-}")"
+os_version="$(. /etc/os-release && echo "${VERSION_ID:-}")"
+[[ "$os_id" == ubuntu ]] || fail "Ubuntu 24.04 is required (this is ${os_id:-unknown})"
+[[ "$os_version" == 24.04 ]] || warn "Setu is tested on Ubuntu 24.04; this is Ubuntu ${os_version}"
+
+if [[ -z "$PANEL_HOST" ]]; then
+    PANEL_HOST="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    [[ -n "$PANEL_HOST" ]] || fail "cannot find this machine's primary IP; pass --panel-host"
+    say "Panel host: ${PANEL_HOST} (primary IP, --tls internal)"
+fi
+[[ "$PANEL_HOST" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]] ||
+    fail "--panel-host must be a DNS name or IPv4 address"
+PUBLIC_URL="https://${PANEL_HOST}"
+
+# ---------------------------------------------------------------- packages
+
+export DEBIAN_FRONTEND=noninteractive
+say "Installing packages (postgresql-16, sudo, gnupg, zstd, nftables)"
+apt-get update -q
+apt-get install -y -q curl ca-certificates postgresql-16 sudo gnupg zstd nftables
+
+# ---------------------------------------------------------------- download
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+if [[ -z "$ARCHIVE_URL" ]]; then
+    if [[ -z "$VERSION" ]]; then
+        VERSION="$(curl -fsSL --proto '=https' "https://api.github.com/repos/${REPO}/releases/latest" |
+            sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -n 1)"
+        [[ -n "$VERSION" ]] || fail "cannot find the latest release; pass --version"
     fi
+    base="https://github.com/${REPO}/releases/download/v${VERSION}"
+    ARCHIVE_URL="${base}/setu-${VERSION}-${TARGET}.tar.gz"
+    SUMS_URL="${base}/SHA256SUMS"
 fi
-
-arch="$(uname -m)"
-case "$arch" in
-    x86_64) target="x86_64-unknown-linux-musl" ;;
-    aarch64|arm64) target="aarch64-unknown-linux-musl" ;;
-    *) fail "no build for $arch (x86_64 and aarch64 only)" ;;
-esac
-
-if [[ -z "$VERSION" ]]; then
-    # Public and private repos alike answer the API; private needs a token.
-    auth_args=()
-    [[ -n "${GITHUB_TOKEN:-}" ]] && auth_args=(-H "Authorization: Bearer $GITHUB_TOKEN")
-    VERSION="$(curl -fsSL "${auth_args[@]}" "https://api.github.com/repos/${REPO}/releases/latest" \
-        | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -n 1)"
-    [[ -n "$VERSION" ]] || fail "could not find the latest release; pass --version X.Y.Z"
-fi
-
-if [[ -z "$PUBLIC_URL" ]]; then
-    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-    [[ -n "$ip" ]] || ip="127.0.0.1"
-    PUBLIC_URL="http://${ip}:7000"
-fi
-
-name="setu-${VERSION}-${target}"
-base="${RELEASE_BASE_URL}/v${VERSION}"
-
-tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-say "Downloading Setu ${VERSION} for ${target}"
-curl -fsSL -o "${tmp}/${name}.tar.gz" "${base}/${name}.tar.gz" \
-    || fail "download failed: ${base}/${name}.tar.gz"
-curl -fsSL -o "${tmp}/${name}.tar.gz.sha256" "${base}/${name}.tar.gz.sha256" \
-    || fail "checksum download failed: ${base}/${name}.tar.gz.sha256"
-expected="$(awk '{print $1}' "${tmp}/${name}.tar.gz.sha256")"
-actual="$(sha256sum "${tmp}/${name}.tar.gz" | awk '{print $1}')"
-[[ "$expected" == "$actual" ]] || fail "checksum mismatch for ${name}.tar.gz (expected $expected, got $actual)"
+archive="$(basename "${ARCHIVE_URL%%\?*}")"
+[[ "$archive" =~ ^setu-[0-9A-Za-z.+-]+-${TARGET}\.tar\.gz$ ]] || fail "unexpected archive name $archive"
+say "Downloading ${archive}"
+curl -fsSL --retry 3 -o "${tmp}/${archive}" "$ARCHIVE_URL" || fail "download failed: $ARCHIVE_URL"
+curl -fsSL --retry 3 -o "${tmp}/SHA256SUMS" "$SUMS_URL" || fail "download failed: $SUMS_URL"
+expected="$(awk -v f="$archive" '$2 == f || $2 == "*" f { print $1 }' "${tmp}/SHA256SUMS")"
+[[ "$expected" =~ ^[0-9a-f]{64}$ ]] || fail "SHA256SUMS has no entry for $archive"
+actual="$(sha256sum "${tmp}/${archive}" | awk '{print $1}')"
+[[ "$expected" == "$actual" ]] || fail "checksum mismatch for $archive"
 say "Checksum verified"
+mkdir "${tmp}/x"
+tar -xzf "${tmp}/${archive}" -C "${tmp}/x"
+[[ -f "${tmp}/x/setu" ]] || fail "the archive has no top-level setu binary"
 
-mkdir -p /opt/setu
-tar -xzf "${tmp}/${name}.tar.gz" -C "$tmp"
-[[ -x "${tmp}/setu" ]] || fail "archive has no setu binary at its top level"
-install -m 0755 "${tmp}/setu" /opt/setu/setu
-
-# Service user (no login): runs setu.service and owns /var/lib/setu.
-if ! id setu >/dev/null 2>&1; then
-    useradd --system --no-create-home --home-dir /var/lib/setu --shell /usr/sbin/nologin setu
+BIN_CHANGED=0
+if ! cmp -s "${tmp}/x/setu" /opt/setu/setu; then
+    install -d -o root -g root -m 0755 /opt/setu
+    install -o root -g root -m 0755 "${tmp}/x/setu" /opt/setu/.setu.new
+    mv -f /opt/setu/.setu.new /opt/setu/setu
+    BIN_CHANGED=1
 fi
-mkdir -p /var/lib/setu /etc/setu /srv/setu/sites
-chown setu:setu /var/lib/setu
-chmod 0755 /srv/setu
+ln -sfn /opt/setu/setu /usr/local/bin/setu
+say "Installed $(/opt/setu/setu --version)"
 
-# Local Postgres: Ubuntu's `postgresql` metapackage, then a `setu` role
-# with a generated password and a `setu`-owned database over TCP.
-if ! command -v psql >/dev/null 2>&1; then
-    say "Installing PostgreSQL (apt)"
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
-    apt-get install -y -qq postgresql
-fi
-# Minimal images carry a policy-rc.d that blocks the package's own
-# autostart: make sure the cluster is actually running.
-if ! sudo -u postgres psql -tAc "SELECT 1" >/dev/null 2>&1; then
-    ver="$(ls /etc/postgresql 2>/dev/null | head -n 1)"
-    if [[ -n "$ver" ]]; then
-        pg_ctlcluster "$ver" main start 2>/dev/null \
-            || systemctl start postgresql 2>/dev/null || true
-    else
-        systemctl start postgresql 2>/dev/null || true
+# ---------------------------------------------------------------- user, dirs
+
+id setu >/dev/null 2>&1 ||
+    useradd -r -d /var/lib/setu -s /usr/sbin/nologin setu
+install -d -o setu -g setu -m 0750 /var/lib/setu
+install -d -o root -g root -m 0755 /etc/setu
+
+# ---------------------------------------------------------------- config
+
+# Re-runs keep the file: the secret key seals every site secret and the
+# password is the role's. Anything we cannot read back is an error, never
+# a silent rewrite.
+KEEP_CONF=0
+if [[ -e "$CONF" ]]; then
+    DB_PASSWORD="$(sed -n 's|^database_url = "postgres://setu:\([A-Za-z0-9]\{16,\}\)@127\.0\.0\.1:5432/setu"$|\1|p' "$CONF")"
+    secret_ok="$(grep -c '^secret_key = "[0-9a-f]\{64\}"$' "$CONF" || true)"
+    old_url="$(sed -n 's|^public_url = "\(.*\)"$|\1|p' "$CONF")"
+    if [[ -z "$DB_PASSWORD" || "$DB_PASSWORD" == *$'\n'* || "$secret_ok" != 1 || -z "$old_url" ]]; then
+        fail "cannot parse ${CONF} (database_url, secret_key, public_url as install.sh writes them); fix it or move it aside"
     fi
+    [[ "$old_url" == "$PUBLIC_URL" ]] ||
+        fail "${CONF} has public_url ${old_url}, not ${PUBLIC_URL}; edit it first or pass the same host"
+    KEEP_CONF=1
+    say "Keeping ${CONF}"
+else
+    DB_PASSWORD="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
 fi
-db_password="$(openssl rand -hex 24)"
-secret_key="$(openssl rand -hex 32)"
-if [[ -f /etc/setu/setu.toml ]]; then
-    # Re-runs (e.g. to change the public URL) must NEVER rotate the
-    # secret key or the database password: the former seals every site
-    # secret, the latter is baked into every DATABASE_URL. Reuse both.
-    old_secret="$(sed -n 's/^secret_key *= *"//p' /etc/setu/setu.toml | tr -d '"' | head -n 1)"
-    old_password="$(sed -n 's|^database_url *= *"postgres://setu:\([^@]*\)@.*|\1|p' /etc/setu/setu.toml | head -n 1)"
-    if [[ -n "$old_secret" && -n "$old_password" ]]; then
-        secret_key="$old_secret"
-        db_password="$old_password"
-        say "Reusing existing secret key and database password from /etc/setu/setu.toml"
-    else
-        fail "refusing to overwrite /etc/setu/setu.toml with fresh secrets (unparseable existing file; move it aside first)"
-    fi
-fi
-sudo -u postgres psql -v ON_ERROR_STOP=1 -q <<SQL
-DO \$\$
-BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'setu') THEN
-    CREATE ROLE setu LOGIN PASSWORD '${db_password}';
-  ELSE
-    ALTER ROLE setu LOGIN PASSWORD '${db_password}';
-  END IF;
-END
-\$\$;
-SELECT 'CREATE DATABASE setu OWNER setu' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'setu')\gexec
+
+# ---------------------------------------------------------------- postgres
+
+systemctl enable --now postgresql >/dev/null 2>&1 || systemctl start postgresql
+for _ in $(seq 1 60); do
+    (cd / && sudo -u postgres psql -Xqtc 'SELECT 1') >/dev/null 2>&1 && break
+    sleep 1
+done
+(cd / && sudo -u postgres psql -Xqtc 'SELECT 1') >/dev/null 2>&1 || fail "PostgreSQL did not start"
+
+# The password reaches psql on stdin (`\set`), never on a command line.
+(cd / && sudo -u postgres psql -X -q -v ON_ERROR_STOP=1) >/dev/null <<SQL
+\set pw '${DB_PASSWORD}'
+SELECT format('CREATE ROLE setu LOGIN PASSWORD %L', :'pw')
+  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'setu') \gexec
+SELECT format('ALTER ROLE setu LOGIN PASSWORD %L', :'pw') \gexec
+SELECT 'CREATE DATABASE setu OWNER setu'
+  WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'setu') \gexec
+REVOKE CONNECT ON DATABASE setu FROM PUBLIC;
+GRANT CONNECT ON DATABASE setu TO setu;
 SQL
+say "Database setu ready"
 
-umask 077
-cat > /etc/setu/setu.toml <<TOML
-# Setu control-plane config (written by install.sh; prefer env overrides).
-bind_addr = "127.0.0.1:7000"
-database_url = "postgres://setu:${db_password}@127.0.0.1:5432/setu"
+if [[ "$KEEP_CONF" == 0 ]]; then
+    secret_key="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+    (
+        umask 077
+        cat >"${CONF}.new" <<TOML
+# Setu control plane (written by install.sh). Secrets: keep this file 0600.
+listen = "unix:${SOCKET}"
+database_url = "postgres://setu:${DB_PASSWORD}@127.0.0.1:5432/setu"
 secret_key = "${secret_key}"
 public_url = "${PUBLIC_URL}"
-data_dir = "/srv/setu"
+trusted_proxies = ["127.0.0.1/32"]
+data_dir = "/var/lib/setu"
 TOML
-chown root:setu /etc/setu/setu.toml
-chmod 0640 /etc/setu/setu.toml
+    )
+    unset secret_key
+    chown setu:setu "${CONF}.new"
+    chmod 0600 "${CONF}.new"
+    mv -f "${CONF}.new" "$CONF"
+    say "Wrote ${CONF}"
+fi
+unset DB_PASSWORD
+chown setu:setu "$CONF"
+chmod 0600 "$CONF"
 
-cat > /etc/systemd/system/setu.service <<UNIT
+# ---------------------------------------------------------------- caddy
+
+tls_args=()
+[[ "$TLS" == internal ]] && tls_args=(--tls internal)
+say "Installing and configuring Caddy (panel route ${PANEL_HOST} -> ${SOCKET})"
+/opt/setu/setu agent install-system --caddy-only --panel-host "$PANEL_HOST" \
+    --upstream "unix/${SOCKET}" "${tls_args[@]}"
+# The socket is handed to group caddy (setu must be a member to chgrp it).
+usermod -aG caddy setu
+
+# ---------------------------------------------------------------- service
+
+UNIT_CHANGED=0
+cat >"${tmp}/setu.service" <<'UNITFILE'
 [Unit]
 Description=Setu control plane
-After=network.target postgresql.service
-Wants=postgresql.service
+After=postgresql.service network-online.target
+Wants=postgresql.service network-online.target
 
 [Service]
 Type=simple
 User=setu
 Group=setu
 WorkingDirectory=/etc/setu
+RuntimeDirectory=setu
+# 0755: Caddy must traverse /run/setu (systemd re-owns the directory to
+# setu:setu before every command, so a group change does not stick);
+# the socket itself is 0660 setu:caddy, so only Caddy can connect.
+RuntimeDirectoryMode=0755
 ExecStart=/opt/setu/setu serve
-ExecStartPre=/opt/setu/setu migrate
-Restart=on-failure
-RestartSec=5
-NoNewPrivileges=yes
-ProtectSystem=strict
-ReadWritePaths=/var/lib/setu /srv/setu
+Restart=always
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target
-UNIT
-
-systemctl daemon-reload
-if [[ "$NO_START" == "1" ]]; then
-    systemctl enable setu.service 2>/dev/null || true
-    say "Installed Setu ${VERSION} to /opt/setu (service not started: --no-start)"
-else
-    systemctl enable setu.service
-    systemctl start setu.service
-    # Fail loudly when the unit does not come up (a silent install with a
-    # dead service wastes the whole debug cycle).
-    if ! systemctl is-active --quiet setu.service; then
-        systemctl status setu.service --no-pager || true
-        journalctl -u setu.service --no-pager -n 50 || true
-        fail "setu.service did not start (see above)"
-    fi
-    # Wait for the health probe before printing the setup URL.
-    for _ in $(seq 1 30); do
-        if curl -fsS http://127.0.0.1:7000/healthz >/dev/null 2>&1; then
-            break
-        fi
-        sleep 1
-    done
-    say ""
-    say "Installed Setu ${VERSION}"
-    say "  binary:  /opt/setu/setu"
-    say "  config:  /etc/setu/setu.toml"
-    say "  service: setu.service (systemctl status setu)"
+UNITFILE
+if ! cmp -s "${tmp}/setu.service" "$UNIT"; then
+    install -o root -g root -m 0644 "${tmp}/setu.service" "$UNIT"
+    systemctl daemon-reload
+    UNIT_CHANGED=1
 fi
-# The wizard path is constant: /setup creates the first owner.
-setup_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-[[ -n "$setup_ip" ]] || setup_ip="127.0.0.1"
-say "  setup:   http://${setup_ip}:7000/setup"
+
+# Config is read from the working directory (setu.toml in /etc/setu).
+(cd /etc/setu && sudo -u setu /opt/setu/setu migrate)
+tls_internal=false
+[[ "$TLS" == internal ]] && tls_internal=true
+(cd /etc/setu && sudo -u setu /opt/setu/setu setting set tls_internal "$tls_internal") >/dev/null
+
+systemctl enable setu.service >/dev/null 2>&1
+if [[ "$BIN_CHANGED" == 1 || "$UNIT_CHANGED" == 1 ]] || ! systemctl is-active --quiet setu.service; then
+    systemctl restart setu.service
+fi
+
+say "Waiting for ${PUBLIC_URL}/healthz through Caddy"
+healthy=0
+for _ in $(seq 1 90); do
+    if curl -fsSk --max-time 5 --resolve "${PANEL_HOST}:443:127.0.0.1" \
+        "${PUBLIC_URL}/healthz" >/dev/null 2>&1; then
+        healthy=1
+        break
+    fi
+    sleep 1
+done
+if [[ "$healthy" != 1 ]]; then
+    systemctl --no-pager status setu.service caddy-api.service || true
+    journalctl -u setu.service -u caddy-api.service --no-pager -n 60 || true
+    fail "${PUBLIC_URL}/healthz did not answer through Caddy"
+fi
+
+say ""
+say "Setu is running."
+say "  binary:  /opt/setu/setu (also /usr/local/bin/setu)"
+say "  config:  ${CONF}"
+say "  service: systemctl status setu"
+if [[ "$TLS" == internal ]]; then
+    say "  TLS:     Caddy's internal CA; trust ${CADDY_CA} in your browser"
+fi
+if [[ -s "$TOKEN_FILE" ]]; then
+    say ""
+    say "Open ${PUBLIC_URL}/setup and enter this one-time setup token:"
+    say "  $(cat "$TOKEN_FILE")"
+else
+    say "Setup is complete: sign in at ${PUBLIC_URL}/"
+fi
