@@ -1,76 +1,127 @@
 # Installing Setu
 
-Requirements: one Ubuntu 24.04 (x86_64 or aarch64) machine with a
-public IP, root access, and ports 80/443 reachable. The installer
-brings its own PostgreSQL and Caddy (via the agent step).
+Requirements: one Ubuntu 24.04 x86_64 machine (other Ubuntu releases
+get a warning, other distributions are refused), root, and ports 80
+and 443 reachable. For a real certificate, a DNS name pointing at the
+machine. The installer brings PostgreSQL 16 and Caddy itself.
 
 ## The script
 
-As root:
+The repository and its releases are private until the owner decides
+otherwise (spec §12); with access, as root:
 
 ```sh
-curl -fsSL https://github.com/vyasa-cms/setu/releases/latest/download/install.sh | sh
+curl -fsSLO https://github.com/vyasa-cms/setu/releases/latest/download/install.sh
+bash install.sh --panel-host setu.example.com
 ```
 
-Options: `--version X.Y.Z` pins a version (default: latest release),
-`--public-url https://setu.example.com` sets the panel's public URL
-(default: `http://<first non-loopback IP>:7000`).
-`SETU_RELEASE_BASE_URL` overrides the download root (used by
-`scripts/test-install.sh` to install from a local file server).
+Options:
 
-What it does, in order:
+| Flag | Meaning |
+|---|---|
+| `--panel-host <dns>` | the panel's name; Caddy gets a certificate for it (ACME) |
+| `--tls internal` | Caddy issues from its own internal CA instead of ACME; alone, the panel host is the machine's primary IP |
+| `--version <v>` | release to install (default: the latest) |
+| `--archive-url <url>`, `--sums-url <url>` | install from these URLs instead of the GitHub release (tests; both or neither) |
 
-1. Detects the arch and downloads `setu-<ver>-<target>.tar.gz` plus
-   `.sha256` from GitHub releases; verifies the checksum.
-2. Installs the single `setu` binary to `/opt/setu/setu`.
-3. Creates the `setu` system user and `/var/lib/setu`, `/srv/setu`.
-4. Installs PostgreSQL via apt when missing; creates the `setu` role
-   (generated password) and the `setu` database.
-5. Writes `/etc/setu/setu.toml` (mode 0640, `root:setu`) with a
-   generated 32-byte secret key, the database URL and the public URL.
-6. Writes and enables `setu.service` (`setu serve` behind
-   `setu migrate` as `ExecStartPre`), starts it, waits for `/healthz`.
-7. Prints the setup URL: `http://<ip>:7000/setup`.
+One of `--panel-host` and `--tls internal` is required; both together
+give an internal-CA certificate for a name (what
+`scripts/test-install.sh` does with `setu.test`).
 
-Then open the setup URL: paste the one-time setup token from
-`/var/lib/setu/setup-token` (written by `setu serve` on its first boot,
-mode 0600, removed once the owner exists), create the owner (works
-exactly once), note the panel URL, register the server, and run the
-shown `setu agent install …` line as root with the join token in
-`SETU_JOIN_TOKEN` (or on stdin). That is the whole single-node install.
+What it does, in order (spec §8):
+
+1. Checks root, x86_64 Linux, Ubuntu 24.04.
+2. `apt-get install postgresql-16 sudo gnupg zstd nftables` (and curl).
+3. Downloads `setu-<ver>-x86_64-unknown-linux-musl.tar.gz` and
+   `SHA256SUMS` from the release, verifies the archive, installs
+   `/opt/setu/setu` (root:root 0755) and links `/usr/local/bin/setu`.
+4. Creates the system user `setu`, `/var/lib/setu` (setu 0750) and
+   `/etc/setu` (root 0755).
+5. Creates the `setu` role (a generated password, handed to `psql` on
+   stdin with `\set`, never on a command line) and database, and
+   `REVOKE CONNECT ON DATABASE setu FROM PUBLIC`.
+6. Writes `/etc/setu/setu.toml` (setu:setu 0600):
+   `listen = "unix:/run/setu/http.sock"`, `database_url`, a generated
+   `secret_key` (64 hex), `public_url = "https://<panel host>"`,
+   `trusted_proxies = ["127.0.0.1/32"]`, `data_dir = "/var/lib/setu"`.
+7. `setu agent install-system --caddy-only --panel-host <host>
+   --upstream unix//run/setu/http.sock [--tls internal]`: installs the
+   `caddy` package when missing (Caddy's apt repository, else Caddy's
+   checksum-pinned release `.deb`), writes `/etc/caddy/setu.json` with
+   the panel route, runs `caddy-api.service` on its admin socket.
+8. Puts `setu` in group `caddy` (the socket is handed to that group)
+   and writes `setu.service` (`User=setu`, `WorkingDirectory=/etc/setu`,
+   `RuntimeDirectory=setu` 0755 holding the socket 0660 `setu:caddy`, `Restart=always`).
+9. `setu migrate`, `setu setting set tls_internal true|false`, starts
+   the service and waits for `https://<host>/healthz` through Caddy.
+10. Prints the setup URL and the one-time setup token from
+    `/var/lib/setu/setup-token` (written by `setu serve` on its first
+    boot, 0600, removed once the owner exists).
+
+Re-running the script is safe: an existing `setu.toml` is kept (its
+database password and secret key are reused; a file it cannot read back,
+or one whose `public_url` differs from the flags, stops the script with
+an error rather than being rewritten); the service restarts only when
+the binary or the unit changed.
+
+## The setup wizard
+
+Open `https://<host>/setup`, paste the setup token, create the owner
+(works exactly once), then let the wizard register this machine: it
+shows a `setu agent install --control-plane https://<host> --panel-host
+<host> [--tls internal --ca …]` line and a separate join token. Run the
+line as root with the token in `SETU_JOIN_TOKEN` (or paste it on stdin
+when asked):
+
+```sh
+SETU_JOIN_TOKEN=<token> setu agent install --control-plane https://setu.example.com --panel-host setu.example.com
+```
+
+The agent joins through Caddy (the panel has no TCP listener), and
+the server shows `online` within seconds. With `--tls internal`, browsers
+need Caddy's root certificate,
+`/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt`.
+
+## Commands on the host
+
+The control plane reads `setu.toml` from its working directory, so run
+its commands as `setu` from `/etc/setu`:
+
+```sh
+cd /etc/setu
+sudo -u setu setu backup --out /var/lib/setu/setu-$(date +%F).dump   # pg_dump -Fc
+SETU_OPERATOR_PASSWORD=… sudo -E -u setu setu operator create --email a@b.c --role operator
+sudo -u setu setu setting set tls_internal true
+```
+
+`setu backup` hands the database password to `pg_dump` in its
+environment (`PGPASSWORD`), never on argv; restore with `pg_restore -d
+setu --clean` as `postgres`. `operator create` takes the password from
+`SETU_OPERATOR_PASSWORD` or the first line of stdin.
 
 ## Manual install
 
-1. Fetch `setu-<ver>-<target>.tar.gz` + `.sha256` from the release,
-   verify, unpack the `setu` binary to `/opt/setu/setu`.
-2. Provide a Postgres 16+ database and three env vars (or a
-   `setu.toml` in the working directory):
-   `SETU_DATABASE_URL`, `SETU_SECRET_KEY` (64 hex chars),
-   `SETU_PUBLIC_URL`. Optional: `SETU_LISTEN` (`<ip>:<port>`, default
-   `127.0.0.1:7000`, or `unix:<path>`: a socket created 0660 for group
-   `caddy`, behind Caddy),
-   `SETU_TRUSTED_PROXIES` (comma-separated IPs/CIDRs, default
-   `127.0.0.1`), `SETU_DATA_DIR` (default `/var/lib/setu`).
-3. `setu migrate`, then `setu serve` (systemd unit in
-   E2E.md style: `User=setu`,
-   `WorkingDirectory=/etc/setu`, `ExecStart=/opt/setu/setu serve`).
-4. Open `http://<host>:7000/setup` with the token from
-   `$SETU_DATA_DIR/setup-token`. Operators can also be created on the
-   host: `SETU_OPERATOR_PASSWORD=… setu operator create --email <e>
-   [--role owner|operator|viewer]` (or pipe the password on stdin;
-   never on the command line). `setu backup --out <file>` dumps the
-   control plane's database with `pg_dump -Fc` (password via
-   `PGPASSWORD` in the child's environment).
+1. Fetch the archive and `SHA256SUMS` from the release, `sha256sum -c
+   --ignore-missing SHA256SUMS`, unpack `setu` to `/opt/setu/setu`.
+2. Provide a Postgres 16 database and either a `setu.toml` in the
+   service's working directory or `SETU_*` variables (prefix `SETU_`,
+   nested keys `__`): `SETU_DATABASE_URL`, `SETU_SECRET_KEY` (64 hex),
+   `SETU_PUBLIC_URL`; optional `SETU_LISTEN` (`<ip>:<port>`, default
+   `127.0.0.1:7000`, or `unix:<path>`: created 0660 and handed to group
+   `caddy`), `SETU_TRUSTED_PROXIES` (comma-separated, default
+   `127.0.0.1/32`), `SETU_DATA_DIR` (default `/var/lib/setu`).
+3. `setu migrate`, then `setu serve` under systemd, behind Caddy.
 
 ## Upgrading
 
-Download the new release archive, verify the checksum, replace
-`/opt/setu/setu`, `systemctl restart setu` (migrations run on boot
-under an advisory lock). Site updates are separate: each site moves
-to a newer app version from the UI with automatic rollback.
+Re-run `install.sh --version <new> …` with the same flags: it verifies
+the new archive, replaces the binary and restarts `setu.service`
+(migrations run on boot). Back up first (`setu backup`); migrations
+are forward-only. Site updates are separate: each site moves to a newer
+app version from the UI with automatic rollback.
 
 ## Uninstalling
 
-`systemctl disable --now setu`; optionally remove `/opt/setu`,
-`/etc/setu`, `/var/lib/setu`, `/srv/setu`, the `setu` Postgres role
-and database, and the `setu` user.
+`systemctl disable --now setu setu-agent`; then remove `/opt/setu`,
+`/usr/local/bin/setu`, `/etc/setu`, `/var/lib/setu`, `/srv/setu`, the
+`setu` role and database, and the `setu` user as needed.

@@ -111,3 +111,25 @@ logs) and prints its tail. Fix the code, never the assertion.
 
 Job `e2e` in `.github/workflows/ci.yml` on `ubuntu-24.04` with the musl
 target and `musl-tools`; uploads the log and diagnostics on failure.
+
+## The installer test
+
+`SETU_INSTALL_DIR=<dir> bash scripts/test-install.sh > <log> 2>&1`
+(TAP, 9 assertions, then `INSTALL PASS`). Same host-safety rules: its
+own network `setu-install-net`, the assets served by `python3 -m
+http.server` on the host's address on that network (port 8124, PID in
+`$SETU_INSTALL_DIR/httpd.pid`), one container `setu-install-test` from
+the e2e image (`--privileged --cgroupns=private`, `setu.test` →
+127.0.0.1 in its `/etc/hosts`). It builds the release binary (musl, no
+features), packages it with `scripts/package-release.sh`, runs
+`install.sh --tls internal --panel-host setu.test --archive-url …
+--sums-url …` in the box and asserts: install succeeds (`setu.toml`
+setu 0600 with the unix listener, `/opt/setu/setu` root 0755);
+`/healthz` 200 through Caddy and no TCP listener; `POST /setup` with a
+wrong token 401, with the token file's token 201; login; the wizard's
+`POST /setup/local-server` command (run with `SETU_JOIN_TOKEN`) joins
+and the server is `online` within 60 s; `setu agent doctor` exit 0;
+`setu backup` as `setu` writes a dump `pg_restore -l` lists; a second
+`install.sh` keeps `setu.toml` and does not restart `setu.service`.
+`SETU_INSTALL_KEEP=1` leaves the box up; diagnostics land in
+`$SETU_INSTALL_DIR/diag-NN-<name>.txt`.

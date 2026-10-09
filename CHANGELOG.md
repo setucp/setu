@@ -39,3 +39,16 @@ servers their latest load. No Swagger UI; the OpenAPI document is at
 `/api/v1/openapi.json` for logged-in operators. `setu operator create`
 reads the password from `SETU_OPERATOR_PASSWORD` or stdin; `setu backup
 --out <file>` dumps the control plane's database.
+`install.sh` (root, Ubuntu 24.04 x86_64; `--panel-host <dns>` and/or
+`--tls internal`, `--version`) verifies the release archive against
+`SHA256SUMS`, installs `/opt/setu/setu`, PostgreSQL 16 and (through
+`setu agent install-system --caddy-only`, which now installs the
+`caddy` package when missing) Caddy, creates the `setu` role and
+database, writes `/etc/setu/setu.toml` 0600 with `listen =
+"unix:/run/setu/http.sock"`, starts `setu.service`, waits for
+`/healthz` through Caddy and prints the setup URL and token; re-runs
+keep the config. `setu setting set tls_internal true|false` records the
+panel's TLS mode; the wizard's local-server command then carries
+`--panel-host` and `--tls internal --ca …`. Releases are x86_64 musl
+only: one archive, `install.sh` and `SHA256SUMS` per GitHub release
+(no aarch64, no container image until phase 2).

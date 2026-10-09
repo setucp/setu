@@ -31,14 +31,16 @@ browser → Caddy (TLS) → setu serve → agents → setu-site@<id>.service
 
 ## Five minutes
 
-On a fresh Ubuntu 24.04 VPS, as root:
+On a fresh Ubuntu 24.04 VPS with a DNS name pointing at it, as root:
 
 ```sh
-curl -fsSL https://github.com/vyasa-cms/setu/releases/latest/download/install.sh | sh
+curl -fsSLO https://github.com/vyasa-cms/setu/releases/latest/download/install.sh
+bash install.sh --panel-host setu.example.com
 ```
 
-Open the printed `http://<ip>:7000/setup`: create the owner, register
-the server, run the shown `setu agent install …` line. Then
+Open the printed `https://setu.example.com/setup`, paste the printed
+setup token, create the owner, and run the shown `setu agent install …`
+line with the join token in `SETU_JOIN_TOKEN`. Then
 **New site → app → domain** gives a working app with TLS, Postgres
 and backups.
 
