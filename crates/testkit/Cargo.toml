@@ -6,3 +6,8 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+tokio.workspace = true
+sqlx.workspace = true
+ulid.workspace = true

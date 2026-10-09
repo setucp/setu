@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main, mvp]
+  pull_request:
+
+env:
+  CARGO_BUILD_JOBS: 4
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+          components: rustfmt
+      - run: cargo fmt --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+          components: clippy
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: setu
+          POSTGRES_PASSWORD: setu
+        ports:
+          - 55440:5432
+        options: >-
+          --health-cmd "pg_isready -U setu -d postgres"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      SETU_TEST_PG_PORT: 55440
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+      - name: Rust tests
+        run: bash scripts/test.sh
+      - name: UI lint
+        if: hashFiles('ui/package.json') != ''
+        run: pnpm -C ui lint
+      - name: UI typecheck
+        if: hashFiles('ui/package.json') != ''
+        run: pnpm -C ui typecheck
+      - name: UI test
+        if: hashFiles('ui/package.json') != ''
+        run: pnpm -C ui test
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
