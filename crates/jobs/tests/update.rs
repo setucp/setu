@@ -268,6 +268,15 @@ async fn update_refreshes_values_but_keeps_stored_secrets() {
         Some(provisioned_secret.as_str()),
         "generated secret must not rotate"
     );
+    // The connection URL keeps the provision-time password: `build_site`
+    // mints a fresh random one per call, which would desync the file
+    // from the role and break DB auth.
+    let provisioned_vars = write_env_values(&agent, 0);
+    assert_eq!(
+        vars.get("HELLO_DATABASE_URL"),
+        provisioned_vars.get("HELLO_DATABASE_URL"),
+        "postgres url must be preserved verbatim"
+    );
     let site = fx.db.sites().get(&fx.site_id).await.unwrap();
     let stored: serde_json::Value = site.env.clone();
     let label = stored

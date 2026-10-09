@@ -501,22 +501,27 @@ pub(crate) fn stored_plaintext(
 
 /// Merge fresh resolution with stored values for update: `Generate` and
 /// `Prompt` entries keep their stored plaintext (an update must never
-/// rotate operator or app secrets); `Value` and `From` take the fresh
-/// resolution (author defaults refresh, derived paths re-derive).
-/// Names new to storage keep their fresh values.
+/// rotate operator or app secrets), as does `from = "postgres_url"` —
+/// the role password was minted once at provision and lives in Postgres
+/// (`build_site` mints a fresh random one per call, which would
+/// desynchronise the file from the role and break DB auth). `Value`
+/// entries take the fresh resolution (author defaults refresh); every
+/// other `From` source re-derives deterministically. Names new to
+/// storage keep their fresh values.
 pub(crate) fn merge_update_env(
     manifest: &Manifest,
     fresh: &[setu_manifest::EnvVar],
     stored: &BTreeMap<String, (String, bool, bool)>,
 ) -> Vec<setu_manifest::EnvVar> {
-    use setu_manifest::EnvSpec;
+    use setu_manifest::{EnvSource, EnvSpec};
     fresh
         .iter()
         .map(|v| {
-            let sticky = matches!(
-                manifest.env.get(&v.name),
-                Some(EnvSpec::Generate(_)) | Some(EnvSpec::Prompt(_))
-            );
+            let sticky = match manifest.env.get(&v.name) {
+                Some(EnvSpec::Generate(_)) | Some(EnvSpec::Prompt(_)) => true,
+                Some(EnvSpec::From(f)) => matches!(f.from, EnvSource::PostgresUrl),
+                _ => false,
+            };
             match (sticky, stored.get(&v.name)) {
                 (true, Some((val, secret, once))) => setu_manifest::EnvVar {
                     name: v.name.clone(),
