@@ -57,42 +57,85 @@ impl CaddyAdmin {
         }
     }
 
-    fn route_url(&self, domain: &str) -> String {
+    fn routes_url(&self) -> String {
         format!(
-            "{}/config/apps/http/servers/srv0/routes/{}",
-            self.admin.trim_end_matches('/'),
-            route_id(domain)
+            "{}/config/apps/http/servers/srv0/routes",
+            self.admin.trim_end_matches('/')
         )
+    }
+
+    /// Numeric index of the route carrying `@id`, or `None` when absent.
+    /// A missing/`null` routes key reads as empty (bootstrap always sets
+    /// `[]`; anything else is a broken Caddy config and errors).
+    async fn route_index(&self, id: &str) -> anyhow::Result<Option<usize>> {
+        let resp = self
+            .client
+            .get(self.routes_url())
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("caddy list routes: {e}"))?;
+        if !resp.status().is_success() {
+            anyhow::bail!("caddy list routes: HTTP {}", resp.status());
+        }
+        let routes: Option<Vec<serde_json::Value>> = resp
+            .json()
+            .await
+            .map_err(|e| anyhow::anyhow!("caddy list routes: bad json: {e}"))?;
+        let routes = routes.unwrap_or_default();
+        Ok(routes
+            .iter()
+            .position(|r| r.get("@id").and_then(|v| v.as_str()) == Some(id)))
     }
 }
 
 #[async_trait::async_trait]
 impl Caddy for CaddyAdmin {
+    /// Idempotent upsert: the admin API addresses `routes` (a JSON
+    /// array) by numeric index only — `@id` in the path is rejected
+    /// (`invalid array index`, found by the e2e against real Caddy).
+    /// So: list, replace by index when present, else POST-append.
     async fn set_route(&self, domain: &str, port: u16) -> anyhow::Result<()> {
         if !valid_domain(domain) {
             anyhow::bail!("caddy set_route: invalid domain {domain:?}");
         }
-        let resp = self
-            .client
-            .put(self.route_url(domain))
-            .header("Content-Type", "application/json")
-            .json(&route_body(domain, port))
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("caddy set_route {domain}: {e}"))?;
+        let body = route_body(domain, port);
+        let id = route_id(domain);
+        let idx = self.route_index(&id).await?;
+        let resp = match idx {
+            Some(i) => self
+                .client
+                .put(self.routes_url() + &format!("/{i}"))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| anyhow::anyhow!("caddy set_route {domain}: {e}"))?,
+            None => self
+                .client
+                .post(self.routes_url())
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| anyhow::anyhow!("caddy set_route {domain}: {e}"))?,
+        };
         if !resp.status().is_success() {
             anyhow::bail!("caddy set_route {domain}: HTTP {}", resp.status());
         }
         Ok(())
     }
 
+    /// Idempotent delete by numeric index; a missing route is success.
     async fn remove_route(&self, domain: &str) -> anyhow::Result<()> {
         if !valid_domain(domain) {
             anyhow::bail!("caddy remove_route: invalid domain {domain:?}");
         }
+        let Some(i) = self.route_index(&route_id(domain)).await? else {
+            return Ok(());
+        };
         let resp = self
             .client
-            .delete(self.route_url(domain))
+            .delete(self.routes_url() + &format!("/{i}"))
             .send()
             .await
             .map_err(|e| anyhow::anyhow!("caddy remove_route {domain}: {e}"))?;
@@ -182,5 +225,107 @@ mod tests {
         assert_eq!(c.route("a.test"), None);
         // Removing again is fine (idempotent).
         c.remove_route("a.test").await.expect("remove again");
+    }
+
+    /// `CaddyAdmin` against a mock that behaves like real Caddy: routes
+    /// are a JSON array addressed by numeric index; `@id` in the path is
+    /// a 500 (the e2e failure). Catches regressions to id-in-path.
+    async fn mock_admin() -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use axum::{http::StatusCode, routing::any, Json, Router};
+        let routes: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let app = {
+            let routes = routes.clone();
+            let collection = routes.clone();
+            Router::new()
+                // Collection: GET lists, POST appends.
+                .route(
+                    "/config/apps/http/servers/srv0/routes",
+                    any(move |body: String| {
+                        let routes = collection.clone();
+                        async move {
+                            let mut lock = routes.lock().expect("mock lock");
+                            if body.is_empty() {
+                                return (
+                                    StatusCode::OK,
+                                    Json(serde_json::Value::Array(lock.clone())),
+                                );
+                            }
+                            let v: serde_json::Value =
+                                serde_json::from_str(&body).unwrap_or_default();
+                            lock.push(v);
+                            (StatusCode::OK, Json(serde_json::Value::Null))
+                        }
+                    }),
+                )
+                // Element: numeric index only — like real Caddy, any
+                // non-numeric segment is a 500, even a live @id.
+                .route(
+                    "/config/apps/http/servers/srv0/routes/{rest}",
+                    any(
+                        move |axum::extract::Path(rest): axum::extract::Path<String>,
+                              body: String| {
+                            let routes = routes.clone();
+                            async move {
+                                let mut lock = routes.lock().expect("mock lock");
+                                let Ok(i) = rest.parse::<usize>() else {
+                                    return (
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        Json(serde_json::json!({"error": "invalid array index"})),
+                                    );
+                                };
+                                if body.is_empty() {
+                                    // DELETE.
+                                    if i < lock.len() {
+                                        lock.remove(i);
+                                        (StatusCode::OK, Json(serde_json::Value::Null))
+                                    } else {
+                                        (StatusCode::NOT_FOUND, Json(serde_json::Value::Null))
+                                    }
+                                } else if i < lock.len() {
+                                    lock[i] = serde_json::from_str(&body)
+                                        .unwrap_or(serde_json::Value::Null);
+                                    (StatusCode::OK, Json(serde_json::Value::Null))
+                                } else {
+                                    (StatusCode::NOT_FOUND, Json(serde_json::Value::Null))
+                                }
+                            }
+                        },
+                    ),
+                )
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock admin");
+        let addr = listener.local_addr().expect("mock addr");
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve mock admin");
+        });
+        (format!("http://{addr}"), routes, handle)
+    }
+
+    #[tokio::test]
+    async fn admin_upserts_by_index_and_deletes_idempotently() {
+        let (base, routes, _guard) = mock_admin().await;
+        let c = CaddyAdmin::new(base);
+        c.set_route("a.test", 20001).await.expect("create");
+        c.set_route("a.test", 20001).await.expect("repeat is ok");
+        c.set_route("a.test", 20002).await.expect("repoint");
+        c.set_route("b.test", 20003).await.expect("second domain");
+        c.remove_route("a.test").await.expect("remove");
+        c.remove_route("a.test").await.expect("remove again is ok");
+        c.remove_route("never.test").await.expect("missing is ok");
+        // b.test survives with its port: no dupes, no clobber.
+        let lock = routes.lock().expect("mock lock");
+        assert_eq!(lock.len(), 1, "routes: {lock:?}");
+        assert_eq!(lock[0]["@id"], "setu-b.test");
+        assert_eq!(
+            lock[0]["handle"][0]["upstreams"][0]["dial"],
+            "127.0.0.1:20003"
+        );
     }
 }
