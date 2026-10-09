@@ -96,9 +96,11 @@ impl CaddyAdmin {
 impl Caddy for CaddyAdmin {
     /// Idempotent upsert: the admin API addresses `routes` (a JSON
     /// array) by numeric index only — `@id` in the path is rejected
-    /// (`invalid array index`, found by the e2e against real Caddy).
-    /// Our route goes FIRST in the array (whole-collection PUT): a
-    /// foreign catch-all (distro default page) must never shadow a
+    /// (`invalid array index`, found by the e2e against real Caddy
+    /// 2.11). Whole-array replace is PATCH, not PUT (2.6.2 answers
+    /// collection-PUT with `key already exists: routes` — found the
+    /// same way). Our route goes FIRST in the array: a foreign
+    /// catch-all (distro default page) must never shadow a
     /// host-specific route, since Caddy evaluates routes in order.
     async fn set_route(&self, domain: &str, port: u16) -> anyhow::Result<()> {
         if !valid_domain(domain) {
@@ -111,7 +113,7 @@ impl Caddy for CaddyAdmin {
         routes.insert(0, body);
         let resp = self
             .client
-            .put(self.routes_url())
+            .patch(self.routes_url())
             .header("Content-Type", "application/json")
             .json(&routes)
             .send()
@@ -240,19 +242,27 @@ mod tests {
             let routes = routes.clone();
             let collection = routes.clone();
             Router::new()
-                // Collection: GET lists, POST appends, PUT replaces the
-                // whole array (real Caddy supports all three).
+                // Collection, mirroring real Caddy (2.6.2 and 2.11):
+                // GET lists, PATCH replaces the whole array, PUT is
+                // create-only (`key already exists`), POST appends one
+                // route object.
                 .route(
                     "/config/apps/http/servers/srv0/routes",
                     any(move |method: axum::http::Method, body: String| {
                         let routes = collection.clone();
                         async move {
                             let mut lock = routes.lock().expect("mock lock");
-                            if method == axum::http::Method::PUT {
+                            if method == axum::http::Method::PATCH {
                                 let v: Vec<serde_json::Value> =
                                     serde_json::from_str(&body).unwrap_or_default();
                                 *lock = v;
                                 return (StatusCode::OK, Json(serde_json::Value::Null));
+                            }
+                            if method == axum::http::Method::PUT {
+                                return (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    Json(serde_json::json!({"error": "key already exists"})),
+                                );
                             }
                             if body.is_empty() {
                                 return (
