@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE agent_commands\n             SET delivered_at = NULL, attempts = attempts + 1\n             WHERE delivered_at IS NOT NULL\n               AND completed_at IS NULL\n               AND delivered_at < $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "65db1ba60b0f6ac440b3b4592176ae6cc87360e3302fc0edbfcb33f8858b7f85"
+}

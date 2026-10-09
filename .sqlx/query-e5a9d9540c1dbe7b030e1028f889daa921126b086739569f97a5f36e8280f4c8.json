@@ -1,0 +1,91 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO app_versions (id, app_id, version, manifest)\n             VALUES ($1, $2, $3, $4)\n             ON CONFLICT (app_id, version) DO UPDATE\n               SET manifest = excluded.manifest\n             RETURNING id, app_id, version, manifest, channel, published_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "app_versions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "app_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "app_versions",
+            "name": "app_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "app_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "manifest",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "app_versions",
+            "name": "manifest"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "channel",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "app_versions",
+            "name": "channel"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "published_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "app_versions",
+            "name": "published_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e5a9d9540c1dbe7b030e1028f889daa921126b086739569f97a5f36e8280f4c8"
+}

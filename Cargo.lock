@@ -1561,6 +1561,23 @@ dependencies = [
 [[package]]
 name = "setu-db"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "hex",
+ "rand 0.9.5",
+ "serde",
+ "serde_json",
+ "setu-common",
+ "setu-proto",
+ "setu-testkit",
+ "sha2 0.10.9",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "ulid",
+]
 
 [[package]]
 name = "setu-jobs"

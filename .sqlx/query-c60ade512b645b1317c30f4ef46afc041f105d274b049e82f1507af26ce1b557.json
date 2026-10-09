@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO apps (id, name, homepage, updated_at)\n             VALUES ($1, $2, $3, now())\n             ON CONFLICT (id) DO UPDATE\n               SET name = excluded.name,\n                   homepage = excluded.homepage,\n                   updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c60ade512b645b1317c30f4ef46afc041f105d274b049e82f1507af26ce1b557"
+}

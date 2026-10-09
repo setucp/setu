@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO plans (id, name, limits, allowed_app_ids)\n             VALUES ($1, 'Default', $2, $3)\n             ON CONFLICT (name) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a68daf8e229067ab4db200e2eb1c2cdce057df4c5df4d41fdcea2b529b49d6b2"
+}

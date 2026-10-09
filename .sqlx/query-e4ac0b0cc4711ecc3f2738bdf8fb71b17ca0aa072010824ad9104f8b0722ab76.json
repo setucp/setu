@@ -1,0 +1,209 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sites SET env = $2, updated_at = now()\n             WHERE id = $1\n             RETURNING id, name, app_id, app_version, server_id, plan_id, domain,\n                       status, failed_step, port, data_dir, db_name, env, owner_email,\n                       created_at, updated_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "app_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "app_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "app_version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "app_version"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "server_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "server_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "plan_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "plan_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "domain",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "domain"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "failed_step",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "failed_step"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "port",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "port"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "data_dir",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "data_dir"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "db_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "db_name"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "env",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "env"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "owner_email",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "owner_email"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e4ac0b0cc4711ecc3f2738bdf8fb71b17ca0aa072010824ad9104f8b0722ab76"
+}

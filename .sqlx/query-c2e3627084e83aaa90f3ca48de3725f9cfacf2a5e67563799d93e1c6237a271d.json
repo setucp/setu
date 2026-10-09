@@ -1,0 +1,206 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, name, app_id, app_version, server_id, plan_id, domain,\n                    status, failed_step, port, data_dir, db_name, env, owner_email,\n                    created_at, updated_at\n             FROM sites ORDER BY created_at DESC, id DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "app_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "app_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "app_version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "app_version"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "server_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "server_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "plan_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "plan_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "domain",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "domain"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "failed_step",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "failed_step"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "port",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "port"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "data_dir",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "data_dir"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "db_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "db_name"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "env",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "env"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "owner_email",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "owner_email"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c2e3627084e83aaa90f3ca48de3725f9cfacf2a5e67563799d93e1c6237a271d"
+}

@@ -1,0 +1,287 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE servers SET\n                 join_token_used = TRUE,\n                 token_hash = $2,\n                 host = $3, arch = $4, os = $5,\n                 cpu_cores = $6, memory_mb = $7, disk_mb = $8,\n                 status = 'online', last_seen_at = now(), updated_at = now()\n             WHERE id = $1 AND join_token_used = FALSE\n             RETURNING id, name, host, token_hash, join_token_hash,\n                       join_token_expires_at, join_token_used, agent_version, arch, os,\n                       caddy_admin, postgres_version, last_seen_at, cpu_cores, memory_mb,\n                       disk_mb, load1, mem_free_mb, disk_free_mb, status,\n                       created_at, updated_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "host",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "host"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "token_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "token_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "join_token_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "join_token_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "join_token_expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "join_token_expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "join_token_used",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "join_token_used"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "agent_version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "agent_version"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "arch",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "arch"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "os",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "os"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "caddy_admin",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "caddy_admin"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "postgres_version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "postgres_version"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "last_seen_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "last_seen_at"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "cpu_cores",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "cpu_cores"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "memory_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "memory_mb"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "disk_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "disk_mb"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "load1",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "load1"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "mem_free_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "mem_free_mb"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "disk_free_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "disk_free_mb"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b12ec2a5e9acafbdb79729b430e1452e638499e7ef2dadcbaacc667462cddfe9"
+}

@@ -1,0 +1,91 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE plans SET name = $2, limits = $3, allowed_app_ids = $4, updated_at = now()\n             WHERE id = $1\n             RETURNING id, name, limits, allowed_app_ids, created_at, updated_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "limits",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "limits"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "allowed_app_ids",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "allowed_app_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Jsonb",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9b42965b55eca88ba4dde934a2ea1ece12ba1817ba7ca169d5802db34378972f"
+}
