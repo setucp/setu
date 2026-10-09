@@ -11,7 +11,8 @@ description: How to run Setu's Rust and UI tests safely on this host — throwaw
    (container `setu-test-pg`, port `SETU_TEST_PG_PORT`, default 55440;
    never 5432; if 55440 is busy export another port and keep using it
    for the session).
-3. Rust: `CARGO_BUILD_JOBS=4 bash /home/gopal/Desktop/wp/setu/scripts/test.sh [-p crate] [name]`.
+3. Rust: `bash /home/gopal/Desktop/wp/setu/scripts/test.sh [-p crate] [name]`
+   (cargo args go before the script's own `--`; it sets CARGO_BUILD_JOBS=4).
    Redirect long output to the scratchpad and read the tail.
 4. After schema or query changes: `bash scripts/sqlx-prepare.sh`, commit `.sqlx/`.
 5. UI: `pnpm -C /home/gopal/Desktop/wp/setu/ui lint && … typecheck && … test`.
