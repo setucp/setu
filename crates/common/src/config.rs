@@ -92,7 +92,11 @@ impl Config {
         let cfg = config::Config::builder()
             .set_default("bind_addr", "127.0.0.1:7000")
             .map_err(|e| ConfigError::Load(e.to_string()))?
-            .set_default("data_dir", "/var/lib/setu")
+            // Site dirs are addressed on AGENTS as `<data_dir>/sites/<id>`
+            // (see `POST /sites`): the default must land inside the agent
+            // helper allowlist (`/srv/setu/sites`), not the agent's own
+            // state dir (`/var/lib/setu`, which holds state.json/backups).
+            .set_default("data_dir", "/srv/setu")
             .map_err(|e| ConfigError::Load(e.to_string()))?
             .add_source(config::File::with_name("setu").required(false))
             .add_source(
@@ -236,6 +240,29 @@ mod tests {
         assert!(
             msg.contains("DATABASE_URL") || msg.contains("database_url"),
             "error must mention database url, got: {msg}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn default_data_dir_points_at_agent_sites_root() {
+        // `POST /sites` stores `<data_dir>/sites/<id>` and the agent only
+        // writes under `/srv/setu/sites` (helper allowlist): the default
+        // must agree, or every provision fails at write_env (found by e2e).
+        clear_setu_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let orig_dir = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(dir.path()).expect("chdir to tempdir");
+        env::set_var("SETU_DATABASE_URL", "postgres://localhost/db");
+        env::set_var("SETU_SECRET_KEY", "ab".repeat(32));
+        env::set_var("SETU_PUBLIC_URL", "http://127.0.0.1:7000");
+        let loaded = Config::load();
+        std::env::set_current_dir(orig_dir).expect("restore cwd");
+        clear_setu_env();
+        let cfg = loaded.expect("config must load");
+        assert_eq!(
+            cfg.data_dir.join("sites"),
+            std::path::PathBuf::from("/srv/setu/sites")
         );
     }
 }
