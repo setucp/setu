@@ -1582,6 +1582,22 @@ dependencies = [
 [[package]]
 name = "setu-jobs"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "hex",
+ "rand 0.9.5",
+ "serde",
+ "serde_json",
+ "setu-common",
+ "setu-db",
+ "setu-manifest",
+ "setu-proto",
+ "setu-testkit",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "setu-manifest"
@@ -1591,6 +1607,7 @@ dependencies = [
  "rand 0.9.5",
  "semver",
  "serde",
+ "serde_json",
  "thiserror",
  "toml 0.8.23",
 ]

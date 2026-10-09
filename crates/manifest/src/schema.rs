@@ -117,7 +117,11 @@ impl<'de> Deserialize<'de> for BinaryRun {
     where
         D: serde::Deserializer<'de>,
     {
-        let mut map = BTreeMap::<String, toml::Value>::deserialize(deserializer)?;
+        // NOTE: the intermediate is `serde_json::Value`, not `toml::Value`,
+        // so manifests round-trip through the JSON stored in `app_versions`
+        // (the control plane reads them back without TOML). `null` has no
+        // TOML spelling, so `toml::Value` cannot represent stored manifests.
+        let mut map = BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
         let args = match map.remove("args") {
             Some(value) => Vec::<String>::deserialize(value).map_err(serde::de::Error::custom)?,
             None => Vec::new(),
@@ -214,7 +218,10 @@ impl<'de> Deserialize<'de> for EnvSpec {
         // Discriminate on the entry's keys so errors can name the closest
         // variant and the offending field instead of the generic
         // "data did not match any variant of untagged enum" message.
-        let map = std::collections::BTreeMap::<String, toml::Value>::deserialize(deserializer)?;
+        // See above: `serde_json::Value` keeps stored (JSON) manifests
+        // readable; TOML parsing is unaffected.
+        let map =
+            std::collections::BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
         let has_generate = map.contains_key("generate");
         let has_from = map.contains_key("from");
         let has_value = map.contains_key("value");
@@ -241,9 +248,8 @@ impl<'de> Deserialize<'de> for EnvSpec {
             ));
         }
 
-        fn table(map: std::collections::BTreeMap<String, toml::Value>) -> toml::Value {
-            let table: toml::map::Map<String, toml::Value> = map.into_iter().collect();
-            toml::Value::Table(table)
+        fn table(map: std::collections::BTreeMap<String, serde_json::Value>) -> serde_json::Value {
+            serde_json::Value::Object(map.into_iter().collect())
         }
 
         if has_generate {

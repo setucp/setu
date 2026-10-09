@@ -6,3 +6,23 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+tokio.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rand.workspace = true
+hex.workspace = true
+chrono.workspace = true
+setu-common = { path = "../common" }
+setu-manifest = { path = "../manifest" }
+setu-proto = { path = "../proto" }
+setu-db = { path = "../db" }
+
+[dev-dependencies]
+setu-testkit = { path = "../testkit" }
+tokio.workspace = true
+serde_json.workspace = true

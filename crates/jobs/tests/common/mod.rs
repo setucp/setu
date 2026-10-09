@@ -1,0 +1,203 @@
+//! Shared fixtures for the jobs integration tests: throwaway DB,
+//! online server, catalogue version, plan, and a `provisioning` site.
+//!
+//! Each integration target compiles this module separately, so not
+//! every helper is used everywhere.
+#![allow(dead_code)]
+
+use std::sync::{Arc, Mutex};
+
+use serde_json::json;
+use setu_common::{Sealer, SecretKey};
+use setu_db::{Db, NewSite};
+use setu_jobs::{testing::FakeAgent, JobCtx};
+use setu_manifest::Manifest;
+
+pub const SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+/// Minimal binary manifest with a `once` secret, `replace` strategy.
+pub fn manifest_toml(version: &str) -> String {
+    format!(
+        r#"
+schema = 1
+
+[app]
+id = "hello"
+name = "Hello"
+version = "{version}"
+homepage = "https://example.com"
+health = "/healthz"
+port_env = "PORT"
+admin_path = "/"
+
+[run]
+kind = "binary"
+
+[run.binary]
+args = ["serve"]
+"x86_64-linux" = {{ url = "https://example.com/hello-{version}.tar.gz", sha256 = "{SHA256}", exec = "hello" }}
+
+[needs]
+dirs = ["media"]
+
+[env]
+HELLO_SECRET = {{ generate = "hex32", secret = true }}
+HELLO_PASSWORD = {{ generate = "password20", secret = true, once = true }}
+HELLO_DATABASE_URL = {{ from = "postgres_url" }}
+HELLO_MEDIA_DIR = {{ from = "dir", dir = "media" }}
+HELLO_PORT = {{ from = "port" }}
+
+[limits.default]
+memory_mb = 256
+cpu_percent = 50
+disk_mb = 1024
+
+[backup]
+postgres = true
+dirs = ["media"]
+
+[update]
+strategy = "replace"
+"#
+    )
+}
+
+/// Same app with a `command` update strategy.
+pub fn manifest_toml_command(version: &str) -> String {
+    manifest_toml(version).replace(
+        "[update]\nstrategy = \"replace\"",
+        "[update]\nstrategy = \"command\"\ncommand = \"hello update apply\"",
+    )
+}
+
+/// Same app as a container image (phase 2): parses, but provisioning
+/// and update must reject it before issuing anything.
+pub fn manifest_toml_image(version: &str) -> String {
+    format!(
+        r#"
+schema = 1
+
+[app]
+id = "hello"
+name = "Hello"
+version = "{version}"
+homepage = "https://example.com"
+health = "/healthz"
+port_env = "PORT"
+admin_path = "/"
+
+[run]
+kind = "image"
+
+[run.image]
+image = "ghcr.io/example/hello:{version}"
+
+[needs]
+dirs = ["media"]
+
+[env]
+HELLO_SECRET = {{ generate = "hex32", secret = true }}
+
+[limits.default]
+memory_mb = 256
+cpu_percent = 50
+disk_mb = 1024
+
+[backup]
+postgres = true
+dirs = ["media"]
+
+[update]
+strategy = "replace"
+"#
+    )
+}
+
+pub struct Fx {
+    pub db: Db,
+    pub server_id: String,
+    pub site_id: String,
+    pub domain: String,
+}
+
+/// Throwaway DB with an online server, one catalogue version, the
+/// default plan, and a `provisioning` site for that version.
+pub async fn setup(manifest_src: &str) -> (setu_testkit::TestDb, Fx) {
+    let test_db = setu_testkit::TestDb::new().await;
+    let db = Db::new(test_db.pool.clone());
+
+    let (pending, join_token) = db.servers().create_pending("test-server").await.unwrap();
+    let join_req = setu_proto::JoinRequest {
+        join_token: join_token.clone(),
+        hostname: "test-host".to_string(),
+        arch: "x86_64".to_string(),
+        os: "linux".to_string(),
+        cpu_cores: 4,
+        memory_mb: 8192,
+        disk_mb: 102400,
+    };
+    let (server, _server_token) = db.servers().join(&join_token, &join_req).await.unwrap();
+
+    let manifest = Manifest::parse(manifest_src)
+        .unwrap_or_else(|errors| panic!("test manifest must parse: {errors:?}"));
+    let manifest_json = serde_json::to_value(&manifest).unwrap();
+    let app_version = db.apps().upsert_version(&manifest_json).await.unwrap();
+
+    let plan = db.plans().seed_default().await.unwrap();
+    let port = db.sites().next_port(&server.id).await.unwrap();
+    let site = db
+        .sites()
+        .create(&NewSite {
+            name: "hello-site".to_string(),
+            app_id: app_version.app_id.clone(),
+            app_version: app_version.version.clone(),
+            server_id: server.id.clone(),
+            plan_id: plan.id.clone(),
+            domain: "hello.example.com".to_string(),
+            port,
+            data_dir: format!("/srv/setu/sites/hello-{port}/data"),
+            db_name: format!("site_hello_{port}"),
+            env: json!([]),
+            owner_email: "owner@example.com".to_string(),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(pending.status, "pending");
+    (
+        test_db,
+        Fx {
+            db,
+            server_id: server.id,
+            site_id: site.id,
+            domain: site.domain,
+        },
+    )
+}
+
+/// Publish another version of the `hello` catalogue app.
+pub async fn publish_version(db: &Db, manifest_src: &str) {
+    let manifest = Manifest::parse(manifest_src)
+        .unwrap_or_else(|errors| panic!("test manifest must parse: {errors:?}"));
+    let manifest_json = serde_json::to_value(&manifest).unwrap();
+    db.apps().upsert_version(&manifest_json).await.unwrap();
+}
+
+pub fn test_sealer() -> Sealer {
+    Sealer::new(&SecretKey::from_hex(&"ab".repeat(32)).unwrap())
+}
+
+/// A [`JobCtx`] wiring the [`FakeAgent`] plus captured log lines.
+pub fn ctx_with_logs(db: Db, agent: &FakeAgent) -> (JobCtx, Arc<Mutex<Vec<String>>>) {
+    let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let capture = lines.clone();
+    let ctx = JobCtx::new(
+        db,
+        Arc::new(agent.clone()),
+        test_sealer(),
+        move |line: &str| {
+            capture.lock().expect("log lock").push(line.to_string());
+        },
+    );
+    (ctx, lines)
+}

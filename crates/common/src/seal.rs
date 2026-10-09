@@ -20,6 +20,7 @@ use rand::TryRngCore;
 use crate::config::SecretKey;
 
 /// Encrypts and decrypts secret values.
+#[derive(Clone)]
 pub struct Sealer {
     cipher: ChaCha20Poly1305,
 }
