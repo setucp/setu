@@ -214,6 +214,63 @@ pub async fn delete(
     if backup.site_id.as_deref() != Some(site.id.as_str()) {
         return Err(AppError::validation("backup does not belong to this site"));
     }
+    enqueue_delete(&state, &caller.id, ip.as_deref(), &backup).await
+}
+
+/// All backups, newest first, including those of deleted sites
+/// (`site_id` null; `site_name` and `domain` name them). Viewer and above.
+#[utoipa::path(
+    get,
+    path = "/api/v1/backups",
+    responses(
+        (status = 200, body = BackupListOut),
+        (status = 401, body = super::ErrorBody),
+    )
+)]
+pub async fn list_all(
+    State(state): State<AppState>,
+    session: Session,
+) -> Result<impl IntoResponse, AppError> {
+    require_role(&session, Role::Viewer).await?;
+    let rows = state.db.backups().list_all().await?;
+    Ok(Json(BackupListOut {
+        backups: rows.iter().map(BackupOut::from_row).collect(),
+    }))
+}
+
+/// Delete any backup by id (operator and above), the only way to delete
+/// a `pre_delete` backup once its site is gone: 202 with the same
+/// server-level `delete_backup` job as `DELETE
+/// /sites/{id}/backups/{bid}`; 409 when already deleted or queued.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/backups/{bid}",
+    params(("bid" = String, Path, description = "Backup id")),
+    responses(
+        (status = 202, body = BackupJobResponse),
+        (status = 401, body = super::ErrorBody),
+        (status = 403, body = super::ErrorBody),
+        (status = 404, body = super::ErrorBody),
+        (status = 409, body = super::ErrorBody),
+    )
+)]
+pub async fn delete_any(
+    State(state): State<AppState>,
+    session: Session,
+    ip: ClientIp,
+    Path(bid): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = require_role(&session, Role::Operator).await?;
+    let backup = state.db.backups().get(&bid).await?;
+    enqueue_delete(&state, &caller.id, ip.as_deref(), &backup).await
+}
+
+async fn enqueue_delete(
+    state: &AppState,
+    caller_id: &str,
+    ip: Option<&str>,
+    backup: &setu_db::Backup,
+) -> Result<(StatusCode, Json<BackupJobResponse>), AppError> {
     if backup.status == "deleted" {
         return Err(AppError::conflict("backup already deleted"));
     }
@@ -238,10 +295,10 @@ pub async fn delete(
         .await?;
     audit(
         &state.db,
-        Some(&caller.id),
+        Some(caller_id),
         "backup.delete",
         Some(&backup.id),
-        ip.as_deref(),
+        ip,
     )
     .await;
     Ok((

@@ -127,6 +127,22 @@ impl<'a> Backups<'a> {
         .map_err(map_db_error)
     }
 
+    /// Every backup, newest first (deleted ones excluded), including
+    /// those whose site is gone (`site_id` NULL: `pre_delete` backups
+    /// outlive their site).
+    pub async fn list_all(&self) -> Result<Vec<Backup>, AppError> {
+        sqlx::query_as!(
+            Backup,
+            "SELECT id, site_id, server_id, site_short_id, site_name, domain, kind, taken_at,
+                    size_bytes, status FROM backups
+             WHERE status <> 'deleted'
+             ORDER BY taken_at DESC, id DESC",
+        )
+        .fetch_all(self.pool)
+        .await
+        .map_err(map_db_error)
+    }
+
     /// The site's `scheduled` backups beyond the newest `keep` (the
     /// scheduler deletes these).
     pub async fn scheduled_beyond(

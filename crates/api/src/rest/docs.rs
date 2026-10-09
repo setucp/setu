@@ -78,6 +78,8 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::backups::create,
         super::backups::restore,
         super::backups::delete,
+        super::backups::list_all,
+        super::backups::delete_any,
         super::jobs::list,
         super::jobs::get,
         super::jobs::log,

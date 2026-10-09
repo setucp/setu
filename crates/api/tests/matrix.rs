@@ -605,6 +605,10 @@ async fn route_matrix() {
         404,
     )
     .await;
+    ctx.row("GET", "/api/v1/backups", None, 401, 200, 200, 200)
+        .await;
+    ctx.row("DELETE", "/api/v1/backups/nope", None, 401, 403, 404, 404)
+        .await;
     // Reveal is operator+ (viewers never read secrets).
     ctx.row(
         "POST",

@@ -1543,6 +1543,89 @@ async fn delete_backup_enqueues_job_and_marks_row() {
     assert_eq!(audit_actions(&srv, "backup.delete").await.len(), 1);
 }
 
+/// A deleted site's `pre_delete` backup stays listed (with its domain)
+/// under `GET /backups` and is deleted through `DELETE /backups/{bid}`:
+/// the site-scoped routes 404 once the site row is gone (e2e
+/// `delete_site`, ledger R117).
+#[tokio::test]
+async fn deleted_sites_pre_delete_backup_is_listed_and_deletable() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let viewer = srv.login_as("viewer").await;
+    let (site_id, server_id) = running_site(&srv, &owner, "orphan").await;
+    let domain = srv.db.sites().get(&site_id).await.expect("site").domain;
+
+    let del: Value = owner
+        .delete(srv.url(&format!("/api/v1/sites/{site_id}")))
+        .send()
+        .await
+        .expect("delete sends")
+        .json()
+        .await
+        .expect("json");
+    let del_job = del["job"]["id"].as_str().expect("job id").to_string();
+    poll_job(&srv, &owner, &del_job).await;
+    let mut gone = false;
+    for _ in 0..40 {
+        if srv.db.sites().get(&site_id).await.is_err() {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(gone, "site row still present");
+
+    let list: Value = viewer
+        .get(srv.url("/api/v1/backups"))
+        .send()
+        .await
+        .expect("list")
+        .json()
+        .await
+        .expect("json");
+    let pre = list["backups"]
+        .as_array()
+        .expect("array")
+        .iter()
+        .find(|b| b["kind"] == json!("pre_delete") && b["domain"] == json!(domain))
+        .cloned()
+        .unwrap_or_else(|| panic!("pre_delete backup not listed: {list}"));
+    assert_eq!(pre["site_id"], Value::Null);
+    let bid = pre["id"].as_str().expect("bid").to_string();
+    let url = srv.url(&format!("/api/v1/backups/{bid}"));
+
+    let denied = viewer.delete(&url).send().await.expect("delete");
+    assert_eq!(denied.status(), reqwest::StatusCode::FORBIDDEN);
+    let resp = owner.delete(&url).send().await.expect("delete");
+    assert_eq!(resp.status(), reqwest::StatusCode::ACCEPTED);
+    let body: Value = resp.json().await.expect("json");
+    assert_eq!(body["job"]["kind"], json!("delete_backup"));
+    assert_eq!(body["job"]["server_id"], json!(server_id));
+    let job_id = body["job"]["id"].as_str().expect("job id").to_string();
+    let done = poll_job(&srv, &owner, &job_id).await.expect("job");
+    assert_eq!(done["status"], json!("done"), "delete_backup: {done}");
+    assert_eq!(
+        srv.db.backups().get(&bid).await.expect("row").status,
+        "deleted"
+    );
+    let list: Value = owner
+        .get(srv.url("/api/v1/backups"))
+        .send()
+        .await
+        .expect("list")
+        .json()
+        .await
+        .expect("json");
+    assert!(list["backups"]
+        .as_array()
+        .expect("array")
+        .iter()
+        .all(|b| b["id"] != json!(bid)));
+    let again = owner.delete(&url).send().await.expect("delete");
+    assert_eq!(again.status(), reqwest::StatusCode::CONFLICT);
+}
+
 #[tokio::test]
 async fn logs_sse_uses_cursor_without_duplicates() {
     let tdb = TestDb::new().await;
