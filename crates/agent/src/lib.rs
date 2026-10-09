@@ -1,1 +1,1 @@
-//! Server agent library (MVP bootstrap placeholder).
+//! Server agent library, mounted by the `setu` binary as `setu agent …`.
