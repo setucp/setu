@@ -233,7 +233,7 @@ where
 }
 
 /// What is on this host: unit states of the known sites, site trees,
-/// Caddy route ids and `site_*` databases.
+/// Caddy route ids, `site_*` databases and listening TCP ports.
 pub async fn inventory<H, P, C>(rt: &NativeRuntime<H, P, C>) -> anyhow::Result<InventoryReport>
 where
     H: Helper,
@@ -250,6 +250,7 @@ where
         sites_on_disk: rt.sites_on_disk(),
         routes: rt.caddy().list_route_ids().await?,
         databases: rt.postgres().list_databases().await?,
+        listening_ports: crate::netstat::listening_ports(),
     })
 }
 

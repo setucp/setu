@@ -119,6 +119,7 @@ impl TestServer {
             Arc::new(setu_jobs::SystemClock),
             setu_jobs::RunnerConfig {
                 idle_poll: Duration::from_millis(100),
+                verify_delay: Duration::ZERO,
                 ..setu_jobs::RunnerConfig::default()
             },
         );

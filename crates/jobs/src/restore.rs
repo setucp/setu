@@ -1,101 +1,109 @@
-//! Restore state machine (spec §5): stop, restore the dump and dirs,
-//! start, health.
+//! Restore state machine (spec §6), named steps resumed from the
+//! job's cursor: `validate`, `backup` (`pre_restore`), `stop`, `restore`
+//! (database replaced, dirs swapped), `start`, `health`, `finish`.
 //!
-//! Steps: `validate`, `stop`, `restore`, `start`, `health`, `finish`.
-//! Pre-mutation failure (`stop`) leaves the site `running`; anything at
-//! or after `restore` marks it `failed` (the data was already touched).
+//! A failure before `restore` (the data is untouched) leaves the site
+//! `running`; at or after `restore` it is `failed` with the step.
 
 use setu_common::AppError;
 use setu_proto::Command;
 
-use crate::{agent_step, build_spec, fail, load_manifest, log_step, JobCtx};
+use crate::{build_spec, load_manifest, mark_failed, JobCtx, Steps};
+
+/// The steps, in order.
+pub const STEPS: &[&str] = &[
+    "validate", "backup", "stop", "restore", "start", "health", "finish",
+];
 
 /// Restore the site from `backup_id`; ends `running`.
 pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), AppError> {
     let site = ctx.db.sites().get(site_id).await?;
-    let backup = ctx.db.backups().get(backup_id).await?;
-    if backup.site_id.as_deref() != Some(site.id.as_str()) {
-        return Err(AppError::validation("backup does not belong to this site"));
-    }
+    let steps = Steps::run_from(ctx.cursor().await.as_deref(), STEPS);
     let manifest = load_manifest(&ctx.db, &site.app_id, &site.app_version).await?;
     let plan = ctx.db.plans().get(&site.plan_id).await?;
-    // No env resolution (no prompts on this job, none needed — the env
-    // file already on disk is untouched by restore); the spec is for
-    // `health`.
     let spec = build_spec(&plan, &site, &manifest)?;
-    let server_id = site.server_id.clone();
+    let server = site.server_id.as_str();
+    let short = site.short_id.clone();
 
-    log_step(ctx, "validate", true, None).await;
-    ctx.db.sites().set_status(site_id, "updating", None).await?;
-
-    match crate::call_agent(
-        ctx,
-        &server_id,
-        Command::Stop {
-            site: site.short_id.clone(),
-        },
-    )
-    .await
-    {
-        Ok(result) if result.ok => {
-            log_step(ctx, "stop", true, None).await;
-        }
-        Ok(result) => {
-            let msg = result
-                .error
-                .unwrap_or_else(|| "agent command failed".to_string());
-            log_step(ctx, "stop", false, Some(&msg)).await;
-            let _ = ctx.db.sites().set_status(site_id, "running", None).await;
-            return Err(AppError::new(setu_common::ErrorCode::Internal, msg));
-        }
-        Err(e) => {
-            let err = AppError::from(e);
-            log_step(ctx, "stop", false, Some(&err.message.clone())).await;
-            let _ = ctx.db.sites().set_status(site_id, "running", None).await;
-            return Err(err);
-        }
-    }
-
-    agent_step(
-        ctx,
-        site_id,
-        "restore",
-        &server_id,
-        Command::Restore {
-            site: site.short_id.clone(),
-            db: site.db_name.clone(),
-            role: site.db_role.clone(),
-            dirs: manifest.backup.dirs.clone(),
-            backup_id: backup.id.clone(),
-        },
-    )
-    .await?;
-    agent_step(
-        ctx,
-        site_id,
-        "start",
-        &server_id,
-        Command::Start {
-            site: site.short_id.clone(),
-        },
-    )
-    .await?;
-    agent_step(
-        ctx,
-        site_id,
-        "health",
-        &server_id,
-        Command::Health { site: spec },
-    )
-    .await?;
-
-    // `agent_step` failures above already marked the site `failed`;
-    // only the success path reaches here.
-    match ctx.db.sites().set_status(site_id, "running", None).await {
-        Ok(_) => {
-            log_step(ctx, "finish", true, None).await;
+    steps
+        .run(ctx, "validate", async {
+            let backup = ctx.db.backups().get(backup_id).await?;
+            if backup.site_id.as_deref() != Some(site.id.as_str()) {
+                return Err(AppError::validation("backup does not belong to this site"));
+            }
+            if backup.status != "completed" {
+                return Err(AppError::validation(format!(
+                    "backup {} is {}",
+                    backup.id, backup.status
+                )));
+            }
+            ctx.db.sites().set_status(site_id, "updating", None).await?;
             Ok(())
-        }
-        Err(e) => Err(fail(ctx, site_id, "finish", e).await),
+        })
+        .await?;
+
+    let untouched = |e: AppError| async move {
+        let _ = ctx.db.sites().set_status(site_id, "running", None).await;
+        e
+    };
+    if let Err(e) = steps
+        .run(
+            ctx,
+            "backup",
+            crate::backup::take(ctx, &site, "pre_restore", "pre_backup_id"),
+        )
+        .await
+    {
+        return Err(untouched(e).await);
     }
+    if let Err(e) = steps
+        .run(
+            ctx,
+            "stop",
+            ctx.agent_ok(
+                server,
+                Command::Stop {
+                    site: short.clone(),
+                },
+            ),
+        )
+        .await
+    {
+        return Err(untouched(e).await);
+    }
+
+    let after: [(&'static str, Command); 3] = [
+        (
+            "restore",
+            Command::Restore {
+                site: short.clone(),
+                db: site.db_name.clone(),
+                role: site.db_role.clone(),
+                dirs: manifest.backup.dirs.clone(),
+                backup_id: backup_id.to_string(),
+            },
+        ),
+        (
+            "start",
+            Command::Start {
+                site: short.clone(),
+            },
+        ),
+        ("health", Command::Health { site: spec }),
+    ];
+    for (name, cmd) in after {
+        if let Err(e) = steps.run(ctx, name, ctx.agent_ok(server, cmd)).await {
+            return Err(mark_failed(ctx, site_id, name, e).await);
+        }
+    }
+    if let Err(e) = steps
+        .run(ctx, "finish", async {
+            ctx.db.sites().set_status(site_id, "running", None).await?;
+            Ok(())
+        })
+        .await
+    {
+        return Err(mark_failed(ctx, site_id, "finish", e).await);
+    }
+    Ok(())
 }

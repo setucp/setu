@@ -1,64 +1,70 @@
-//! Backup state machine (`backup_site`): agent `Backup` plus the row.
-//!
-//! Steps: `validate`, `backup`, `finish`. Never touches site status.
-//! The kind (`manual`, `scheduled`) comes from the job payload; the
-//! agent writes `/var/lib/setu/backups/<short>/<backup_id>/`.
+//! Backup (`backup_site`, and the `pre_*` copies the other flows take):
+//! the `backups` row first (`pending`), then the agent `Backup` into
+//! `/var/lib/setu/backups/<short>/<backup_id>/`, then the row `completed`
+//! with the size the agent reports (or `failed`). Never touches site
+//! status.
 
-use setu_common::{AppError, ErrorCode};
+use setu_common::AppError;
+use setu_db::Site;
 use setu_proto::Command;
 
-use crate::{call_agent, load_manifest, log_step, require_ok, JobCtx};
+use crate::{load_manifest, JobCtx};
 
-/// Take a backup of `kind` (`manual` or `scheduled`); the row ends
-/// `completed` (or `failed`).
-pub async fn run(ctx: &JobCtx, site_id: &str, kind: &str) -> Result<(), AppError> {
-    if kind != "manual" && kind != "scheduled" {
-        return Err(AppError::validation(format!(
-            "backup kind {kind} is not a job"
-        )));
-    }
+/// Take a backup of `kind` (`manual`, `scheduled`, or a flow's `pre_*`)
+/// as the step `backup`; returns the backup id. The id is kept in the
+/// job payload (`backup_id`), so a resumed job re-uses its row.
+pub async fn run(ctx: &JobCtx, site_id: &str, kind: &str) -> Result<String, AppError> {
     let site = ctx.db.sites().get(site_id).await?;
-    // No env resolution here: backup needs the db name and the dirs only.
-    let manifest = load_manifest(&ctx.db, &site.app_id, &site.app_version).await?;
-    log_step(ctx, "validate", true, None).await;
+    ctx.step("backup", take(ctx, &site, kind, "backup_id"))
+        .await
+}
 
-    let row = ctx.db.backups().create(&site, kind).await?;
-    match call_agent(
-        ctx,
-        &site.server_id,
-        Command::Backup {
-            site: site.short_id.clone(),
-            db: site.db_name.clone(),
-            dirs: manifest.backup.dirs.clone(),
-            backup_id: row.id.clone(),
-        },
-    )
-    .await
-    {
-        Ok(result) => match require_ok(result) {
-            Ok(output) => {
-                let size = output.get("size_bytes").and_then(|v| v.as_i64());
-                let _ = ctx
-                    .db
-                    .backups()
-                    .set_status(&row.id, "completed", size)
-                    .await;
-                log_step(ctx, "backup", true, None).await;
-            }
-            Err(msg) => {
-                let _ = ctx.db.backups().set_status(&row.id, "failed", None).await;
-                log_step(ctx, "backup", false, Some(&msg)).await;
-                return Err(AppError::new(ErrorCode::Internal, msg));
-            }
-        },
+/// The body of a backup step: re-use the row named by `payload_key` in
+/// the job payload (resume), else create a `pending` row of `kind` and
+/// record its id there before calling the agent. A row already
+/// `completed` is not taken again.
+pub(crate) async fn take(
+    ctx: &JobCtx,
+    site: &Site,
+    kind: &str,
+    payload_key: &str,
+) -> Result<String, AppError> {
+    let manifest = load_manifest(&ctx.db, &site.app_id, &site.app_version).await?;
+    let row = match ctx.payload_str(payload_key).await {
+        Some(id) => ctx.db.backups().get(&id).await?,
+        None => {
+            let row = ctx.db.backups().create(site, kind).await?;
+            ctx.payload_set(payload_key, serde_json::json!(row.id))
+                .await?;
+            row
+        }
+    };
+    if row.status == "completed" {
+        return Ok(row.id);
+    }
+    let taken = ctx
+        .agent_ok(
+            &site.server_id,
+            Command::Backup {
+                site: site.short_id.clone(),
+                db: site.db_name.clone(),
+                dirs: manifest.backup.dirs.clone(),
+                backup_id: row.id.clone(),
+            },
+        )
+        .await;
+    match taken {
+        Ok(output) => {
+            let size = output.get("size_bytes").and_then(|v| v.as_i64());
+            ctx.db
+                .backups()
+                .set_status(&row.id, "completed", size)
+                .await?;
+            Ok(row.id)
+        }
         Err(e) => {
             let _ = ctx.db.backups().set_status(&row.id, "failed", None).await;
-            let err = AppError::from(e);
-            log_step(ctx, "backup", false, Some(&err.message.clone())).await;
-            return Err(err);
+            Err(e)
         }
     }
-
-    log_step(ctx, "finish", true, None).await;
-    Ok(())
 }

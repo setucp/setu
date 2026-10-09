@@ -12,10 +12,10 @@ mod repo;
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 pub use repo::{
-    AgentCommand, App, AppVersion, Apps, Audit, AuditEntry, Backup, Backups, Commands, CreateError,
-    HeartbeatInput, HeartbeatOutcome, Job, Jobs, JoinError, JoinInput, LatestMetric, Metrics,
-    NewPlan, NewSite, Operator, Operators, Plan, Plans, Server, ServerStatus, Servers, Session,
-    Sessions, Settings, Site, Sites, WaitError,
+    AgentCommand, Allocation, App, AppVersion, Apps, Audit, AuditEntry, Backup, Backups, Commands,
+    CreateError, HeartbeatInput, HeartbeatOutcome, Job, Jobs, JoinError, JoinInput, LatestMetric,
+    Metrics, NewPlan, NewSite, Operator, Operators, Plan, Plans, Server, ServerStatus, Servers,
+    Session, Sessions, Settings, Site, Sites, WaitError,
 };
 pub use setu_common::{AppError, ErrorCode};
 

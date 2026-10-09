@@ -1,132 +1,100 @@
-//! Delete state machine (spec §5): stop, remove the route, drop the
-//! database, remove the files, delete the row.
+//! Delete state machine (spec §6), named steps resumed from the job's
+//! cursor: `backup` (`pre_delete`, kept 30 days), `remove_route`, `stop`,
+//! `drop_database`, `site_remove`, `finish` (the row is deleted; its
+//! backups keep `site_name` and `domain`, `site_id` becomes NULL).
 //!
-//! Steps: `stop`, `remove_route`, `drop_database`, `site_remove`,
-//! `finish` (WS6 adds the `pre_delete` backup first).
-//! `stop` and `remove_route` failures are ignored (the unit/route may
-//! already be gone); anything later marks the site `failed`.
+//! A failed `pre_delete` backup aborts the delete with the site
+//! untouched, except for a `failed` site, which may never have had a
+//! database or files to back up (ledger R94). `remove_route` and `stop`
+//! failures are ignored (the route/unit may already be gone); a later
+//! failure marks the site `failed` with the step.
 
 use setu_common::{AppError, ErrorCode};
 use setu_proto::Command;
 
-use crate::{call_agent, fail, log_step, JobCtx};
+use crate::{mark_failed, JobCtx, Steps};
+
+/// The steps, in order.
+pub const STEPS: &[&str] = &[
+    "backup",
+    "remove_route",
+    "stop",
+    "drop_database",
+    "site_remove",
+    "finish",
+];
 
 /// Delete the site; ends with the row gone.
 pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
-    let site = ctx.db.sites().get(site_id).await?;
-    let server_id = site.server_id.clone();
-    let domain = site.domain.clone();
-    // Every command keys off the short id: no manifest or plan needed.
+    let cursor = ctx.cursor().await;
+    let site = match ctx.db.sites().get(site_id).await {
+        // Interrupted after the row went: the delete is complete.
+        Err(e) if e.code == ErrorCode::NotFound && cursor.as_deref() == Some("finish") => {
+            return Ok(())
+        }
+        other => other?,
+    };
+    let steps = Steps::run_from(cursor.as_deref(), STEPS);
+    let server = site.server_id.as_str();
     let short = site.short_id.clone();
-    let db_name = site.db_name.clone();
 
-    let _ = ctx.db.sites().set_status(site_id, "deleting", None).await;
+    let backed_up = steps
+        .run(
+            ctx,
+            "backup",
+            crate::backup::take(ctx, &site, "pre_delete", "pre_backup_id"),
+        )
+        .await;
+    if let Err(e) = backed_up {
+        if site.status != "failed" {
+            return Err(e);
+        }
+        ctx.log("step backup: ignored (the site is failed)").await;
+    }
+    ctx.db.sites().set_status(site_id, "deleting", None).await?;
 
-    // Best-effort: the unit may already be stopped/gone.
-    match call_agent(
-        ctx,
-        &server_id,
-        Command::Stop {
-            site: short.clone(),
-        },
-    )
-    .await
+    for (name, cmd) in [
+        (
+            "remove_route",
+            Command::RemoveRoute {
+                site_short_id: short.clone(),
+                domain: site.domain.clone(),
+            },
+        ),
+        (
+            "stop",
+            Command::Stop {
+                site: short.clone(),
+            },
+        ),
+    ] {
+        // Best effort: logged as an error, then the delete continues.
+        let _ = steps.run(ctx, name, ctx.agent_ok(server, cmd)).await;
+    }
+    for (name, cmd) in [
+        (
+            "drop_database",
+            Command::DropDatabase {
+                db: site.db_name.clone(),
+                role: site.db_role.clone(),
+            },
+        ),
+        (
+            "site_remove",
+            Command::SiteRemove {
+                site: short.clone(),
+            },
+        ),
+    ] {
+        if let Err(e) = steps.run(ctx, name, ctx.agent_ok(server, cmd)).await {
+            return Err(mark_failed(ctx, site_id, name, e).await);
+        }
+    }
+    if let Err(e) = steps
+        .run(ctx, "finish", ctx.db.sites().delete(site_id))
+        .await
     {
-        Ok(result) if result.ok => {
-            log_step(ctx, "stop", true, None).await;
-        }
-        Ok(result) => {
-            let msg = result
-                .error
-                .unwrap_or_else(|| "agent command failed".to_string());
-            log_step(ctx, "stop", false, Some(&format!("{msg} (ignored)"))).await;
-        }
-        Err(e) => {
-            log_step(ctx, "stop", false, Some(&format!("{e} (ignored)"))).await;
-        }
+        return Err(mark_failed(ctx, site_id, "finish", e).await);
     }
-    match call_agent(
-        ctx,
-        &server_id,
-        Command::RemoveRoute {
-            site_short_id: short.clone(),
-            domain: domain.clone(),
-        },
-    )
-    .await
-    {
-        Ok(result) if result.ok => {
-            log_step(ctx, "remove_route", true, None).await;
-        }
-        Ok(result) => {
-            let msg = result
-                .error
-                .unwrap_or_else(|| "agent command failed".to_string());
-            log_step(
-                ctx,
-                "remove_route",
-                false,
-                Some(&format!("{msg} (ignored)")),
-            )
-            .await;
-        }
-        Err(e) => {
-            log_step(ctx, "remove_route", false, Some(&format!("{e} (ignored)"))).await;
-        }
-    }
-
-    match call_agent(
-        ctx,
-        &server_id,
-        Command::DropDatabase {
-            db: db_name.clone(),
-            role: site.db_role.clone(),
-        },
-    )
-    .await
-    {
-        Ok(result) if result.ok => {
-            log_step(ctx, "drop_database", true, None).await;
-        }
-        Ok(result) => {
-            let msg = result
-                .error
-                .unwrap_or_else(|| "agent command failed".to_string());
-            return Err(fail(
-                ctx,
-                site_id,
-                "drop_database",
-                AppError::new(ErrorCode::Internal, msg),
-            )
-            .await);
-        }
-        Err(e) => return Err(fail(ctx, site_id, "drop_database", e.into()).await),
-    }
-
-    match call_agent(ctx, &server_id, Command::SiteRemove { site: short }).await {
-        Ok(result) if result.ok => {
-            log_step(ctx, "site_remove", true, None).await;
-        }
-        Ok(result) => {
-            let msg = result
-                .error
-                .unwrap_or_else(|| "agent command failed".to_string());
-            return Err(fail(
-                ctx,
-                site_id,
-                "site_remove",
-                AppError::new(ErrorCode::Internal, msg),
-            )
-            .await);
-        }
-        Err(e) => return Err(fail(ctx, site_id, "site_remove", e.into()).await),
-    }
-
-    match ctx.db.sites().delete(site_id).await {
-        Ok(()) => {
-            log_step(ctx, "finish", true, None).await;
-            Ok(())
-        }
-        Err(e) => Err(fail(ctx, site_id, "finish", e).await),
-    }
+    Ok(())
 }

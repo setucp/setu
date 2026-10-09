@@ -145,9 +145,9 @@ pub async fn setup(manifest_src: &str) -> (setu_testkit::TestDb, Fx) {
     let app_version = db.apps().upsert_version(&manifest_json).await.unwrap();
 
     let plan = db.plans().seed_default().await.unwrap();
-    let site = db
-        .sites()
-        .create(&NewSite {
+    let site = create_site(
+        &db,
+        &NewSite {
             name: "hello-site".to_string(),
             app_id: app_version.app_id.clone(),
             app_version: app_version.version.clone(),
@@ -157,9 +157,9 @@ pub async fn setup(manifest_src: &str) -> (setu_testkit::TestDb, Fx) {
             owner_email: "owner@example.com".to_string(),
             env_sealed: json!([]),
             plan_memory_mb: i64::from(plan.memory_mb),
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await;
 
     assert_eq!(
         pending.status(chrono::Utc::now()),
@@ -199,7 +199,8 @@ pub fn ctx_with_logs(db: Db, agent: &FakeAgent) -> (JobCtx, Arc<Mutex<Vec<String
         move |line: &str| {
             capture.lock().expect("log lock").push(line.to_string());
         },
-    );
+    )
+    .with_verify_delay(std::time::Duration::ZERO);
     (ctx, lines)
 }
 
@@ -208,8 +209,9 @@ pub fn ctx_with_logs(db: Db, agent: &FakeAgent) -> (JobCtx, Arc<Mutex<Vec<String
 pub async fn add_site(db: &Db, like: &str, domain: &str) -> String {
     let base = db.sites().get(like).await.unwrap();
     let plan = db.plans().get(&base.plan_id).await.unwrap();
-    db.sites()
-        .create(&NewSite {
+    create_site(
+        db,
+        &NewSite {
             name: domain.to_string(),
             app_id: base.app_id.clone(),
             app_version: base.app_version.clone(),
@@ -219,10 +221,84 @@ pub async fn add_site(db: &Db, like: &str, domain: &str) -> String {
             owner_email: "owner@example.com".to_string(),
             env_sealed: json!([]),
             plan_memory_mb: i64::from(plan.memory_mb),
+        },
+    )
+    .await
+    .id
+}
+
+/// `sites.create_with` generating the env once from the allocation,
+/// exactly as `POST /sites` does.
+pub async fn create_site(db: &Db, new: &NewSite) -> setu_db::Site {
+    let version = db
+        .apps()
+        .version(&new.app_id, &new.app_version)
+        .await
+        .unwrap();
+    let manifest: Manifest = serde_json::from_value(version.manifest).unwrap();
+    let sealer = test_sealer();
+    db.sites()
+        .create_with(new, |alloc| {
+            setu_jobs::resolve_site_env(
+                &manifest,
+                alloc,
+                &new.domain,
+                &new.owner_email,
+                &Default::default(),
+                &sealer,
+            )
         })
         .await
         .unwrap()
-        .id
+}
+
+/// A job row of `kind` for the fixture site (so the run has a cursor,
+/// a payload and `jobs.log`) and a context bound to it.
+pub async fn job_ctx(
+    db: &Db,
+    agent: &FakeAgent,
+    kind: &str,
+    site_id: &str,
+    payload: serde_json::Value,
+) -> (JobCtx, String, Arc<Mutex<Vec<String>>>) {
+    let site = db.sites().get(site_id).await.unwrap();
+    let job = db
+        .jobs()
+        .enqueue(kind, Some(site_id), Some(&site.server_id), Some(&payload))
+        .await
+        .unwrap();
+    let (ctx, logs) = ctx_with_logs(db.clone(), agent);
+    (ctx.with_job(&job.id), job.id, logs)
+}
+
+/// Finish a job driven by hand, so the site may take its next job.
+pub async fn finish_job(db: &Db, job_id: &str, ok: bool) {
+    db.jobs().finish(job_id, ok, None).await.unwrap();
+}
+
+/// Plaintext of the stored env: name → value.
+pub fn stored_env(site: &setu_db::Site) -> std::collections::BTreeMap<String, String> {
+    let sealer = test_sealer();
+    site.env
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| {
+            (
+                v["name"].as_str().unwrap().to_string(),
+                sealer.open(v["value"].as_str().unwrap()).unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// The password inside a `postgres://role:pw@host/db` URL.
+pub fn url_password(url: &str) -> String {
+    url.split(':')
+        .nth(2)
+        .and_then(|rest| rest.split('@').next())
+        .expect("password in url")
+        .to_string()
 }
 
 /// Poll until the job leaves `queued`/`running` (or `within` passes).

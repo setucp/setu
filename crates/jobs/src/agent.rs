@@ -179,7 +179,9 @@ pub mod testing {
         delays: HashMap<String, Duration>,
         in_flight: HashMap<String, usize>,
         max_in_flight: HashMap<String, usize>,
-        status_inactive: bool,
+        /// `Status` calls after this many report `active: false`.
+        status_inactive_after: Option<usize>,
+        listening_ports: Vec<u16>,
         write_envs: Vec<Vec<EnvVar>>,
         switch_versions: Vec<String>,
         log_lines: Vec<String>,
@@ -310,7 +312,34 @@ pub mod testing {
 
         /// What `Status` reports (`active: true` by default).
         pub fn set_status_active(&self, active: bool) {
-            self.lock().status_inactive = !active;
+            self.lock().status_inactive_after = if active { None } else { Some(0) };
+        }
+
+        /// The first `nth` `Status` calls report active, every later one
+        /// inactive (the app died after that many checks).
+        pub fn status_inactive_after(&self, nth: usize) {
+            self.lock().status_inactive_after = Some(nth);
+        }
+
+        /// TCP ports `Inventory` reports in `LISTEN` (none by default).
+        pub fn set_listening_ports(&self, ports: Vec<u16>) {
+            self.lock().listening_ports = ports;
+        }
+
+        /// Calls of `kind` stop being delayed.
+        pub fn clear_delay(&self, kind: &str) {
+            self.lock().delays.remove(kind);
+        }
+
+        /// The serialized commands of `kind`, in call order (secrets
+        /// included: tests only).
+        pub fn commands_of(&self, kind: &str) -> Vec<serde_json::Value> {
+            self.lock()
+                .commands
+                .iter()
+                .filter(|c| c["kind"] == kind)
+                .cloned()
+                .collect()
         }
 
         /// What `FetchLogs` reports (three canned lines by default).
@@ -356,7 +385,11 @@ pub mod testing {
                 _ => {}
             }
             let output = match cmd {
-                Command::Status { .. } => serde_json::json!({"active": !inner.status_inactive}),
+                Command::Status { .. } => {
+                    let active = inner.status_inactive_after.is_none_or(|after| n <= after);
+                    serde_json::json!({"active": active})
+                }
+                Command::Backup { .. } => serde_json::json!({"size_bytes": 4096}),
                 // Cursor `fake-<n>`: the lines after the first n.
                 Command::FetchLogs { cursor, lines, .. } => {
                     let from = cursor
@@ -375,9 +408,11 @@ pub mod testing {
                     })
                     .unwrap_or_default()
                 }
-                Command::Inventory => {
-                    serde_json::to_value(setu_proto::InventoryReport::default()).unwrap_or_default()
-                }
+                Command::Inventory => serde_json::to_value(setu_proto::InventoryReport {
+                    listening_ports: inner.listening_ports.clone(),
+                    ..Default::default()
+                })
+                .unwrap_or_default(),
                 _ => serde_json::json!({}),
             };
             let reply = CommandResult {

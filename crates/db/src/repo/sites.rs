@@ -101,6 +101,18 @@ impl std::fmt::Debug for NewSite {
     }
 }
 
+/// What `create` allocated, handed to the env builder of
+/// [`Sites::create_with`] before the row is inserted (spec §3: the env
+/// is generated exactly once, at creation, from the real allocation).
+#[derive(Debug, Clone)]
+pub struct Allocation {
+    pub server_id: String,
+    pub short_id: String,
+    pub port: i32,
+    pub db_name: String,
+    pub db_role: String,
+}
+
 /// Why `create` refused.
 #[derive(Debug, thiserror::Error)]
 pub enum CreateError {
@@ -183,6 +195,17 @@ impl<'a> Sites<'a> {
     /// `short_id` unique on that server, insert. `db_name` and
     /// `db_role` are `site_<short_id>`.
     pub async fn create(&self, new: &NewSite) -> Result<Site, CreateError> {
+        self.create_with(new, |_| Ok(new.env_sealed.clone())).await
+    }
+
+    /// [`create`](Self::create) whose stored env is built by `env` from
+    /// the allocation (short id, port, database names) inside the same
+    /// transaction; `new.env_sealed` is ignored. The builder must return
+    /// the SEALED env; its error aborts the create.
+    pub async fn create_with<F>(&self, new: &NewSite, env: F) -> Result<Site, CreateError>
+    where
+        F: FnOnce(&Allocation) -> Result<Value, AppError>,
+    {
         let mut tx = self.pool.begin().await.map_err(db_err)?;
 
         let taken: Option<String> =
@@ -281,6 +304,13 @@ impl<'a> Sites<'a> {
             }
         };
         let db_name = format!("site_{short_id}");
+        let env_sealed = env(&Allocation {
+            server_id: server.id.clone(),
+            short_id: short_id.clone(),
+            port,
+            db_name: db_name.clone(),
+            db_role: db_name.clone(),
+        })?;
 
         let site = sqlx::query_as!(
             Site,
@@ -300,7 +330,7 @@ impl<'a> Sites<'a> {
             new.domain,
             port,
             db_name,
-            new.env_sealed,
+            env_sealed,
             new.owner_email,
         )
         .fetch_one(&mut *tx)

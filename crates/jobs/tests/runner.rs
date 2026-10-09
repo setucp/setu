@@ -16,6 +16,7 @@ fn fast(concurrency: usize) -> RunnerConfig {
         renew_every: Duration::from_millis(200),
         installs_per_server: 2,
         idle_poll: Duration::from_millis(50),
+        verify_delay: Duration::ZERO,
     }
 }
 
@@ -110,6 +111,14 @@ async fn killed_runner_job_is_reclaimed_and_finishes() {
         .filter(|k| k.as_str() == "install")
         .count();
     assert_eq!(installs, 2, "transcript: {:?}", agent.transcript());
+    // Resumed from the cursor (`install`): the earlier steps ran once.
+    assert_eq!(
+        agent.call_count("site_create"),
+        1,
+        "{:?}",
+        agent.transcript()
+    );
+    assert_eq!(agent.call_count("create_database"), 1);
     let site = fx.db.sites().get(&fx.site_id).await.unwrap();
     assert_eq!(site.status, "running");
     second.abort();

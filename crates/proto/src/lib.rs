@@ -417,6 +417,11 @@ pub struct InventoryReport {
     pub routes: Vec<String>,
     /// Databases named `site_<short>`.
     pub databases: Vec<String>,
+    /// TCP ports in `LISTEN` on the host (`/proc/net/tcp{,6}`), sorted
+    /// and unique: provision `validate` refuses a site port already in
+    /// use by something other than the site's own unit.
+    #[serde(default)]
+    pub listening_ports: Vec<u16>,
 }
 
 /// `FetchLogs` output: lines after the given cursor and the next one.
@@ -685,6 +690,7 @@ mod tests {
             sites_on_disk: vec![short()],
             routes: vec!["setu-site-abcd1234".to_string()],
             databases: vec!["site_abcd1234".to_string()],
+            listening_ports: vec![22, 20000],
         };
         let v = serde_json::to_value(&inv).unwrap();
         assert_eq!(serde_json::from_value::<InventoryReport>(v).unwrap(), inv);

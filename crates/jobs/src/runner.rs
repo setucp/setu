@@ -3,14 +3,13 @@
 //! jobs whose lease expired (a dead runner), resets expired `running`
 //! jobs on boot, and limits `install` steps per server.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::{AgentClient, Clock, InstallSlots, JobCtx};
 use setu_common::{AppError, Sealer};
 use setu_db::{Db, Job};
-use setu_proto::Command;
-
-use crate::{agent_step, fail, log_step, AgentClient, Clock, InstallSlots, JobCtx};
 
 /// Runner tuning; [`Default`] is spec §6.
 #[derive(Debug, Clone)]
@@ -25,6 +24,8 @@ pub struct RunnerConfig {
     pub installs_per_server: usize,
     /// Sleep between empty claims.
     pub idle_poll: Duration,
+    /// Pause before the provision `verify` step (spec §6: 3 s).
+    pub verify_delay: Duration,
 }
 
 impl Default for RunnerConfig {
@@ -35,6 +36,7 @@ impl Default for RunnerConfig {
             renew_every: Duration::from_secs(20),
             installs_per_server: crate::INSTALLS_PER_SERVER,
             idle_poll: Duration::from_secs(1),
+            verify_delay: crate::VERIFY_DELAY,
         }
     }
 }
@@ -145,17 +147,18 @@ impl Worker {
 
     async fn dispatch(&self, job: &Job) -> Result<(), AppError> {
         let job_id = job.id.clone();
-        let ctx = JobCtx {
-            db: self.db.clone(),
-            agent: self.agent.clone(),
-            sealer: self.sealer.clone(),
-            clock: self.clock.clone(),
-            installs: self.installs.clone(),
-            log: Box::new(move |line: &str| {
+        let ctx = JobCtx::build(
+            self.db.clone(),
+            self.agent.clone(),
+            self.sealer.clone(),
+            self.clock.clone(),
+            self.installs.clone(),
+            Box::new(move |line: &str| {
                 tracing::info!(job_id = %job_id, "{line}");
             }),
-            job_id: Some(job.id.clone()),
-        };
+        )
+        .with_job(&job.id)
+        .with_verify_delay(self.config.verify_delay);
         let payload_str = |key: &str| {
             job.payload
                 .get(key)
@@ -179,7 +182,14 @@ impl Worker {
             }
             "backup_site" => {
                 let kind = payload_str("kind").unwrap_or_else(|| "manual".to_string());
-                crate::backup::run(&ctx, &site("backup_site")?, &kind).await
+                if kind != "manual" && kind != "scheduled" {
+                    return Err(AppError::validation(format!(
+                        "backup kind {kind} is not a job"
+                    )));
+                }
+                crate::backup::run(&ctx, &site("backup_site")?, &kind)
+                    .await
+                    .map(drop)
             }
             "restore_site" => {
                 let backup_id = payload_str("backup_id").ok_or_else(|| {
@@ -194,111 +204,39 @@ impl Worker {
                 })?;
                 crate::delete_backup::run(&ctx, &backup_id).await
             }
-            "env_update" => crate::env_update::run(&ctx, &site("env_update")?).await,
-            "restart_site" => restart(&ctx, &site("restart_site")?).await,
-            "stop_site" => stop_site(&ctx, &site("stop_site")?).await,
-            "start_site" => start_site(&ctx, &site("start_site")?).await,
+            "env_update" => {
+                let changes = open_changes(&self.sealer, &job.payload)?;
+                crate::env_update::run(&ctx, &site("env_update")?, &changes).await
+            }
+            kind @ ("restart_site" | "stop_site" | "start_site") => {
+                let op = crate::lifecycle::Op::from_job_kind(kind).expect("lifecycle kind");
+                crate::lifecycle::run(&ctx, &site(kind)?, op).await
+            }
             other => Err(AppError::validation(format!("unknown job kind {other}"))),
         }
     }
 }
 
-/// `restart_site` (no payload): stop then start, ending `running`.
-async fn restart(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
-    let site = ctx.db.sites().get(site_id).await?;
-    if site.status != "running" && site.status != "stopped" {
-        return Err(AppError::validation(format!(
-            "site {site_id} cannot restart from status {}",
-            site.status
-        )));
-    }
-    let _ = ctx.db.sites().set_status(site_id, "updating", None).await;
-    agent_step(
-        ctx,
-        site_id,
-        "stop",
-        &site.server_id,
-        Command::Stop {
-            site: site.short_id.clone(),
-        },
-    )
-    .await?;
-    agent_step(
-        ctx,
-        site_id,
-        "start",
-        &site.server_id,
-        Command::Start {
-            site: site.short_id.clone(),
-        },
-    )
-    .await?;
-    // `agent_step` already marked `failed` on error; only the success
-    // path reaches here.
-    match ctx.db.sites().set_status(site_id, "running", None).await {
-        Ok(_) => {
-            log_step(ctx, "finish", true, None).await;
-            Ok(())
-        }
-        Err(e) => Err(fail(ctx, site_id, "finish", e).await),
-    }
-}
-
-/// `stop_site` (no payload): stop the unit, ending `stopped`. Stopping an
-/// already-`stopped` site is an idempotent success (the agent call is
-/// still issued: the unit may have been started out of band).
-async fn stop_site(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
-    let site = ctx.db.sites().get(site_id).await?;
-    if site.status != "running" && site.status != "stopped" {
-        return Err(AppError::validation(format!(
-            "site {site_id} cannot stop from status {}",
-            site.status
-        )));
-    }
-    agent_step(
-        ctx,
-        site_id,
-        "stop",
-        &site.server_id,
-        Command::Stop {
-            site: site.short_id.clone(),
-        },
-    )
-    .await?;
-    match ctx.db.sites().set_status(site_id, "stopped", None).await {
-        Ok(_) => {
-            log_step(ctx, "finish", true, None).await;
-            Ok(())
-        }
-        Err(e) => Err(fail(ctx, site_id, "finish", e).await),
-    }
-}
-
-/// `start_site` (no payload): start the unit, ending `running`. Starting
-/// an already-`running` site is an idempotent success.
-async fn start_site(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
-    let site = ctx.db.sites().get(site_id).await?;
-    if site.status != "stopped" && site.status != "running" {
-        return Err(AppError::validation(format!(
-            "site {site_id} cannot start from status {}",
-            site.status
-        )));
-    }
-    agent_step(
-        ctx,
-        site_id,
-        "start",
-        &site.server_id,
-        Command::Start {
-            site: site.short_id.clone(),
-        },
-    )
-    .await?;
-    match ctx.db.sites().set_status(site_id, "running", None).await {
-        Ok(_) => {
-            log_step(ctx, "finish", true, None).await;
-            Ok(())
-        }
-        Err(e) => Err(fail(ctx, site_id, "finish", e).await),
-    }
+/// The `env_update` payload's `changes`: name → SEALED value (`PUT
+/// /sites/{id}/env` seals them; plaintext never sits in `jobs.payload`).
+fn open_changes(
+    sealer: &Sealer,
+    payload: &serde_json::Value,
+) -> Result<BTreeMap<String, String>, AppError> {
+    let Some(map) = payload.get("changes").and_then(|c| c.as_object()) else {
+        return Err(AppError::validation("env_update job needs payload.changes"));
+    };
+    map.iter()
+        .map(|(name, sealed)| {
+            let plain = sealed
+                .as_str()
+                .filter(|s| s.starts_with("v1:"))
+                .and_then(|s| sealer.open(s).ok())
+                .ok_or_else(|| {
+                    tracing::error!(name = %name, "env_update change is not sealed");
+                    AppError::internal()
+                })?;
+            Ok((name.clone(), plain))
+        })
+        .collect()
 }

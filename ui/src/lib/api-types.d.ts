@@ -430,10 +430,11 @@ export interface paths {
          * @description Validates the domain (unique → 409), the app version (must exist and
          *     parse; `image` manifests are rejected with `validation` — phase 2),
          *     the plan (must allow the app) and the server (explicit, or the
-         *     online server with the most free memory). Resolves env with the
-         *     operator-supplied `prompts`, seals secrets, stores the row as
-         *     `provisioning`, then enqueues `provision_site` carrying the prompts
-         *     (the runner re-resolves with them).
+         *     online server with the most free memory). Generates the env once,
+         *     from the allocated port and short id and the operator-supplied
+         *     `prompts`, seals it into the `provisioning` row in the same
+         *     transaction, then enqueues `provision_site` (which reads the stored
+         *     env and never regenerates it).
          */
         post: operations["create"];
         delete?: never;
@@ -522,9 +523,10 @@ export interface paths {
         /**
          * Update non-generated env vars (operator and above): only manifest
          *     entries spelled `value` or `prompt` may change (`generate`/`from`
-         *     are derived and rejected with `validation`). Writes the sealed copy,
-         *     issues a synchronous `WriteEnv` to the agent, then enqueues
-         *     `restart_site` so the new values take effect.
+         *     are derived and rejected with `validation`). Enqueues an
+         *     `env_update` job carrying the changes sealed; the job stores them,
+         *     rewrites the env file (never with `once` values) and restarts a
+         *     running site.
          */
         put: operations["env_put"];
         post?: never;
@@ -584,8 +586,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Retry a `failed` site: back to `provisioning` with a fresh
-         *     `provision_site` job carrying the original prompts (operator+).
+         * Retry a `failed` site: a fresh `provision_site` job from step 1 with
+         *     the same allocations and stored env (operator+).
          */
         post: operations["retry"];
         delete?: never;

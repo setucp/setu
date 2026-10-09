@@ -1,416 +1,423 @@
-//! Update state machine (spec §5, strategy `replace`).
+//! Update state machine (spec §6, strategy `replace`), named steps
+//! resumed from the job's cursor:
 //!
-//! Named steps: `validate`, `backup` (pre-update), `install`,
-//! `write_env`, `stop`, `switch_version`, `start`, `health`, `finish`.
+//! `validate` (V exists for the app and is `binary`), `env` (merge the
+//! stored env against V's manifest: `generate`/`prompt` values kept by
+//! name, new rules added, removed ones dropped, `once` never re-emitted;
+//! the old env and the old `SiteSpec` go SEALED into the job payload and
+//! the merged env into `sites.env`), `backup` (`pre_update`), `install`
+//! V (a bad checksum or hostile archive fails here, before `stop`: the
+//! running site is untouched), `stop`, `switch_version` V, `write_unit`,
+//! `write_env` (no `once`), `start`, `health`, `finish`.
 //!
-//! - The target manifest is loaded and image-rejected BEFORE anything:
-//!   no status change, no backup row, no agent call.
-//! - `install` runs before `stop`: a checksum mismatch fails with the
-//!   old site still `running` (Review-Focus #5, no downtime).
-//! - Any failure at or after `stop` rolls back: `SwitchVersion(old)` +
-//!   `Start`, site back to `running` on the old version, error contains
-//!   `rollback`.
-//! - The env is `setu_manifest::merge(stored, new manifest)`: generated
-//!   and prompt values kept, `value`/`from` re-resolved, `once` values
-//!   never re-emitted (they stay sealed in storage for reveal).
+//! Failure before `stop`: the site stays `running` on the old version
+//! and its stored env is put back. Failure at or after `stop`: the
+//! `rollback` step — `stop`, `switch_version` old, `write_unit` old,
+//! `write_env` old (no `once`), `restore` from the `pre_update` backup
+//! (database replaced, dirs swapped: the new version may have migrated;
+//! only when the new version was started, ledger R93), `start`,
+//! `health` — leaves the site `running` on the old version and the job
+//! `failed` with an error starting `rollback:`. A rollback that fails
+//! leaves the site `failed` (`failed_step = rollback`).
 
 use setu_common::{AppError, ErrorCode};
 use setu_db::Site;
-use setu_manifest::{EnvSource, EnvSpec, Manifest};
-use setu_proto::Command;
+use setu_proto::{Command, SiteSpec};
 
 use crate::{
-    build_site, call_agent, call_install, fail, job_prompts, load_manifest, log_step, require_ok,
-    resolve_error, resolve_input, sealed_env, stored_plaintext, to_proto_envs, JobCtx,
+    binary_ref, build_spec, fully_sealed_env, load_manifest, open_env, register_secrets,
+    resolve_error, resolve_input, sealed_env, site_env, stored_db_url, without_once, JobCtx, Steps,
 };
+
+/// The steps, in order (spec §6); `rollback` is the cursor of a rollback.
+pub const STEPS: &[&str] = &[
+    "validate",
+    "env",
+    "backup",
+    "install",
+    "stop",
+    "switch_version",
+    "write_unit",
+    "write_env",
+    "start",
+    "health",
+    "finish",
+];
+
+/// Steps whose failure rolls back (the old site was stopped); from
+/// `start` on the new version ran, so the rollback restores the backup.
+const ROLLBACK_FROM: &str = "stop";
+const RESTORE_FROM: &str = "start";
+
+/// What a rollback needs, kept sealed in the job payload.
+struct Old {
+    version: String,
+    env: Vec<setu_manifest::EnvVar>,
+    spec: SiteSpec,
+    /// The `pre_update` backup, once taken.
+    backup_id: Option<String>,
+}
 
 /// Update the site to `to_version`.
 pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), AppError> {
     let site = ctx.db.sites().get(site_id).await?;
-    if site.status != "running" {
+    let cursor = ctx.cursor().await;
+    if cursor.as_deref() == Some("rollback") {
+        // Interrupted mid-rollback: run it again (every step idempotent).
+        let failed = ctx
+            .payload_str("failed_step")
+            .await
+            .unwrap_or_else(|| "health".to_string());
+        let old = load_old(ctx).await?;
+        return Err(rollback(ctx, &site, &old, &failed, "resumed after interruption").await);
+    }
+    if cursor.is_none() && site.status != "running" {
         return Err(AppError::validation(format!(
             "site {site_id} is not running (status: {})",
             site.status
         )));
     }
-    let new_manifest = match load_manifest(&ctx.db, &site.app_id, to_version).await {
-        Ok(m) => m,
-        Err(e) => return Err(fail(ctx, site_id, "validate", e).await),
-    };
-    if new_manifest.run.is_image() {
-        return Err(AppError::validation(
-            "image runtime not available in this version",
-        ));
-    }
-    let old_manifest = match load_manifest(&ctx.db, &site.app_id, &site.app_version).await {
-        Ok(m) => m,
-        Err(e) => return Err(fail(ctx, site_id, "validate", e).await),
-    };
-    let plan = match ctx.db.plans().get(&site.plan_id).await {
-        Ok(p) => p,
-        Err(e) => return Err(fail(ctx, site_id, "validate", e).await),
-    };
-    // Specs for both versions are built before anything mutates: build
-    // failures (missing target, unresolvable env) abort pre-status.
-    // Prompt answers ride on the job payload (the API recovers them from
-    // the site's provision job); direct `run` callers resolve without.
-    let prompts = job_prompts(ctx).await;
-    // The old version must still be buildable: rollback returns to it.
-    if let Err(e) = crate::build_spec(&plan, &site, &old_manifest) {
-        return Err(fail(ctx, site_id, "validate", e).await);
-    }
-    let new_built = match build_site(&plan, &site, &new_manifest, &prompts) {
-        Ok(b) => b,
-        Err(e) => return Err(fail(ctx, site_id, "validate", e).await),
-    };
-    let server_id = site.server_id.clone();
-    let old_version = site.app_version.clone();
+    let steps = Steps::run_from(cursor.as_deref(), STEPS);
 
-    // The file on disk holds the CURRENT values (provision wrote them,
-    // minus `once` secrets deleted after first health; the sealed DB copy
-    // retains everything). The merged env refreshes author `value` and
-    // derived `from` entries while keeping stored `generate`/`prompt`
-    // secrets — an update must never rotate them.
-    let current = match stored_plaintext(&site, &ctx.sealer) {
-        Ok(m) => m,
-        Err(e) => return Err(fail(ctx, site_id, "validate", e).await),
+    let new_manifest = match steps
+        .run(ctx, "validate", load_target(ctx, &site, to_version))
+        .await
+    {
+        Ok(Some(m)) => m,
+        Ok(None) => load_target(ctx, &site, to_version).await?,
+        Err(e) => return Err(e),
     };
-    let existing: Vec<setu_manifest::EnvVar> = current
-        .iter()
-        .map(|(name, (value, secret, once))| setu_manifest::EnvVar {
-            name: name.clone(),
-            value: value.clone(),
-            secret: *secret,
-            once: *once,
-        })
-        .collect();
-    // The role password was minted once at provision and lives in
-    // Postgres: re-resolve `postgres_url` from the stored URL, never a
-    // fresh password (that would desynchronise the file from the role).
-    let db_url = new_manifest
-        .env
-        .iter()
-        .filter(|(_, spec)| matches!(spec, EnvSpec::From(f) if f.from == EnvSource::PostgresUrl))
-        .find_map(|(name, _)| current.get(name).map(|(v, _, _)| v.clone()))
-        .or_else(|| {
-            new_built
-                .env_manifest
-                .iter()
-                .find(|v| {
-                    matches!(new_manifest.env.get(&v.name),
-                        Some(EnvSpec::From(f)) if f.from == EnvSource::PostgresUrl)
-                })
-                .map(|v| v.value.clone())
-        })
-        .unwrap_or_default();
-    let mut input = resolve_input(&site, db_url, &prompts);
-    let merged = match setu_manifest::merge(&existing, &new_manifest, &mut input) {
-        Ok(m) => m,
-        Err(e) => return Err(fail(ctx, site_id, "validate", resolve_error(e)).await),
+    let plan = ctx.db.plans().get(&site.plan_id).await?;
+    let new_spec = build_spec(&plan, &site, &new_manifest)?;
+    let binary = binary_ref(&new_manifest)?;
+
+    // `env`: merge and park the old state sealed in the payload. On
+    // resume the old state comes back from the payload and the merged env
+    // from `sites.env`.
+    let mut old = match steps
+        .run(ctx, "env", env_step(ctx, &site, &new_manifest))
+        .await
+    {
+        Ok(Some(old)) => old,
+        Ok(None) => load_old(ctx).await?,
+        Err(e) => return Err(abort(ctx, &site, None, e).await),
     };
-    // Storage keeps the sealed `once` values the merge never re-emits.
-    let mut stored_after = merged.clone();
-    stored_after.extend(
+    let site = ctx.db.sites().get(site_id).await?;
+    let merged = without_once(&site_env(ctx, &site)?);
+    let server = site.server_id.as_str();
+    let short = site.short_id.clone();
+
+    match steps
+        .run(
+            ctx,
+            "backup",
+            crate::backup::take(ctx, &site, "pre_update", "pre_backup_id"),
+        )
+        .await
+    {
+        Ok(Some(id)) => old.backup_id = Some(id),
+        Ok(None) => {}
+        Err(e) => return Err(abort(ctx, &site, Some(&old), e).await),
+    }
+    if let Err(e) = steps
+        .run(
+            ctx,
+            "install",
+            ctx.agent_ok(
+                server,
+                Command::Install {
+                    site: short.clone(),
+                    binary,
+                },
+            ),
+        )
+        .await
+    {
+        return Err(abort(ctx, &site, Some(&old), e).await);
+    }
+
+    let after_stop: [(&'static str, Command); 6] = [
+        (
+            "stop",
+            Command::Stop {
+                site: short.clone(),
+            },
+        ),
+        (
+            "switch_version",
+            Command::SwitchVersion {
+                site: short.clone(),
+                version: to_version.to_string(),
+            },
+        ),
+        (
+            "write_unit",
+            Command::WriteUnit {
+                site: new_spec.clone(),
+            },
+        ),
+        (
+            "write_env",
+            Command::WriteEnv {
+                site: short.clone(),
+                env: merged,
+            },
+        ),
+        (
+            "start",
+            Command::Start {
+                site: short.clone(),
+            },
+        ),
+        ("health", Command::Health { site: new_spec }),
+    ];
+    debug_assert_eq!(after_stop[0].0, ROLLBACK_FROM);
+    for (name, cmd) in after_stop {
+        if let Err(e) = steps.run(ctx, name, ctx.agent_ok(server, cmd)).await {
+            return Err(rollback(ctx, &site, &old, name, &e.message).await);
+        }
+    }
+
+    steps
+        .run(ctx, "finish", async {
+            ctx.db.sites().set_version(&site.id, to_version).await?;
+            ctx.db.sites().set_status(&site.id, "running", None).await?;
+            Ok(())
+        })
+        .await?;
+    Ok(())
+}
+
+/// `validate`: V exists for the app and is a binary manifest.
+async fn load_target(
+    ctx: &JobCtx,
+    site: &Site,
+    to_version: &str,
+) -> Result<setu_manifest::Manifest, AppError> {
+    let manifest = load_manifest(&ctx.db, &site.app_id, to_version).await?;
+    binary_ref(&manifest)?;
+    Ok(manifest)
+}
+
+/// `env`: merge the stored env against V; store the old env and the old
+/// spec sealed in the payload, the merged env in `sites.env` (with the
+/// sealed `once` values kept for reveal), and mark the site `updating`.
+async fn env_step(
+    ctx: &JobCtx,
+    site: &Site,
+    new_manifest: &setu_manifest::Manifest,
+) -> Result<Old, AppError> {
+    let old_manifest = load_manifest(&ctx.db, &site.app_id, &site.app_version).await?;
+    let plan = ctx.db.plans().get(&site.plan_id).await?;
+    let old_spec = build_spec(&plan, site, &old_manifest)?;
+    let existing = site_env(ctx, site)?;
+    // The role password lives in Postgres since provision: a
+    // `postgres_url` is re-resolved from the stored URL, never a fresh
+    // password (that would desynchronise the file from the role).
+    let db_url = stored_db_url(&old_manifest, &existing)
+        .unwrap_or_default()
+        .to_string();
+    let mut input = resolve_input(
+        &site.short_id,
+        u16::try_from(site.port).map_err(|_| AppError::internal())?,
+        &site.domain,
+        &site.owner_email,
+        db_url,
+        &Default::default(),
+    );
+    let merged =
+        setu_manifest::merge(&existing, new_manifest, &mut input).map_err(resolve_error)?;
+    register_secrets(ctx, &merged);
+    let mut stored = merged.clone();
+    stored.extend(
         existing
             .iter()
             .filter(|v| v.once && !merged.iter().any(|m| m.name == v.name))
             .cloned(),
     );
-    // Rollback restores the previous file, without `once` values.
-    let current_proto = to_proto_envs(
-        &existing
-            .iter()
-            .filter(|v| !v.once)
-            .cloned()
-            .collect::<Vec<_>>(),
-    );
+    let spec_json = serde_json::to_string(&old_spec).map_err(|_| AppError::internal())?;
+    ctx.payload_set("old_version", serde_json::json!(site.app_version))
+        .await?;
+    ctx.payload_set("old_env", fully_sealed_env(&ctx.sealer, &existing))
+        .await?;
+    ctx.payload_set("old_spec", serde_json::json!(ctx.sealer.seal(&spec_json)))
+        .await?;
+    ctx.db
+        .sites()
+        .set_status(&site.id, "updating", None)
+        .await?;
+    ctx.db
+        .sites()
+        .set_env(&site.id, &sealed_env(&ctx.sealer, &stored))
+        .await?;
+    Ok(Old {
+        version: site.app_version.clone(),
+        env: existing,
+        spec: old_spec,
+        backup_id: None,
+    })
+}
 
-    log_step(ctx, "validate", true, None).await;
-    ctx.db.sites().set_status(site_id, "updating", None).await?;
-
-    if let Err(e) = pre_update_backup(ctx, &site, &old_manifest).await {
-        log_step(ctx, "backup", false, Some(&e.message.clone())).await;
-        let _ = ctx.db.sites().set_status(site_id, "running", None).await;
-        return Err(e);
-    }
-    log_step(ctx, "backup", true, None).await;
-
-    // Install beside the old version BEFORE stopping: checksum (or any
-    // install) failure leaves the old site untouched and `running`.
-    let installed = match call_install(
-        ctx,
-        &server_id,
-        Command::Install {
-            site: site.short_id.clone(),
-            binary: new_built.binary.clone(),
-        },
-    )
-    .await
-    {
-        Ok(result) => require_ok(result)
-            .map(|_| ())
-            .map_err(|msg| AppError::new(ErrorCode::Internal, msg)),
-        Err(e) => Err(AppError::from(e)),
+/// The old state from the payload (resume).
+async fn load_old(ctx: &JobCtx) -> Result<Old, AppError> {
+    let corrupt = || {
+        tracing::error!("update payload lacks the sealed old state");
+        AppError::internal()
     };
-    if let Err(e) = installed {
-        return abort_running(ctx, site_id, "install", e).await;
-    }
-    log_step(ctx, "install", true, None).await;
-
-    // Write the merged env BEFORE stopping: the old process keeps its
-    // loaded env and is unaffected by the file swap. On failure the
-    // previous file is restored best-effort and the old site stays up.
-    if let Err(e) = write_env_file(ctx, &server_id, &site.short_id, &to_proto_envs(&merged)).await {
-        let _ = write_env_file(ctx, &server_id, &site.short_id, &current_proto).await;
-        return abort_running(ctx, site_id, "write_env", e).await;
-    }
-    log_step(ctx, "write_env", true, None).await;
-
-    if let Err(e) = update_call(
-        ctx,
-        "stop",
-        &server_id,
-        Command::Stop {
-            site: site.short_id.clone(),
-        },
-    )
-    .await
-    {
-        return Err(rollback(ctx, &site, &old_version, "stop", e, &current_proto).await);
-    }
-    log_step(ctx, "stop", true, None).await;
-
-    if let Err(e) = update_call(
-        ctx,
-        "switch_version",
-        &server_id,
-        Command::SwitchVersion {
-            site: site.short_id.clone(),
-            version: to_version.to_string(),
-        },
-    )
-    .await
-    {
-        return Err(rollback(
-            ctx,
-            &site,
-            &old_version,
-            "switch_version",
-            e,
-            &current_proto,
-        )
-        .await);
-    }
-    log_step(ctx, "switch_version", true, None).await;
-
-    if let Err(e) = update_call(
-        ctx,
-        "start",
-        &server_id,
-        Command::Start {
-            site: site.short_id.clone(),
-        },
-    )
-    .await
-    {
-        return Err(rollback(ctx, &site, &old_version, "start", e, &current_proto).await);
-    }
-    log_step(ctx, "start", true, None).await;
-
-    if let Err(e) = update_call(
-        ctx,
-        "health",
-        &server_id,
-        Command::Health {
-            site: new_built.spec.clone(),
-        },
-    )
-    .await
-    {
-        return Err(rollback(ctx, &site, &old_version, "health", e, &current_proto).await);
-    }
-    log_step(ctx, "health", true, None).await;
-
-    let sealed = sealed_env(&ctx.sealer, &stored_after);
-    if let Err(e) = ctx.db.sites().set_env(site_id, &sealed).await {
-        return Err(fail(ctx, site_id, "finish", e).await);
-    }
-    ctx.db.sites().set_version(site_id, to_version).await?;
-    match ctx.db.sites().set_status(site_id, "running", None).await {
-        Ok(_) => {
-            log_step(ctx, "finish", true, None).await;
-            Ok(())
-        }
-        Err(e) => {
-            log_step(ctx, "finish", false, Some(&e.message.clone())).await;
-            Err(e)
-        }
-    }
+    let version = ctx.payload_str("old_version").await.ok_or_else(corrupt)?;
+    let env = open_env(
+        &ctx.payload_get("old_env").await.ok_or_else(corrupt)?,
+        &ctx.sealer,
+    )?;
+    register_secrets(ctx, &env);
+    let sealed_spec = ctx.payload_str("old_spec").await.ok_or_else(corrupt)?;
+    let spec_json = ctx.sealer.open(&sealed_spec).map_err(|_| corrupt())?;
+    let spec = serde_json::from_str(&spec_json).map_err(|_| corrupt())?;
+    Ok(Old {
+        version,
+        env,
+        spec,
+        backup_id: ctx.payload_str("pre_backup_id").await,
+    })
 }
 
-/// One agent `WriteEnv`: returns the error without touching site
-/// status; the caller picks the recovery (abort vs rollback).
-async fn write_env_file(
-    ctx: &JobCtx,
-    server_id: &str,
-    short: &str,
-    env: &[setu_proto::EnvVar],
-) -> Result<(), AppError> {
-    match call_agent(
-        ctx,
-        server_id,
-        Command::WriteEnv {
-            site: short.to_string(),
-            env: env.to_vec(),
-        },
-    )
-    .await
-    {
-        Ok(result) => require_ok(result)
-            .map(|_| ())
-            .map_err(|msg| AppError::new(ErrorCode::Internal, msg)),
-        Err(e) => Err(AppError::from(e)),
-    }
-}
-
-/// One agent call for the update flow: returns the error without touching
-/// site status; the caller picks the recovery (abort vs rollback).
-async fn update_call(
-    ctx: &JobCtx,
-    _step: &str,
-    server_id: &str,
-    cmd: Command,
-) -> Result<(), AppError> {
-    match call_agent(ctx, server_id, cmd).await {
-        Ok(result) => require_ok(result)
-            .map(|_| ())
-            .map_err(|msg| AppError::new(ErrorCode::Internal, msg)),
-        Err(e) => Err(AppError::from(e)),
-    }
-}
-
-/// Pre-stop failure: the old site is untouched, back to `running`.
-async fn abort_running(
-    ctx: &JobCtx,
-    site_id: &str,
-    step: &str,
-    err: AppError,
-) -> Result<(), AppError> {
-    let msg = err.message.clone();
-    log_step(ctx, step, false, Some(&msg)).await;
-    let _ = ctx.db.sites().set_status(site_id, "running", None).await;
-    Err(err)
-}
-
-/// Post-stop failure: restore the previous env file (the update may
-/// have written new values, e.g. a poisoned default — the old binary
-/// must boot with its old env), swap back, start, site `running` on the
-/// old version. The error always contains `rollback`. If the switch-back
-/// itself fails the site is `failed` (never claim running-on-old);
-/// only a successful switch-back AND start restores `running`.
-async fn rollback(
-    ctx: &JobCtx,
-    site: &Site,
-    old_version: &str,
-    step: &str,
-    cause: AppError,
-    old_env: &[setu_proto::EnvVar],
-) -> AppError {
-    let cause_msg = cause.message.clone();
-    log_step(ctx, step, false, Some(&cause_msg)).await;
-    if write_env_file(ctx, &site.server_id, &site.short_id, old_env)
-        .await
-        .is_err()
-    {
-        log_step(ctx, "rollback", false, Some("env restore failed")).await;
-    }
-    let switched = matches!(
-        call_agent(
-            ctx,
-            &site.server_id,
-            Command::SwitchVersion {
-                site: site.short_id.clone(),
-                version: old_version.to_string(),
-            },
-        )
-        .await
-        .map(require_ok),
-        Ok(Ok(_))
-    );
-    let started = if switched {
-        matches!(
-            call_agent(
-                ctx,
-                &site.server_id,
-                Command::Start {
-                    site: site.short_id.clone(),
-                },
-            )
-            .await
-            .map(require_ok),
-            Ok(Ok(_))
-        )
-    } else {
-        false
-    };
-    if switched && started {
-        let _ = ctx.db.sites().set_status(&site.id, "running", None).await;
-        log_step(ctx, "rollback", true, None).await;
-    } else {
+/// Failure before `stop`: the old site never stopped. Put its env back
+/// (when `env` already stored the merged one) and leave it `running`.
+async fn abort(ctx: &JobCtx, site: &Site, old: Option<&Old>, err: AppError) -> AppError {
+    if let Some(old) = old {
         let _ = ctx
             .db
             .sites()
-            .set_status(&site.id, "failed", Some(step))
+            .set_env(&site.id, &sealed_env(&ctx.sealer, &old.env))
             .await;
-        if switched {
-            log_step(ctx, "rollback", false, Some("start failed")).await;
-        } else {
-            log_step(ctx, "rollback", false, Some("switch-back failed")).await;
-        }
     }
-    AppError::new(
-        ErrorCode::Internal,
-        format!("rollback: {step} failed: {cause_msg}"),
-    )
+    let _ = ctx.db.sites().set_status(&site.id, "running", None).await;
+    err
 }
 
-/// `pre_update` backup row plus the agent `Backup` call. Failure aborts
-/// the update before anything mutates.
-async fn pre_update_backup(ctx: &JobCtx, site: &Site, manifest: &Manifest) -> Result<(), AppError> {
-    let row = ctx.db.backups().create(site, "pre_update").await?;
-    match call_agent(
-        ctx,
-        &site.server_id,
-        Command::Backup {
-            site: site.short_id.clone(),
-            db: site.db_name.clone(),
-            dirs: manifest.backup.dirs.clone(),
-            backup_id: row.id.clone(),
-        },
-    )
-    .await
-    {
-        Ok(result) if result.ok => {
-            let size = result.output.get("size_bytes").and_then(|v| v.as_i64());
+/// Roll back to the old version after `failed_step` failed (see module
+/// docs). Returns the job's error: `rollback: …` when the site is
+/// `running` on the old version again, `rollback failed: …` when not.
+async fn rollback(
+    ctx: &JobCtx,
+    site: &Site,
+    old: &Old,
+    failed_step: &str,
+    cause: &str,
+) -> AppError {
+    let _ = ctx
+        .payload_set("failed_step", serde_json::json!(failed_step))
+        .await;
+    let restore = STEPS
+        .iter()
+        .position(|s| *s == failed_step)
+        .zip(STEPS.iter().position(|s| *s == RESTORE_FROM))
+        .is_some_and(|(failed, from)| failed >= from);
+    let done = ctx
+        .step("rollback", rollback_steps(ctx, site, old, restore))
+        .await;
+    match done {
+        Ok(()) => {
             let _ = ctx
                 .db
-                .backups()
-                .set_status(&row.id, "completed", size)
+                .sites()
+                .set_env(&site.id, &sealed_env(&ctx.sealer, &old.env))
                 .await;
-            Ok(())
-        }
-        Ok(result) => {
-            let _ = ctx.db.backups().set_status(&row.id, "failed", None).await;
-            Err(AppError::new(
+            let _ = ctx.db.sites().set_status(&site.id, "running", None).await;
+            AppError::new(
                 ErrorCode::Internal,
-                result
-                    .error
-                    .unwrap_or_else(|| "agent command failed".to_string()),
-            ))
+                format!(
+                    "rollback: {failed_step} failed ({cause}); running {} again",
+                    old.version
+                ),
+            )
         }
         Err(e) => {
-            let _ = ctx.db.backups().set_status(&row.id, "failed", None).await;
-            Err(AppError::from(e))
+            let _ = ctx
+                .db
+                .sites()
+                .set_status(&site.id, "failed", Some("rollback"))
+                .await;
+            AppError::new(
+                ErrorCode::Internal,
+                format!(
+                    "rollback failed: {} (after {failed_step} failed: {cause})",
+                    e.message
+                ),
+            )
         }
     }
+}
+
+async fn rollback_steps(
+    ctx: &JobCtx,
+    site: &Site,
+    old: &Old,
+    restore: bool,
+) -> Result<(), AppError> {
+    let server = site.server_id.as_str();
+    let short = site.short_id.clone();
+    ctx.agent_ok(
+        server,
+        Command::Stop {
+            site: short.clone(),
+        },
+    )
+    .await?;
+    ctx.agent_ok(
+        server,
+        Command::SwitchVersion {
+            site: short.clone(),
+            version: old.version.clone(),
+        },
+    )
+    .await?;
+    ctx.agent_ok(
+        server,
+        Command::WriteUnit {
+            site: old.spec.clone(),
+        },
+    )
+    .await?;
+    ctx.agent_ok(
+        server,
+        Command::WriteEnv {
+            site: short.clone(),
+            env: without_once(&old.env),
+        },
+    )
+    .await?;
+    if restore {
+        let backup_id = old
+            .backup_id
+            .clone()
+            .ok_or_else(|| AppError::new(ErrorCode::Internal, "no pre_update backup to restore"))?;
+        let old_manifest = load_manifest(&ctx.db, &site.app_id, &old.version).await?;
+        ctx.agent_ok(
+            server,
+            Command::Restore {
+                site: short.clone(),
+                db: site.db_name.clone(),
+                role: site.db_role.clone(),
+                dirs: old_manifest.backup.dirs.clone(),
+                backup_id,
+            },
+        )
+        .await?;
+    }
+    ctx.agent_ok(
+        server,
+        Command::Start {
+            site: short.clone(),
+        },
+    )
+    .await?;
+    ctx.agent_ok(
+        server,
+        Command::Health {
+            site: old.spec.clone(),
+        },
+    )
+    .await?;
+    Ok(())
 }

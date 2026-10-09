@@ -1,11 +1,13 @@
 //! Site state machines over an [`AgentClient`] (spec §5, plan Task 6).
 //!
 //! Each public `run` function drives one job kind to completion:
-//! [`provision`], [`update`], [`backup`], [`restore`], [`delete`], with
-//! [`runner`] claiming jobs from the Postgres queue. Every step logs
-//! `step <name>: ok` / `step <name>: error <msg>` through [`JobCtx::log`]
-//! (and into `jobs.log` when the context carries a job id). Log lines
-//! never contain env values: only step names and agent error one-liners.
+//! [`provision`], [`update`], [`backup`], [`restore`], [`delete`],
+//! [`delete_backup`], [`env_update`], [`lifecycle`], with [`runner`]
+//! claiming jobs from the Postgres queue. Every step runs through
+//! [`JobCtx::step`]: it stores the step as the job's cursor, then logs
+//! `step <name>: ok` / `step <name>: error <msg>` (into `jobs.log` when
+//! the context carries a job id) with every registered secret replaced
+//! by `***`. A reclaimed job resumes from its cursor ([`Steps`]).
 //!
 //! Retry policy: agent calls go through [`call_agent`], which issues
 //! exactly one fresh command after [`AgentError::Timeout`] or
@@ -15,8 +17,10 @@
 //! step name, update rolls back to the old version.
 
 use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use rand::SeedableRng;
 use setu_common::{AppError, ErrorCode, Sealer};
@@ -29,6 +33,7 @@ pub mod clock;
 pub mod delete;
 pub mod delete_backup;
 pub mod env_update;
+pub mod lifecycle;
 pub mod provision;
 pub mod restore;
 pub mod runner;
@@ -73,10 +78,15 @@ impl Default for InstallSlots {
     }
 }
 
+/// Default pause between `set_route` and the provision `verify` status
+/// check (spec §6: "`status` is active 3 s after the route").
+pub const VERIFY_DELAY: Duration = Duration::from_secs(3);
+
 /// Shared context for every state machine.
 ///
-/// Holds the [`Sealer`], so [`std::fmt::Debug`] is manual and redacts it;
-/// the `log` closure must never be called with env values.
+/// Holds the [`Sealer`] and the secrets registered for redaction, so
+/// [`std::fmt::Debug`] is manual and redacts them; the `log` closure
+/// only ever receives redacted lines.
 pub struct JobCtx {
     pub db: Db,
     pub agent: Arc<dyn AgentClient>,
@@ -85,6 +95,11 @@ pub struct JobCtx {
     pub installs: InstallSlots,
     pub log: Box<dyn Fn(&str) + Send + Sync>,
     pub job_id: Option<String>,
+    /// Pause before the provision `verify` step ([`VERIFY_DELAY`]).
+    pub verify_delay: Duration,
+    /// Plaintext secrets of this run, scrubbed from every log line and
+    /// error message ([`JobCtx::redact`]).
+    secrets: Mutex<Vec<String>>,
 }
 
 impl JobCtx {
@@ -96,14 +111,35 @@ impl JobCtx {
         sealer: Sealer,
         log: impl Fn(&str) + Send + Sync + 'static,
     ) -> Self {
+        Self::build(
+            db,
+            agent,
+            sealer,
+            Arc::new(SystemClock),
+            InstallSlots::default(),
+            Box::new(log),
+        )
+    }
+
+    /// Every field explicit (the runner's constructor).
+    pub fn build(
+        db: Db,
+        agent: Arc<dyn AgentClient>,
+        sealer: Sealer,
+        clock: Arc<dyn Clock>,
+        installs: InstallSlots,
+        log: Box<dyn Fn(&str) + Send + Sync>,
+    ) -> Self {
         Self {
             db,
             agent,
             sealer,
-            clock: Arc::new(SystemClock),
-            installs: InstallSlots::default(),
-            log: Box::new(log),
+            clock,
+            installs,
+            log,
             job_id: None,
+            verify_delay: VERIFY_DELAY,
+            secrets: Mutex::new(Vec::new()),
         }
     }
 
@@ -112,9 +148,125 @@ impl JobCtx {
         self
     }
 
+    pub fn with_verify_delay(mut self, delay: Duration) -> Self {
+        self.verify_delay = delay;
+        self
+    }
+
     /// The server's `install` semaphore (spec §6: two per server).
     pub fn installs_for(&self, server_id: &str) -> Arc<Semaphore> {
         self.installs.installs_for(server_id)
+    }
+
+    /// Register a plaintext secret: from now on it is replaced by `***`
+    /// in every log line and step error of this context.
+    pub fn add_secret(&self, secret: &str) {
+        if secret.len() < 4 {
+            return; // too short to scrub without mangling ordinary text
+        }
+        let mut secrets = self.secrets.lock().expect("secrets lock");
+        if !secrets.iter().any(|s| s == secret) {
+            secrets.push(secret.to_string());
+        }
+    }
+
+    /// `text` with every registered secret replaced by `***`.
+    pub fn redact(&self, text: &str) -> String {
+        let secrets = self.secrets.lock().expect("secrets lock");
+        secrets
+            .iter()
+            .fold(text.to_string(), |acc, s| acc.replace(s.as_str(), "***"))
+    }
+
+    /// Append one line (redacted) to the context log and, when the
+    /// context carries a job id, to `jobs.log`.
+    pub async fn log(&self, line: &str) {
+        let line = self.redact(line);
+        (self.log)(&line);
+        if let Some(id) = &self.job_id {
+            let _ = self.db.jobs().append_log(id, &format!("{line}\n")).await;
+        }
+    }
+
+    /// The job's step cursor (`payload.step`); `None` without a job.
+    pub async fn cursor(&self) -> Option<String> {
+        let id = self.job_id.as_ref()?;
+        self.db.jobs().get_step(id).await.ok().flatten()
+    }
+
+    /// One payload key of the job; `None` without a job or key.
+    pub async fn payload_get(&self, key: &str) -> Option<serde_json::Value> {
+        let id = self.job_id.as_ref()?;
+        let job = self.db.jobs().get(id).await.ok()?;
+        job.payload.get(key).cloned().filter(|v| !v.is_null())
+    }
+
+    /// [`payload_get`](Self::payload_get) for a string value.
+    pub async fn payload_str(&self, key: &str) -> Option<String> {
+        self.payload_get(key)
+            .await
+            .and_then(|v| v.as_str().map(str::to_string))
+    }
+
+    /// Set one payload key (a no-op without a job: direct `run` callers
+    /// never resume, so they keep their state in locals).
+    pub async fn payload_set(&self, key: &str, value: serde_json::Value) -> Result<(), AppError> {
+        let Some(id) = &self.job_id else {
+            return Ok(());
+        };
+        let job = self.db.jobs().get(id).await?;
+        let mut payload = match job.payload {
+            serde_json::Value::Object(map) => map,
+            _ => serde_json::Map::new(),
+        };
+        payload.insert(key.to_string(), value);
+        self.db
+            .jobs()
+            .set_payload(id, &serde_json::Value::Object(payload))
+            .await
+    }
+
+    /// Run one named step: store it as the job's cursor first (a resumed
+    /// job re-runs it — every step is idempotent), run `fut`, log `step
+    /// <name>: ok` or `step <name>: error <msg>` with secrets redacted
+    /// (the returned error is redacted too).
+    pub async fn step<T, F>(&self, name: &str, fut: F) -> Result<T, AppError>
+    where
+        F: Future<Output = Result<T, AppError>>,
+    {
+        if let Some(id) = &self.job_id {
+            self.db.jobs().set_step(id, name).await?;
+        }
+        match fut.await {
+            Ok(v) => {
+                self.log(&format!("step {name}: ok")).await;
+                Ok(v)
+            }
+            Err(mut e) => {
+                e.message = self.redact(&e.message);
+                self.log(&format!("step {name}: error {}", e.message)).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Call the agent and require `ok`: the output, or the agent's
+    /// one-line error as `internal` (redacted by the step). `install`
+    /// holds one of the server's install slots.
+    pub(crate) async fn agent_ok(
+        &self,
+        server_id: &str,
+        cmd: setu_proto::Command,
+    ) -> Result<serde_json::Value, AppError> {
+        let called = if matches!(cmd, setu_proto::Command::Install { .. }) {
+            call_install(self, server_id, cmd).await
+        } else {
+            call_agent(self, server_id, cmd).await
+        };
+        match called {
+            Ok(result) => require_ok(result).map_err(|msg| AppError::new(ErrorCode::Internal, msg)),
+            Err(e) => Err(AppError::from(e)),
+        }
     }
 }
 
@@ -124,30 +276,63 @@ impl std::fmt::Debug for JobCtx {
             .field("db", &self.db)
             .field("agent", &"AgentClient")
             .field("sealer", &"[redacted]")
+            .field("secrets", &"[redacted]")
             .field("job_id", &self.job_id)
             .finish()
     }
 }
 
-/// Append one `step <name>: ok|error …` line to the context log and, when
-/// the context carries a job id, to `jobs.log`. Never pass env values.
-pub(crate) async fn log_step(ctx: &JobCtx, name: &str, ok: bool, detail: Option<&str>) {
-    let line = match (ok, detail) {
-        (true, _) => format!("step {name}: ok"),
-        (false, Some(d)) => format!("step {name}: error {d}"),
-        (false, None) => format!("step {name}: error"),
-    };
-    (ctx.log)(&line);
-    if let Some(id) = &ctx.job_id {
-        let _ = ctx.db.jobs().append_log(id, &format!("{line}\n")).await;
+/// Named steps resumed from a stored cursor (spec §6): steps before the
+/// cursor are complete and skipped; the cursor step itself re-runs (it
+/// may have been interrupted, and every step is idempotent).
+#[derive(Debug, Clone)]
+pub struct Steps {
+    names: &'static [&'static str],
+    from: usize,
+}
+
+impl Steps {
+    /// Resume `names` from `cursor` (`None`, or a name not in `names`,
+    /// starts from the first step).
+    pub fn run_from(cursor: Option<&str>, names: &'static [&'static str]) -> Self {
+        let from = cursor
+            .and_then(|c| names.iter().position(|n| *n == c))
+            .unwrap_or(0);
+        Self { names, from }
+    }
+
+    /// Whether the run resumes past the first step.
+    pub fn resuming(&self) -> bool {
+        self.from > 0
+    }
+
+    /// Whether `name` still has to run.
+    pub fn due(&self, name: &str) -> bool {
+        let idx = self.names.iter().position(|n| *n == name);
+        debug_assert!(idx.is_some(), "unknown step {name}");
+        idx.is_some_and(|i| i >= self.from)
+    }
+
+    /// [`JobCtx::step`] when `name` is due; `Ok(None)` when it was
+    /// completed before the cursor (`fut` is dropped unpolled).
+    pub async fn run<T, F>(&self, ctx: &JobCtx, name: &str, fut: F) -> Result<Option<T>, AppError>
+    where
+        F: Future<Output = Result<T, AppError>>,
+    {
+        if !self.due(name) {
+            return Ok(None);
+        }
+        ctx.step(name, fut).await.map(Some)
     }
 }
 
 /// Mark the site `failed` with the step name and return the error.
-/// The message is an agent/validation one-liner, never an env value.
-pub(crate) async fn fail(ctx: &JobCtx, site_id: &str, step: &str, err: AppError) -> AppError {
-    let detail = err.message.clone();
-    log_step(ctx, step, false, Some(&detail)).await;
+pub(crate) async fn mark_failed(
+    ctx: &JobCtx,
+    site_id: &str,
+    step: &str,
+    err: AppError,
+) -> AppError {
     let _ = ctx
         .db
         .sites()
@@ -201,35 +386,6 @@ pub(crate) fn require_ok(result: setu_proto::CommandResult) -> Result<serde_json
     }
 }
 
-/// One agent step for flows that mark the site `failed` on error
-/// (provision, restart): call, require `ok`, log, or fail the site.
-pub(crate) async fn agent_step(
-    ctx: &JobCtx,
-    site_id: &str,
-    step: &'static str,
-    server_id: &str,
-    cmd: setu_proto::Command,
-) -> Result<setu_proto::CommandResult, AppError> {
-    let called = if matches!(cmd, setu_proto::Command::Install { .. }) {
-        call_install(ctx, server_id, cmd).await
-    } else {
-        call_agent(ctx, server_id, cmd).await
-    };
-    match called {
-        Ok(result) if result.ok => {
-            log_step(ctx, step, true, None).await;
-            Ok(result)
-        }
-        Ok(result) => {
-            let msg = result
-                .error
-                .unwrap_or_else(|| "agent command failed".to_string());
-            Err(fail(ctx, site_id, step, AppError::new(ErrorCode::Internal, msg)).await)
-        }
-        Err(e) => Err(fail(ctx, site_id, step, AppError::from(e)).await),
-    }
-}
-
 /// Load a validated manifest struct from the stored `app_versions` JSON.
 pub(crate) async fn load_manifest(
     db: &Db,
@@ -254,33 +410,16 @@ pub(crate) fn plan_limits(plan: &Plan, _manifest: &Manifest) -> setu_proto::Limi
     }
 }
 
-/// Provision-time guard: the site's server must be online. Capacity is
-/// admitted once, by `sites().create` (85 % rule, spec §3); WS6 owns the
-/// provision `validate` step.
-pub(crate) async fn check_capacity(
-    db: &Db,
-    site: &Site,
-    _plan: &Plan,
-    _manifest: &Manifest,
-) -> Result<(), AppError> {
-    let server = db.servers().get(&site.server_id).await?;
-    if server.status(chrono::Utc::now()) != setu_db::ServerStatus::Online {
-        return Err(AppError::validation(format!(
-            "server {} ({}) is offline",
-            server.name, server.id
-        )));
-    }
-    Ok(())
-}
-
-/// `data/` and `run/` of the site, for env resolution only (`from =
+/// `data/` and `run/` of a site, for env resolution only (`from =
 /// "dir"`/`"run_dir"` values the app reads). Nothing path-like is sent
 /// to the agent: it derives every path from the short id (spec §4).
-pub(crate) fn site_dirs(site: &Site) -> (PathBuf, PathBuf) {
-    let site_dir = PathBuf::from(format!("/srv/setu/sites/{}", site.short_id));
+pub(crate) fn site_dirs(short_id: &str) -> (PathBuf, PathBuf) {
+    let site_dir = PathBuf::from(format!("/srv/setu/sites/{short_id}"));
     (site_dir.join("data"), site_dir.join("run"))
 }
 
+/// A fresh database role password (48 hex characters: no quoting in
+/// URLs or env files).
 fn random_db_password() -> String {
     let mut bytes = [0u8; 24];
     rand::RngCore::fill_bytes(&mut rand::rng(), &mut bytes);
@@ -319,16 +458,6 @@ pub(crate) fn binary_ref(manifest: &Manifest) -> Result<setu_proto::BinaryRef, A
     })
 }
 
-/// A fully materialised site: agent spec plus resolved env.
-/// `env_manifest` holds PLAINTEXT values: callers send them to the agent
-/// via `WriteEnv` and store only the sealed copy in the DB.
-pub(crate) struct BuiltSite {
-    pub spec: setu_proto::SiteSpec,
-    pub binary: setu_proto::BinaryRef,
-    pub env_manifest: Vec<setu_manifest::EnvVar>,
-    pub db_password: String,
-}
-
 /// The agent [`setu_proto::SiteSpec`] of `site` running `manifest`'s
 /// version: no paths (spec §5), workdir from the manifest, dirs from
 /// `needs.dirs`, limits from the plan.
@@ -353,45 +482,21 @@ pub(crate) fn build_spec(
     })
 }
 
-/// Build the agent [`setu_proto::SiteSpec`] and resolve env per manifest.
-/// Rejects `image` manifests: the phase-1 control plane cannot run them.
-/// `prompts` carries the operator-supplied prompt answers (the API stores
-/// them on the provision job's payload); direct `run` callers pass an
-/// empty map, preserving the old resolve behaviour.
-pub(crate) fn build_site(
-    plan: &Plan,
-    site: &Site,
-    manifest: &Manifest,
-    prompts: &BTreeMap<String, String>,
-) -> Result<BuiltSite, AppError> {
-    let spec = build_spec(plan, site, manifest)?;
-    let binary = binary_ref(manifest)?;
-    let db_password = random_db_password();
-    let db_url = format!(
-        "postgres://{}:{}@127.0.0.1:5432/{}",
-        site.db_role, db_password, site.db_name
-    );
-    let mut input = resolve_input(site, db_url, prompts);
-    let env_manifest = setu_manifest::resolve_env(manifest, &mut input).map_err(resolve_error)?;
-    Ok(BuiltSite {
-        spec,
-        binary,
-        env_manifest,
-        db_password,
-    })
-}
-
-/// Resolution inputs for `site`.
+/// Resolution inputs for a site (real RNG: `generate` values are drawn
+/// here and nowhere else).
 pub(crate) fn resolve_input(
-    site: &Site,
+    short_id: &str,
+    port: u16,
+    domain: &str,
+    owner_email: &str,
     db_url: String,
     prompts: &BTreeMap<String, String>,
 ) -> ResolveInput {
-    let (data_dir, run_dir) = site_dirs(site);
+    let (data_dir, run_dir) = site_dirs(short_id);
     ResolveInput {
-        site_url: format!("https://{}", site.domain),
-        owner_email: site.owner_email.clone(),
-        port: site.port as u16,
+        site_url: format!("https://{domain}"),
+        owner_email: owner_email.to_string(),
+        port,
         run_dir,
         data_dir,
         db_url,
@@ -409,6 +514,32 @@ pub(crate) fn resolve_error(e: setu_manifest::ResolveError) -> AppError {
     }
 }
 
+/// The site's env, generated exactly once at `POST /sites` (spec §3):
+/// every rule of `manifest` resolved against the real allocation (port,
+/// short id, database), `generate` values from the OS RNG, a fresh
+/// database role password inside `postgres_url`, prompt answers from
+/// the operator. Returns the SEALED storage form for `sites.env`
+/// (secrets `v1:`, the rest `plain:`). Provision only ever reads it.
+pub fn resolve_site_env(
+    manifest: &Manifest,
+    alloc: &setu_db::Allocation,
+    domain: &str,
+    owner_email: &str,
+    prompts: &BTreeMap<String, String>,
+    sealer: &Sealer,
+) -> Result<serde_json::Value, AppError> {
+    let port = u16::try_from(alloc.port).map_err(|_| AppError::internal())?;
+    let db_url = format!(
+        "postgres://{}:{}@127.0.0.1:5432/{}",
+        alloc.db_role,
+        random_db_password(),
+        alloc.db_name
+    );
+    let mut input = resolve_input(&alloc.short_id, port, domain, owner_email, db_url, prompts);
+    let vars = setu_manifest::resolve_env(manifest, &mut input).map_err(resolve_error)?;
+    Ok(sealed_env(sealer, &vars))
+}
+
 fn to_proto_env(v: &setu_manifest::EnvVar) -> setu_proto::EnvVar {
     setu_proto::EnvVar {
         name: v.name.clone(),
@@ -423,121 +554,124 @@ pub(crate) fn to_proto_envs(vars: &[setu_manifest::EnvVar]) -> Vec<setu_proto::E
     vars.iter().map(to_proto_env).collect()
 }
 
-/// Plaintext of the stored env: name → (value, secret, once). Every
-/// stored value is prefixed (`v1:` sealed, `plain:` not secret); corrupt
-/// or unprefixed storage is `internal` (ciphertext never surfaces).
-pub(crate) fn stored_plaintext(
-    site: &Site,
+/// [`to_proto_envs`] without `once` values (every `write_env` except the
+/// first boot's, spec §2).
+pub(crate) fn without_once(vars: &[setu_manifest::EnvVar]) -> Vec<setu_proto::EnvVar> {
+    vars.iter().filter(|v| !v.once).map(to_proto_env).collect()
+}
+
+/// Plaintext of a stored env array (`sites.env`, or a sealed copy in a
+/// job payload), in stored order. Every value is prefixed (`v1:` sealed,
+/// `plain:` not secret); corrupt or unprefixed storage is `internal`
+/// (ciphertext never surfaces).
+pub(crate) fn open_env(
+    env: &serde_json::Value,
     sealer: &Sealer,
-) -> Result<BTreeMap<String, (String, bool, bool)>, AppError> {
-    let mut out = BTreeMap::new();
-    let Some(arr) = site.env.as_array() else {
-        return Ok(out);
+) -> Result<Vec<setu_manifest::EnvVar>, AppError> {
+    let Some(arr) = env.as_array() else {
+        return Ok(Vec::new());
     };
+    let mut out = Vec::with_capacity(arr.len());
     for v in arr {
         let Some(name) = v.get("name").and_then(|n| n.as_str()) else {
             continue;
         };
-        let value = v
-            .get("value")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string();
-        let secret = v.get("secret").and_then(|b| b.as_bool()).unwrap_or(false);
-        let once = v.get("once").and_then(|b| b.as_bool()).unwrap_or(false);
-        let plain = sealer.open(&value).map_err(|e| {
+        let value = v.get("value").and_then(|x| x.as_str()).unwrap_or("");
+        let plain = sealer.open(value).map_err(|e| {
             tracing::error!(error = %e, "stored env failed to open");
             AppError::internal()
         })?;
-        out.insert(name.to_string(), (plain, secret, once));
+        out.push(setu_manifest::EnvVar {
+            name: name.to_string(),
+            value: plain,
+            secret: v.get("secret").and_then(|b| b.as_bool()).unwrap_or(false),
+            once: v.get("once").and_then(|b| b.as_bool()).unwrap_or(false),
+        });
     }
     Ok(out)
 }
 
-/// Everything before the first agent call: manifest + plan + capacity
-/// checks, env resolution, and storing the SEALED env copy. Image
-/// manifests are rejected here, before anything is issued.
-pub(crate) struct Prep {
-    pub spec: setu_proto::SiteSpec,
-    pub binary: setu_proto::BinaryRef,
-    pub env_all: Vec<setu_proto::EnvVar>,
-    pub env_persistent: Vec<setu_proto::EnvVar>,
-    pub db_password: String,
-    pub has_once: bool,
+/// The site's stored env in plaintext, every secret registered with the
+/// context for redaction.
+pub(crate) fn site_env(ctx: &JobCtx, site: &Site) -> Result<Vec<setu_manifest::EnvVar>, AppError> {
+    let vars = open_env(&site.env, &ctx.sealer)?;
+    register_secrets(ctx, &vars);
+    Ok(vars)
 }
 
-pub(crate) async fn prepare_site(ctx: &JobCtx, site: &Site) -> Result<Prep, AppError> {
-    let manifest = load_manifest(&ctx.db, &site.app_id, &site.app_version).await?;
-    if manifest.run.is_image() {
-        return Err(AppError::validation(
-            "image runtime not available in this version",
-        ));
-    }
-    let plan = ctx.db.plans().get(&site.plan_id).await?;
-    if !plan.allows(&site.app_id) {
-        return Err(AppError::validation(format!(
-            "plan does not allow app {}",
-            site.app_id
-        )));
-    }
-    check_capacity(&ctx.db, site, &plan, &manifest).await?;
-    let prompts = job_prompts(ctx).await;
-    let built = build_site(&plan, site, &manifest, &prompts)?;
-    let sealed = sealed_env(&ctx.sealer, &built.env_manifest);
-    ctx.db.sites().set_env(&site.id, &sealed).await?;
-    let env_all: Vec<setu_proto::EnvVar> = built.env_manifest.iter().map(to_proto_env).collect();
-    let env_persistent: Vec<setu_proto::EnvVar> = built
-        .env_manifest
-        .iter()
-        .filter(|v| !v.once)
-        .map(to_proto_env)
-        .collect();
-    let has_once = env_persistent.len() != env_all.len();
-    Ok(Prep {
-        spec: built.spec,
-        binary: built.binary,
-        env_all,
-        env_persistent,
-        db_password: built.db_password,
-        has_once,
-    })
-}
-
-/// Prompt answers stored on the provision job's payload by `POST /sites`
-/// (Task 9). Direct `run` callers carry no job id, so this is empty for
-/// them and resolution behaves exactly as before.
-pub(crate) async fn job_prompts(ctx: &JobCtx) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    let Some(job_id) = &ctx.job_id else {
-        return out;
-    };
-    let Ok(job) = ctx.db.jobs().get(job_id).await else {
-        return out;
-    };
-    let Some(obj) = job.payload.get("prompts").and_then(|p| p.as_object()) else {
-        return out;
-    };
-    for (k, v) in obj {
-        if let Some(s) = v.as_str() {
-            out.insert(k.clone(), s.to_string());
+/// Register every secret value (and the password inside a database
+/// URL) for redaction.
+pub(crate) fn register_secrets(ctx: &JobCtx, vars: &[setu_manifest::EnvVar]) {
+    for v in vars.iter().filter(|v| v.secret) {
+        ctx.add_secret(&v.value);
+        if let Some(pw) = url_password(&v.value) {
+            ctx.add_secret(pw);
         }
     }
-    out
+}
+
+/// The password of a `postgres://role:password@host/db` URL.
+pub(crate) fn url_password(url: &str) -> Option<&str> {
+    let rest = url.strip_prefix("postgres://")?;
+    let (userinfo, _) = rest.split_once('@')?;
+    let (_, pw) = userinfo.split_once(':')?;
+    Some(pw).filter(|p| !p.is_empty())
+}
+
+/// The stored `postgres_url` value (the variable whose manifest rule is
+/// `from = "postgres_url"`), if the manifest has one.
+pub(crate) fn stored_db_url<'a>(
+    manifest: &Manifest,
+    vars: &'a [setu_manifest::EnvVar],
+) -> Option<&'a str> {
+    vars.iter()
+        .find(|v| {
+            matches!(manifest.env.get(&v.name),
+                Some(setu_manifest::EnvSpec::From(f)) if f.from == setu_manifest::EnvSource::PostgresUrl)
+        })
+        .map(|v| v.value.as_str())
+}
+
+/// The database role password provision converges on: the one inside
+/// the stored `postgres_url` (generated at creation, so a retry sends
+/// the same password); a manifest without a `postgres_url` rule has no
+/// reader of the password, so a fresh one is fine (ledger R92).
+pub(crate) fn db_password(manifest: &Manifest, vars: &[setu_manifest::EnvVar]) -> String {
+    stored_db_url(manifest, vars)
+        .and_then(url_password)
+        .map(str::to_string)
+        .unwrap_or_else(random_db_password)
 }
 
 /// Stored DB copy of resolved env: secret values sealed (`v1:`), the rest
 /// `plain:`, `secret`/`once` flags kept for the UI.
 pub(crate) fn sealed_env(sealer: &Sealer, vars: &[setu_manifest::EnvVar]) -> serde_json::Value {
-    let arr: Vec<serde_json::Value> = vars
-        .iter()
-        .map(|v| {
-            serde_json::json!({
-                "name": v.name,
-                "value": sealer.store(&v.value, v.secret),
-                "secret": v.secret,
-                "once": v.once,
+    env_json(vars, |v| sealer.store(&v.value, v.secret))
+}
+
+/// Every value sealed (`v1:`), secret or not: the job-payload copy of an
+/// env (spec §6: the old env is stored sealed in the update payload).
+pub(crate) fn fully_sealed_env(
+    sealer: &Sealer,
+    vars: &[setu_manifest::EnvVar],
+) -> serde_json::Value {
+    env_json(vars, |v| sealer.seal(&v.value))
+}
+
+fn env_json(
+    vars: &[setu_manifest::EnvVar],
+    value: impl Fn(&setu_manifest::EnvVar) -> String,
+) -> serde_json::Value {
+    serde_json::Value::Array(
+        vars.iter()
+            .map(|v| {
+                serde_json::json!({
+                    "name": v.name,
+                    "value": value(v),
+                    "secret": v.secret,
+                    "once": v.once,
+                })
             })
-        })
-        .collect();
-    serde_json::Value::Array(arr)
+            .collect(),
+    )
 }

@@ -263,11 +263,12 @@ async fn create_site_returns_job_and_provisions_to_running() {
     assert_eq!(site["server_id"], json!(server_id));
     assert!(site["db_name"].as_str().unwrap().starts_with("site_"));
 
-    // Transcript order per Task 6 (trailing Status after SetRoute; the
-    // second WriteEnv drops the `once` secret).
+    // Spec §6 order: `inventory` is `validate`'s port check, `status`
+    // is `verify`, the second WriteEnv (`finish`) drops the `once` secret.
     assert_eq!(
         srv.agent.transcript(),
         vec![
+            "inventory",
             "site_create",
             "create_database",
             "install",
@@ -277,9 +278,18 @@ async fn create_site_returns_job_and_provisions_to_running() {
             "start",
             "health",
             "set_route",
-            "write_env",
             "status",
+            "write_env",
         ]
+    );
+    // The env was generated at creation; the job carries no prompts.
+    let row = srv.db.jobs().get(&job_id).await.expect("job row");
+    assert!(
+        row.payload.get("prompts").is_none(),
+        "{:?}",
+        row.payload
+            .as_object()
+            .map(|o| o.keys().collect::<Vec<_>>())
     );
     let writes = srv.agent.write_env_calls();
     assert_eq!(writes.len(), 2);
@@ -515,9 +525,20 @@ async fn env_get_masks_secrets() {
         .expect("put env sends");
     assert_eq!(put.status(), reqwest::StatusCode::ACCEPTED);
     let put_body: Value = put.json().await.expect("put body is json");
-    poll_job(&srv, &owner, put_body["job"]["id"].as_str().unwrap())
+    assert_eq!(put_body["job"]["kind"], json!("env_update"));
+    let put_job = put_body["job"]["id"].as_str().unwrap().to_string();
+    // The changes sit sealed in the payload, never plaintext.
+    let row = srv.db.jobs().get(&put_job).await.expect("job row");
+    let raw_payload = row.payload.to_string();
+    assert!(!raw_payload.contains("second-secret") && !raw_payload.contains("new-label"));
+    assert!(row.payload["changes"]["HELLO_NAME"]
+        .as_str()
+        .unwrap()
+        .starts_with("v1:"));
+    let done = poll_job(&srv, &owner, &put_job)
         .await
-        .expect("restart done");
+        .expect("env update done");
+    assert_eq!(done["status"], json!("done"), "{done}");
 
     let env2: Value = owner
         .get(srv.url(&format!("/api/v1/sites/{site_id}/env")))
@@ -538,11 +559,12 @@ async fn env_get_masks_secrets() {
     let raw2 = serde_json::to_string(&env2).expect("env serialises");
     assert!(!raw2.contains("second-secret"), "updated secret leaked");
 
-    // The PUT issued a WriteEnv before the restart job's Stop/Start.
-    assert!(
-        srv.agent.call_count("write_env") >= 3,
-        "transcript: {:?}",
-        srv.agent.transcript()
+    // The env_update job wrote the file, then restarted the site.
+    let kinds = srv.agent.transcript();
+    assert_eq!(
+        kinds[kinds.len() - 2..],
+        ["write_env", "restart"],
+        "{kinds:?}"
     );
 
     for (key, expect) in [
@@ -902,11 +924,12 @@ async fn crash_after_health_before_route_is_failed() {
 
     let site = get_site(&srv, &owner, &site_id).await;
     assert_eq!(site["status"], json!("failed"));
-    assert_eq!(site["failed_step"], json!("verify_status"));
+    assert_eq!(site["failed_step"], json!("verify"));
 
     assert_eq!(
         srv.agent.transcript(),
         vec![
+            "inventory",
             "site_create",
             "create_database",
             "install",
@@ -916,7 +939,6 @@ async fn crash_after_health_before_route_is_failed() {
             "start",
             "health",
             "set_route",
-            "write_env",
             "status",
             "remove_route",
         ]

@@ -17,7 +17,6 @@ use axum::{
 };
 use futures::channel::mpsc;
 use futures::SinkExt;
-use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use setu_common::{AppError, ErrorCode};
 use tower_sessions::Session;
@@ -260,23 +259,6 @@ pub(crate) async fn require_no_running_job(
     Ok(())
 }
 
-/// Prompt answers from the site's latest `provision_site` job payload
-/// (stored by `POST /sites`). Later jobs (update/backup/restore/retry)
-/// carry them so the state machines can re-resolve prompt env vars.
-pub(crate) async fn provision_prompts(
-    db: &setu_db::Db,
-    site_id: &str,
-) -> Result<serde_json::Value, AppError> {
-    Ok(db
-        .jobs()
-        .list_recent(50)
-        .await?
-        .into_iter()
-        .filter(|j| j.site_id.as_deref() == Some(site_id) && j.kind == "provision_site")
-        .find_map(|j| j.payload.get("prompts").cloned())
-        .unwrap_or(serde_json::json!({})))
-}
-
 /// List sites (viewer and above).
 #[utoipa::path(
     get,
@@ -302,10 +284,11 @@ pub async fn list(
 /// Validates the domain (unique → 409), the app version (must exist and
 /// parse; `image` manifests are rejected with `validation` — phase 2),
 /// the plan (must allow the app) and the server (explicit, or the
-/// online server with the most free memory). Resolves env with the
-/// operator-supplied `prompts`, seals secrets, stores the row as
-/// `provisioning`, then enqueues `provision_site` carrying the prompts
-/// (the runner re-resolves with them).
+/// online server with the most free memory). Generates the env once,
+/// from the allocated port and short id and the operator-supplied
+/// `prompts`, seals it into the `provisioning` row in the same
+/// transaction, then enqueues `provision_site` (which reads the stored
+/// env and never regenerates it).
 #[utoipa::path(
     post,
     path = "/api/v1/sites",
@@ -385,67 +368,37 @@ pub async fn create(
             body.app_id
         )));
     }
-    // Resolve env now (prompts included) so `GET env` works immediately;
-    // the provision job re-resolves with the same prompts from its
-    // payload and stores the sealed copy again before the first agent
-    // call.
-    let db_password = {
-        let mut bytes = [0u8; 24];
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut bytes);
-        hex::encode(bytes)
-    };
-    let site_url = format!("https://{domain}");
-    // Port and dirs need the row first; resolve with placeholders and
-    // re-resolve inside the job (authoritative). Only prompt-missing and
-    // manifest errors surface here.
-    let mut resolve_input = setu_manifest::ResolveInput {
-        site_url,
-        owner_email: body.owner_email.clone(),
-        port: 20000,
-        run_dir: std::path::PathBuf::from("/srv/setu/sites/pending/run"),
-        data_dir: std::path::PathBuf::from("/srv/setu/sites/pending/data"),
-        db_url: format!("postgres://pending:{db_password}@127.0.0.1:5432/pending"),
-        prompts: body.prompts.clone(),
-        rng: rand::rngs::StdRng::from_os_rng(),
-    };
-    let resolved =
-        setu_manifest::resolve_env(&manifest, &mut resolve_input).map_err(|e| match &e {
-            setu_manifest::ResolveError::MissingPrompt(_) => {
-                AppError::validation(format!("prompt values missing: {e}"))
-            }
-            setu_manifest::ResolveError::Invalid(_, _) => AppError::validation(e.to_string()),
-        })?;
-    let sealed: serde_json::Value = {
-        let arr: Vec<serde_json::Value> = resolved
-            .iter()
-            .map(|v| {
-                serde_json::json!({
-                    "name": v.name,
-                    "value": state.sealer.store(&v.value, v.secret),
-                    "secret": v.secret,
-                    "once": v.once,
-                })
-            })
-            .collect();
-        serde_json::Value::Array(arr)
-    };
-
     // Server pick, capacity (85 %), port and short id in one
-    // transaction (spec §3); `db_name`/`db_role` are `site_<short>`.
+    // transaction (spec §3); `db_name`/`db_role` are `site_<short>`. The
+    // env is generated exactly once, here, from that allocation (prompt
+    // answers included) and stored sealed; provision only reads it, so
+    // the answers never sit in a job payload (security finding 4).
     let site = state
         .db
         .sites()
-        .create(&setu_db::NewSite {
-            name: name.clone(),
-            app_id: body.app_id.clone(),
-            app_version: body.version.clone(),
-            server_id: body.server_id.clone(),
-            plan_id: plan.id.clone(),
-            domain: domain.clone(),
-            owner_email: body.owner_email.clone(),
-            env_sealed: sealed,
-            plan_memory_mb: i64::from(plan.memory_mb),
-        })
+        .create_with(
+            &setu_db::NewSite {
+                name: name.clone(),
+                app_id: body.app_id.clone(),
+                app_version: body.version.clone(),
+                server_id: body.server_id.clone(),
+                plan_id: plan.id.clone(),
+                domain: domain.clone(),
+                owner_email: body.owner_email.clone(),
+                env_sealed: serde_json::json!([]),
+                plan_memory_mb: i64::from(plan.memory_mb),
+            },
+            |alloc| {
+                setu_jobs::resolve_site_env(
+                    &manifest,
+                    alloc,
+                    &domain,
+                    &body.owner_email,
+                    &body.prompts,
+                    &state.sealer,
+                )
+            },
+        )
         .await
         .map_err(|e| match e {
             // A named server that does not exist is the caller's error.
@@ -462,7 +415,7 @@ pub async fn create(
             "provision_site",
             Some(&site.id),
             Some(&site.server_id),
-            Some(&serde_json::json!({"prompts": body.prompts})),
+            None,
         )
         .await?;
     audit(
@@ -686,10 +639,7 @@ pub async fn update(
             "update_site",
             Some(&site.id),
             Some(&site.server_id),
-            Some(&serde_json::json!({
-                "to_version": body.version,
-                "prompts": provision_prompts(&state.db, &site.id).await?,
-            })),
+            Some(&serde_json::json!({ "to_version": body.version })),
         )
         .await?;
     audit(
@@ -709,8 +659,8 @@ pub async fn update(
     ))
 }
 
-/// Retry a `failed` site: back to `provisioning` with a fresh
-/// `provision_site` job carrying the original prompts (operator+).
+/// Retry a `failed` site: a fresh `provision_site` job from step 1 with
+/// the same allocations and stored env (operator+).
 #[utoipa::path(
     post,
     path = "/api/v1/sites/{id}/retry",
@@ -738,9 +688,8 @@ pub async fn retry(
             site.status
         )));
     }
-    // Recover the prompts the site was created with: the last
-    // `provision_site` job for this site carries them.
-    let prompts = provision_prompts(&state.db, &site.id).await?;
+    // The env (prompt answers included) was stored at creation: the
+    // retry provisions from step 1 with the same allocations.
     let job = state
         .db
         .jobs()
@@ -748,7 +697,7 @@ pub async fn retry(
             "provision_site",
             Some(&site.id),
             Some(&site.server_id),
-            Some(&serde_json::json!({"prompts": prompts})),
+            None,
         )
         .await?;
     audit(
@@ -865,9 +814,10 @@ pub async fn env_get(
 
 /// Update non-generated env vars (operator and above): only manifest
 /// entries spelled `value` or `prompt` may change (`generate`/`from`
-/// are derived and rejected with `validation`). Writes the sealed copy,
-/// issues a synchronous `WriteEnv` to the agent, then enqueues
-/// `restart_site` so the new values take effect.
+/// are derived and rejected with `validation`). Enqueues an
+/// `env_update` job carrying the changes sealed; the job stores them,
+/// rewrites the env file (never with `once` values) and restarts a
+/// running site.
 #[utoipa::path(
     put,
     path = "/api/v1/sites/{id}/env",
@@ -909,106 +859,42 @@ pub async fn env_put(
         .await?;
     let manifest = load_manifest(&version)?;
 
-    // Validate keys against the manifest: Value/Prompt only.
-    let mut secrets: BTreeMap<String, bool> = BTreeMap::new();
-    for key in body.env.keys() {
-        let spec = manifest
-            .env
-            .get(key)
-            .ok_or_else(|| AppError::validation(format!("unknown env var {key}")))?;
-        match spec {
-            setu_manifest::EnvSpec::Value(_) => {
-                secrets.insert(key.clone(), false);
-            }
-            setu_manifest::EnvSpec::Prompt(p) => {
-                secrets.insert(key.clone(), p.secret);
-            }
-            setu_manifest::EnvSpec::Generate(_) | setu_manifest::EnvSpec::From(_) => {
+    // Validate keys against the manifest: `value`/`prompt` only (the
+    // `env_update` job re-checks), values without control characters.
+    for (key, value) in &body.env {
+        match manifest.env.get(key) {
+            Some(setu_manifest::EnvSpec::Value(_) | setu_manifest::EnvSpec::Prompt(_)) => {}
+            Some(setu_manifest::EnvSpec::Generate(_) | setu_manifest::EnvSpec::From(_)) => {
                 return Err(AppError::validation(format!(
                     "env var {key} is generated and cannot be set"
                 )));
             }
+            None => return Err(AppError::validation(format!("unknown env var {key}"))),
+        }
+        if !setu_common::validate::no_control(value) {
+            return Err(AppError::validation(format!(
+                "env var {key} must not contain control characters"
+            )));
         }
     }
 
-    // Merge: unseal the stored copy for the agent payload, apply the
-    // updates, seal the stored copy again. Iterates the union of stored
-    // keys and request keys: a manifest-valid var missing from storage
-    // (manifest gained it after provisioning) must be persisted, not
-    // silently dropped.
-    let stored = stored_env(&site);
-    let mut merged: Vec<(String, String, bool, bool)> = Vec::new();
-    for v in &stored {
-        if let Some(new_value) = body.env.get(&v.name) {
-            let secret = secrets.get(&v.name).copied().unwrap_or(v.secret);
-            merged.push((v.name.clone(), new_value.clone(), secret, v.once));
-        } else {
-            let plain = open_stored(&state.sealer, &v.value)?;
-            merged.push((v.name.clone(), plain, v.secret, v.once));
-        }
-    }
-    for (key, new_value) in &body.env {
-        if stored.iter().any(|v| &v.name == key) {
-            continue;
-        }
-        // Validated against the manifest above, so the spec exists and is
-        // Value/Prompt; `once` is false for a fresh Value/Prompt entry.
-        let spec_once = manifest
-            .env
-            .get(key)
-            .map(|s| match s {
-                setu_manifest::EnvSpec::Prompt(p) => p.once,
-                _ => false,
-            })
-            .unwrap_or(false);
-        let secret = secrets.get(key).copied().unwrap_or(false);
-        merged.push((key.clone(), new_value.clone(), secret, spec_once));
-    }
-    let sealed: serde_json::Value = serde_json::Value::Array(
-        merged
-            .iter()
-            .map(|(name, value, secret, once)| {
-                serde_json::json!({
-                    "name": name,
-                    "value": state.sealer.store(value, *secret),
-                    "secret": secret,
-                    "once": once,
-                })
-            })
-            .collect(),
-    );
-    state.db.sites().set_env(&site.id, &sealed).await?;
-
-    // Synchronous WriteEnv so a failure surfaces here (409/502), not as
-    // a dead restart job; the restart job then picks the values up.
-    let proto_env: Vec<setu_proto::EnvVar> = merged
+    // The changes ride SEALED on the job (every value `v1:`, secret or
+    // not: plaintext never sits in `jobs.payload`, security finding 4);
+    // the `env_update` job merges, stores, writes the file and restarts.
+    let changes: serde_json::Map<String, serde_json::Value> = body
+        .env
         .iter()
-        .map(|(name, value, secret, once)| setu_proto::EnvVar {
-            name: name.clone(),
-            value: value.clone(),
-            secret: *secret,
-            once: *once,
-        })
+        .map(|(k, v)| (k.clone(), serde_json::json!(state.sealer.seal(v))))
         .collect();
-    if let Err(e) = state
-        .agent
-        .call(
-            &site.server_id,
-            Some(&site.short_id),
-            setu_proto::Command::WriteEnv {
-                site: site.short_id.clone(),
-                env: proto_env,
-            },
-        )
-        .await
-    {
-        return Err(AppError::from(e));
-    }
-
     let job = state
         .db
         .jobs()
-        .enqueue("restart_site", Some(&site.id), Some(&site.server_id), None)
+        .enqueue(
+            "env_update",
+            Some(&site.id),
+            Some(&site.server_id),
+            Some(&serde_json::json!({ "changes": changes })),
+        )
         .await?;
     audit(
         &state.db,

@@ -21,6 +21,7 @@ pub mod install;
 pub mod install_system;
 pub mod journal;
 pub mod metrics;
+pub mod netstat;
 pub mod paths;
 pub mod postgres;
 pub mod run_loop;

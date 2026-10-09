@@ -1430,7 +1430,7 @@
           "super::sites"
         ],
         "summary": "Create a site and enqueue its provision job (operator and above).",
-        "description": "Validates the domain (unique → 409), the app version (must exist and\nparse; `image` manifests are rejected with `validation` — phase 2),\nthe plan (must allow the app) and the server (explicit, or the\nonline server with the most free memory). Resolves env with the\noperator-supplied `prompts`, seals secrets, stores the row as\n`provisioning`, then enqueues `provision_site` carrying the prompts\n(the runner re-resolves with them).",
+        "description": "Validates the domain (unique → 409), the app version (must exist and\nparse; `image` manifests are rejected with `validation` — phase 2),\nthe plan (must allow the app) and the server (explicit, or the\nonline server with the most free memory). Generates the env once,\nfrom the allocated port and short id and the operator-supplied\n`prompts`, seals it into the `provisioning` row in the same\ntransaction, then enqueues `provision_site` (which reads the stored\nenv and never regenerates it).",
         "operationId": "create",
         "requestBody": {
           "content": {
@@ -1886,7 +1886,7 @@
         "tags": [
           "super::sites"
         ],
-        "summary": "Update non-generated env vars (operator and above): only manifest\nentries spelled `value` or `prompt` may change (`generate`/`from`\nare derived and rejected with `validation`). Writes the sealed copy,\nissues a synchronous `WriteEnv` to the agent, then enqueues\n`restart_site` so the new values take effect.",
+        "summary": "Update non-generated env vars (operator and above): only manifest\nentries spelled `value` or `prompt` may change (`generate`/`from`\nare derived and rejected with `validation`). Enqueues an\n`env_update` job carrying the changes sealed; the job stores them,\nrewrites the env file (never with `once` values) and restarts a\nrunning site.",
         "operationId": "env_put",
         "parameters": [
           {
@@ -2095,7 +2095,7 @@
         "tags": [
           "super::sites"
         ],
-        "summary": "Retry a `failed` site: back to `provisioning` with a fresh\n`provision_site` job carrying the original prompts (operator+).",
+        "summary": "Retry a `failed` site: a fresh `provision_site` job from step 1 with\nthe same allocations and stored env (operator+).",
         "operationId": "retry",
         "parameters": [
           {

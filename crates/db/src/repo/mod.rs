@@ -24,7 +24,7 @@ pub use servers::{
 };
 pub use sessions::{Session, Sessions};
 pub use settings::Settings;
-pub use sites::{CreateError, NewSite, Site, Sites};
+pub use sites::{Allocation, CreateError, NewSite, Site, Sites};
 
 /// `Duration` → seconds as `f64` for `make_interval(secs => $n)`.
 pub(crate) fn secs(d: std::time::Duration) -> f64 {
