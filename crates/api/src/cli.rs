@@ -1,4 +1,5 @@
-//! Helpers behind `setu operator create` and `setu backup` (spec §8):
+//! Helpers behind `setu operator create`, `setu backup` and `setu setting
+//! set` (spec §8):
 //! passwords never travel on argv.
 //!
 //! `operator create` reads the password from `SETU_OPERATOR_PASSWORD`, else
@@ -33,6 +34,24 @@ pub fn read_operator_password(
         ));
     }
     Ok(pw)
+}
+
+/// `setu setting set <key> <value>`: the keys an installer or operator
+/// may write, each with its value type. `tls_internal` takes `true` or
+/// `false`. Everything else (the setup token hash in particular) is
+/// refused.
+pub fn parse_setting(key: &str, value: &str) -> Result<(&'static str, serde_json::Value), String> {
+    match key {
+        setu_db::TLS_INTERNAL => match value {
+            "true" => Ok((setu_db::TLS_INTERNAL, serde_json::Value::Bool(true))),
+            "false" => Ok((setu_db::TLS_INTERNAL, serde_json::Value::Bool(false))),
+            _ => Err(format!("{key} takes true or false")),
+        },
+        _ => Err(format!(
+            "unknown setting {key} (known: {})",
+            setu_db::TLS_INTERNAL
+        )),
+    }
 }
 
 /// A process to run: program, argv and extra environment.
@@ -231,6 +250,21 @@ mod tests {
             .contains(&("PGUSER".to_string(), "setu".to_string())));
         assert!(!inv.env.iter().any(|(k, _)| k == "PGPASSWORD"));
         assert!(pg_dump_invocation("mysql://x@y/z", Path::new("o")).is_err());
+    }
+
+    #[test]
+    fn setting_set_accepts_only_known_keys_with_typed_values() {
+        assert_eq!(
+            parse_setting("tls_internal", "true").unwrap(),
+            (setu_db::TLS_INTERNAL, serde_json::json!(true))
+        );
+        assert_eq!(
+            parse_setting("tls_internal", "false").unwrap(),
+            (setu_db::TLS_INTERNAL, serde_json::json!(false))
+        );
+        assert!(parse_setting("tls_internal", "yes").is_err());
+        assert!(parse_setting("setup_token_hash", "\"00\"").is_err());
+        assert!(parse_setting("anything", "1").is_err());
     }
 
     #[test]

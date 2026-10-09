@@ -38,6 +38,11 @@ enum Cmd {
         #[arg(long)]
         out: std::path::PathBuf,
     },
+    /// Write a control-plane setting (`setting set tls_internal true`).
+    Setting {
+        #[command(subcommand)]
+        cmd: SettingCmd,
+    },
     /// Write the OpenAPI document to `openapi.json` (default) or `--out`.
     Openapi {
         /// Destination file.
@@ -66,6 +71,12 @@ enum OperatorCmd {
     },
 }
 
+#[derive(Subcommand)]
+enum SettingCmd {
+    /// Set one known key (`tls_internal`: `true` | `false`).
+    Set { key: String, value: String },
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -76,6 +87,9 @@ async fn main() {
             OperatorCmd::Create { email, role } => operator_create(&email, &role).await,
         },
         Cmd::Backup { out } => backup(&out),
+        Cmd::Setting {
+            cmd: SettingCmd::Set { key, value },
+        } => setting_set(&key, &value).await,
         Cmd::Openapi { out } => openapi(&out).await,
         Cmd::Agent { cmd } => {
             // The agent's own log (journald captures stderr); stdout
@@ -193,6 +207,18 @@ async fn operator_create(email: &str, role: &str) -> Result<(), String> {
         .await
         .map_err(|e| e.message)?;
     println!("created operator {} ({})", op.email, op.id);
+    Ok(())
+}
+
+async fn setting_set(key: &str, value: &str) -> Result<(), String> {
+    let (key, value) = setu_api::cli::parse_setting(key, value)?;
+    let config = load_config()?;
+    let db = connect_and_migrate(&config).await?;
+    db.settings()
+        .set(key, &value)
+        .await
+        .map_err(|e| e.message)?;
+    println!("set {key} = {value}");
     Ok(())
 }
 
