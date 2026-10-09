@@ -7,6 +7,12 @@ export type AppInfo = components["schemas"]["AppOut"];
 export type AppVersion = components["schemas"]["AppVersionOut"];
 export type Job = components["schemas"]["JobOut"];
 export type AuditEntry = components["schemas"]["AuditEntryOut"];
+export type EnvEntry = components["schemas"]["EnvEntryOut"];
+export type Backup = components["schemas"]["BackupOut"];
+export type ManifestError = components["schemas"]["ManifestErrorOut"];
+export type ValidateResponse = components["schemas"]["ValidateResponse"];
+export type CreateServerResponse = components["schemas"]["CreateServerResponse"];
+export type SiteJobResponse = components["schemas"]["SiteJobResponse"];
 
 export interface PlanLimits {
   memory_mb?: number;
@@ -34,6 +40,12 @@ export interface CreateSitePayload {
   owner_email: string;
   prompts: Record<string, string>;
   server_id?: string;
+}
+
+export interface PlanInput {
+  name: string;
+  limits: { memory_mb: number; cpu_percent: number; disk_mb: number };
+  allowed_app_ids: string[];
 }
 
 interface ErrorEnvelope {
@@ -154,5 +166,128 @@ export const api = {
 
   getJob(id: string): Promise<Job> {
     return request(`/api/v1/jobs/${encodeURIComponent(id)}`);
+  },
+
+  async listJobs(): Promise<Job[]> {
+    const body = await request<{ jobs: Job[] }>("/api/v1/jobs?limit=200");
+    return body.jobs;
+  },
+
+  getServer(id: string): Promise<Server> {
+    return request(`/api/v1/servers/${encodeURIComponent(id)}`);
+  },
+
+  createServer(name: string): Promise<CreateServerResponse> {
+    return request("/api/v1/servers", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+  },
+
+  deleteServer(id: string): Promise<void> {
+    return request(`/api/v1/servers/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
+  validateManifest(toml: string): Promise<ValidateResponse> {
+    return request("/api/v1/apps/validate", {
+      method: "POST",
+      body: JSON.stringify({ toml }),
+    });
+  },
+
+  publishApp(payload: { toml?: string; url?: string }): Promise<unknown> {
+    return request("/api/v1/apps", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  createPlan(input: PlanInput): Promise<Plan> {
+    return request("/api/v1/plans", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  updatePlan(id: string, input: PlanInput): Promise<Plan> {
+    return request(`/api/v1/plans/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  },
+
+  async getSiteEnv(id: string): Promise<EnvEntry[]> {
+    const body = await request<{ env: EnvEntry[] }>(
+      `/api/v1/sites/${encodeURIComponent(id)}/env`,
+    );
+    return body.env;
+  },
+
+  putSiteEnv(id: string, env: Record<string, string>): Promise<SiteJobResponse> {
+    return request(`/api/v1/sites/${encodeURIComponent(id)}/env`, {
+      method: "PUT",
+      body: JSON.stringify({ env }),
+    });
+  },
+
+  async listBackups(siteId: string): Promise<Backup[]> {
+    const body = await request<{ backups: Backup[] }>(
+      `/api/v1/sites/${encodeURIComponent(siteId)}/backups`,
+    );
+    return body.backups;
+  },
+
+  takeBackup(siteId: string): Promise<{ job: Job }> {
+    return request(`/api/v1/sites/${encodeURIComponent(siteId)}/backups`, {
+      method: "POST",
+    });
+  },
+
+  restoreBackup(siteId: string, backupId: string): Promise<{ job: Job }> {
+    return request(
+      `/api/v1/sites/${encodeURIComponent(siteId)}/backups/${encodeURIComponent(backupId)}/restore`,
+      { method: "POST" },
+    );
+  },
+
+  siteAction(
+    id: string,
+    action: "start" | "stop" | "restart" | "retry",
+  ): Promise<SiteJobResponse> {
+    return request(`/api/v1/sites/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+    });
+  },
+
+  updateSite(id: string, version: string): Promise<SiteJobResponse> {
+    return request(`/api/v1/sites/${encodeURIComponent(id)}/update`, {
+      method: "POST",
+      body: JSON.stringify({ version }),
+    });
+  },
+
+  deleteSite(id: string): Promise<{ job: Job }> {
+    return request(`/api/v1/sites/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
+  async listOperators(): Promise<Operator[]> {
+    const body = await request<{ operators: Operator[] }>("/api/v1/operators");
+    return body.operators;
+  },
+
+  createOperator(email: string, password: string, role: string): Promise<Operator> {
+    return request("/api/v1/operators", {
+      method: "POST",
+      body: JSON.stringify({ email, password, role }),
+    });
+  },
+
+  async listAudit(): Promise<AuditEntry[]> {
+    const body = await request<{ audit: AuditEntry[] }>("/api/v1/audit?limit=100");
+    return body.audit;
   },
 };

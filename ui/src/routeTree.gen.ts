@@ -10,17 +10,38 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AppsRouteImport } from './routes/apps'
 import { Route as JobsRouteImport } from './routes/jobs'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as PlansRouteImport } from './routes/plans'
+import { Route as ServersRouteImport } from './routes/servers'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SitesRouteImport } from './routes/sites'
+import { Route as AppsIndexRouteImport } from './routes/apps.index'
+import { Route as JobsIndexRouteImport } from './routes/jobs.index'
 import { Route as JobsIdRouteImport } from './routes/jobs.$id'
+import { Route as PlansIndexRouteImport } from './routes/plans.index'
+import { Route as ServersIndexRouteImport } from './routes/servers.index'
+import { Route as ServersIdRouteImport } from './routes/servers.$id'
 import { Route as SitesIndexRouteImport } from './routes/sites.index'
 import { Route as SitesIdRouteImport } from './routes/sites.$id'
 import { Route as SitesNewRouteImport } from './routes/sites.new'
+import { Route as SitesIdIndexRouteImport } from './routes/sites.$id.index'
+import { Route as SitesIdBackupsRouteImport } from './routes/sites.$id.backups'
+import { Route as SitesIdDangerRouteImport } from './routes/sites.$id.danger'
+import { Route as SitesIdEnvRouteImport } from './routes/sites.$id.env'
+import { Route as SitesIdLimitsRouteImport } from './routes/sites.$id.limits'
+import { Route as SitesIdLogsRouteImport } from './routes/sites.$id.logs'
+import { Route as SitesIdUpdatesRouteImport } from './routes/sites.$id.updates'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppsRoute = AppsRouteImport.update({
+  id: '/apps',
+  path: '/apps',
   getParentRoute: () => rootRouteImport,
 } as any)
 const JobsRoute = JobsRouteImport.update({
@@ -33,15 +54,55 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PlansRoute = PlansRouteImport.update({
+  id: '/plans',
+  path: '/plans',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ServersRoute = ServersRouteImport.update({
+  id: '/servers',
+  path: '/servers',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SitesRoute = SitesRouteImport.update({
   id: '/sites',
   path: '/sites',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppsIndexRoute = AppsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppsRoute,
+} as any)
+const JobsIndexRoute = JobsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => JobsRoute,
+} as any)
 const JobsIdRoute = JobsIdRouteImport.update({
   id: '/$id',
   path: '/$id',
   getParentRoute: () => JobsRoute,
+} as any)
+const PlansIndexRoute = PlansIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => PlansRoute,
+} as any)
+const ServersIndexRoute = ServersIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ServersRoute,
+} as any)
+const ServersIdRoute = ServersIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => ServersRoute,
 } as any)
 const SitesIndexRoute = SitesIndexRouteImport.update({
   id: '/',
@@ -58,73 +119,198 @@ const SitesNewRoute = SitesNewRouteImport.update({
   path: '/new',
   getParentRoute: () => SitesRoute,
 } as any)
+const SitesIdIndexRoute = SitesIdIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => SitesIdRoute,
+} as any)
+const SitesIdBackupsRoute = SitesIdBackupsRouteImport.update({
+  id: '/backups',
+  path: '/backups',
+  getParentRoute: () => SitesIdRoute,
+} as any)
+const SitesIdDangerRoute = SitesIdDangerRouteImport.update({
+  id: '/danger',
+  path: '/danger',
+  getParentRoute: () => SitesIdRoute,
+} as any)
+const SitesIdEnvRoute = SitesIdEnvRouteImport.update({
+  id: '/env',
+  path: '/env',
+  getParentRoute: () => SitesIdRoute,
+} as any)
+const SitesIdLimitsRoute = SitesIdLimitsRouteImport.update({
+  id: '/limits',
+  path: '/limits',
+  getParentRoute: () => SitesIdRoute,
+} as any)
+const SitesIdLogsRoute = SitesIdLogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
+  getParentRoute: () => SitesIdRoute,
+} as any)
+const SitesIdUpdatesRoute = SitesIdUpdatesRouteImport.update({
+  id: '/updates',
+  path: '/updates',
+  getParentRoute: () => SitesIdRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/apps': typeof AppsRouteWithChildren
   '/jobs': typeof JobsRouteWithChildren
   '/login': typeof LoginRoute
+  '/plans': typeof PlansRouteWithChildren
+  '/servers': typeof ServersRouteWithChildren
+  '/settings': typeof SettingsRoute
   '/sites': typeof SitesRouteWithChildren
   '/jobs/$id': typeof JobsIdRoute
-  '/sites/$id': typeof SitesIdRoute
+  '/servers/$id': typeof ServersIdRoute
+  '/sites/$id': typeof SitesIdRouteWithChildren
   '/sites/new': typeof SitesNewRoute
+  '/apps/': typeof AppsIndexRoute
+  '/jobs/': typeof JobsIndexRoute
+  '/plans/': typeof PlansIndexRoute
+  '/servers/': typeof ServersIndexRoute
   '/sites/': typeof SitesIndexRoute
+  '/sites/$id/backups': typeof SitesIdBackupsRoute
+  '/sites/$id/danger': typeof SitesIdDangerRoute
+  '/sites/$id/env': typeof SitesIdEnvRoute
+  '/sites/$id/limits': typeof SitesIdLimitsRoute
+  '/sites/$id/logs': typeof SitesIdLogsRoute
+  '/sites/$id/updates': typeof SitesIdUpdatesRoute
+  '/sites/$id/': typeof SitesIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/jobs': typeof JobsRouteWithChildren
   '/login': typeof LoginRoute
+  '/settings': typeof SettingsRoute
   '/jobs/$id': typeof JobsIdRoute
-  '/sites/$id': typeof SitesIdRoute
+  '/servers/$id': typeof ServersIdRoute
   '/sites/new': typeof SitesNewRoute
+  '/apps': typeof AppsIndexRoute
+  '/jobs': typeof JobsIndexRoute
+  '/plans': typeof PlansIndexRoute
+  '/servers': typeof ServersIndexRoute
   '/sites': typeof SitesIndexRoute
+  '/sites/$id/backups': typeof SitesIdBackupsRoute
+  '/sites/$id/danger': typeof SitesIdDangerRoute
+  '/sites/$id/env': typeof SitesIdEnvRoute
+  '/sites/$id/limits': typeof SitesIdLimitsRoute
+  '/sites/$id/logs': typeof SitesIdLogsRoute
+  '/sites/$id/updates': typeof SitesIdUpdatesRoute
+  '/sites/$id': typeof SitesIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/apps': typeof AppsRouteWithChildren
   '/jobs': typeof JobsRouteWithChildren
   '/login': typeof LoginRoute
+  '/plans': typeof PlansRouteWithChildren
+  '/servers': typeof ServersRouteWithChildren
+  '/settings': typeof SettingsRoute
   '/sites': typeof SitesRouteWithChildren
   '/jobs/$id': typeof JobsIdRoute
-  '/sites/$id': typeof SitesIdRoute
+  '/servers/$id': typeof ServersIdRoute
+  '/sites/$id': typeof SitesIdRouteWithChildren
   '/sites/new': typeof SitesNewRoute
+  '/apps/': typeof AppsIndexRoute
+  '/jobs/': typeof JobsIndexRoute
+  '/plans/': typeof PlansIndexRoute
+  '/servers/': typeof ServersIndexRoute
   '/sites/': typeof SitesIndexRoute
+  '/sites/$id/backups': typeof SitesIdBackupsRoute
+  '/sites/$id/danger': typeof SitesIdDangerRoute
+  '/sites/$id/env': typeof SitesIdEnvRoute
+  '/sites/$id/limits': typeof SitesIdLimitsRoute
+  '/sites/$id/logs': typeof SitesIdLogsRoute
+  '/sites/$id/updates': typeof SitesIdUpdatesRoute
+  '/sites/$id/': typeof SitesIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/apps'
     | '/jobs'
     | '/login'
+    | '/plans'
+    | '/servers'
+    | '/settings'
     | '/sites'
     | '/jobs/$id'
+    | '/servers/$id'
     | '/sites/$id'
     | '/sites/new'
+    | '/apps/'
+    | '/jobs/'
+    | '/plans/'
+    | '/servers/'
     | '/sites/'
+    | '/sites/$id/backups'
+    | '/sites/$id/danger'
+    | '/sites/$id/env'
+    | '/sites/$id/limits'
+    | '/sites/$id/logs'
+    | '/sites/$id/updates'
+    | '/sites/$id/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/jobs'
     | '/login'
+    | '/settings'
     | '/jobs/$id'
-    | '/sites/$id'
+    | '/servers/$id'
     | '/sites/new'
+    | '/apps'
+    | '/jobs'
+    | '/plans'
+    | '/servers'
     | '/sites'
+    | '/sites/$id/backups'
+    | '/sites/$id/danger'
+    | '/sites/$id/env'
+    | '/sites/$id/limits'
+    | '/sites/$id/logs'
+    | '/sites/$id/updates'
+    | '/sites/$id'
   id:
     | '__root__'
     | '/'
+    | '/apps'
     | '/jobs'
     | '/login'
+    | '/plans'
+    | '/servers'
+    | '/settings'
     | '/sites'
     | '/jobs/$id'
+    | '/servers/$id'
     | '/sites/$id'
     | '/sites/new'
+    | '/apps/'
+    | '/jobs/'
+    | '/plans/'
+    | '/servers/'
     | '/sites/'
+    | '/sites/$id/backups'
+    | '/sites/$id/danger'
+    | '/sites/$id/env'
+    | '/sites/$id/limits'
+    | '/sites/$id/logs'
+    | '/sites/$id/updates'
+    | '/sites/$id/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AppsRoute: typeof AppsRouteWithChildren
   JobsRoute: typeof JobsRouteWithChildren
   LoginRoute: typeof LoginRoute
+  PlansRoute: typeof PlansRouteWithChildren
+  ServersRoute: typeof ServersRouteWithChildren
+  SettingsRoute: typeof SettingsRoute
   SitesRoute: typeof SitesRouteWithChildren
 }
 
@@ -135,6 +321,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/apps': {
+      id: '/apps'
+      path: '/apps'
+      fullPath: '/apps'
+      preLoaderRoute: typeof AppsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/jobs': {
@@ -151,6 +344,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/plans': {
+      id: '/plans'
+      path: '/plans'
+      fullPath: '/plans'
+      preLoaderRoute: typeof PlansRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/servers': {
+      id: '/servers'
+      path: '/servers'
+      fullPath: '/servers'
+      preLoaderRoute: typeof ServersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sites': {
       id: '/sites'
       path: '/sites'
@@ -158,12 +372,47 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SitesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/apps/': {
+      id: '/apps/'
+      path: '/'
+      fullPath: '/apps/'
+      preLoaderRoute: typeof AppsIndexRouteImport
+      parentRoute: typeof AppsRoute
+    }
+    '/jobs/': {
+      id: '/jobs/'
+      path: '/'
+      fullPath: '/jobs/'
+      preLoaderRoute: typeof JobsIndexRouteImport
+      parentRoute: typeof JobsRoute
+    }
     '/jobs/$id': {
       id: '/jobs/$id'
       path: '/$id'
       fullPath: '/jobs/$id'
       preLoaderRoute: typeof JobsIdRouteImport
       parentRoute: typeof JobsRoute
+    }
+    '/plans/': {
+      id: '/plans/'
+      path: '/'
+      fullPath: '/plans/'
+      preLoaderRoute: typeof PlansIndexRouteImport
+      parentRoute: typeof PlansRoute
+    }
+    '/servers/': {
+      id: '/servers/'
+      path: '/'
+      fullPath: '/servers/'
+      preLoaderRoute: typeof ServersIndexRouteImport
+      parentRoute: typeof ServersRoute
+    }
+    '/servers/$id': {
+      id: '/servers/$id'
+      path: '/$id'
+      fullPath: '/servers/$id'
+      preLoaderRoute: typeof ServersIdRouteImport
+      parentRoute: typeof ServersRoute
     }
     '/sites/': {
       id: '/sites/'
@@ -186,27 +435,134 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SitesNewRouteImport
       parentRoute: typeof SitesRoute
     }
+    '/sites/$id/': {
+      id: '/sites/$id/'
+      path: '/'
+      fullPath: '/sites/$id/'
+      preLoaderRoute: typeof SitesIdIndexRouteImport
+      parentRoute: typeof SitesIdRoute
+    }
+    '/sites/$id/backups': {
+      id: '/sites/$id/backups'
+      path: '/backups'
+      fullPath: '/sites/$id/backups'
+      preLoaderRoute: typeof SitesIdBackupsRouteImport
+      parentRoute: typeof SitesIdRoute
+    }
+    '/sites/$id/danger': {
+      id: '/sites/$id/danger'
+      path: '/danger'
+      fullPath: '/sites/$id/danger'
+      preLoaderRoute: typeof SitesIdDangerRouteImport
+      parentRoute: typeof SitesIdRoute
+    }
+    '/sites/$id/env': {
+      id: '/sites/$id/env'
+      path: '/env'
+      fullPath: '/sites/$id/env'
+      preLoaderRoute: typeof SitesIdEnvRouteImport
+      parentRoute: typeof SitesIdRoute
+    }
+    '/sites/$id/limits': {
+      id: '/sites/$id/limits'
+      path: '/limits'
+      fullPath: '/sites/$id/limits'
+      preLoaderRoute: typeof SitesIdLimitsRouteImport
+      parentRoute: typeof SitesIdRoute
+    }
+    '/sites/$id/logs': {
+      id: '/sites/$id/logs'
+      path: '/logs'
+      fullPath: '/sites/$id/logs'
+      preLoaderRoute: typeof SitesIdLogsRouteImport
+      parentRoute: typeof SitesIdRoute
+    }
+    '/sites/$id/updates': {
+      id: '/sites/$id/updates'
+      path: '/updates'
+      fullPath: '/sites/$id/updates'
+      preLoaderRoute: typeof SitesIdUpdatesRouteImport
+      parentRoute: typeof SitesIdRoute
+    }
   }
 }
 
+interface AppsRouteChildren {
+  AppsIndexRoute: typeof AppsIndexRoute
+}
+
+const AppsRouteChildren: AppsRouteChildren = {
+  AppsIndexRoute: AppsIndexRoute,
+}
+
+const AppsRouteWithChildren = AppsRoute._addFileChildren(AppsRouteChildren)
+
 interface JobsRouteChildren {
   JobsIdRoute: typeof JobsIdRoute
+  JobsIndexRoute: typeof JobsIndexRoute
 }
 
 const JobsRouteChildren: JobsRouteChildren = {
   JobsIdRoute: JobsIdRoute,
+  JobsIndexRoute: JobsIndexRoute,
 }
 
 const JobsRouteWithChildren = JobsRoute._addFileChildren(JobsRouteChildren)
 
+interface PlansRouteChildren {
+  PlansIndexRoute: typeof PlansIndexRoute
+}
+
+const PlansRouteChildren: PlansRouteChildren = {
+  PlansIndexRoute: PlansIndexRoute,
+}
+
+const PlansRouteWithChildren = PlansRoute._addFileChildren(PlansRouteChildren)
+
+interface ServersRouteChildren {
+  ServersIdRoute: typeof ServersIdRoute
+  ServersIndexRoute: typeof ServersIndexRoute
+}
+
+const ServersRouteChildren: ServersRouteChildren = {
+  ServersIdRoute: ServersIdRoute,
+  ServersIndexRoute: ServersIndexRoute,
+}
+
+const ServersRouteWithChildren =
+  ServersRoute._addFileChildren(ServersRouteChildren)
+
+interface SitesIdRouteChildren {
+  SitesIdBackupsRoute: typeof SitesIdBackupsRoute
+  SitesIdDangerRoute: typeof SitesIdDangerRoute
+  SitesIdEnvRoute: typeof SitesIdEnvRoute
+  SitesIdLimitsRoute: typeof SitesIdLimitsRoute
+  SitesIdLogsRoute: typeof SitesIdLogsRoute
+  SitesIdUpdatesRoute: typeof SitesIdUpdatesRoute
+  SitesIdIndexRoute: typeof SitesIdIndexRoute
+}
+
+const SitesIdRouteChildren: SitesIdRouteChildren = {
+  SitesIdBackupsRoute: SitesIdBackupsRoute,
+  SitesIdDangerRoute: SitesIdDangerRoute,
+  SitesIdEnvRoute: SitesIdEnvRoute,
+  SitesIdLimitsRoute: SitesIdLimitsRoute,
+  SitesIdLogsRoute: SitesIdLogsRoute,
+  SitesIdUpdatesRoute: SitesIdUpdatesRoute,
+  SitesIdIndexRoute: SitesIdIndexRoute,
+}
+
+const SitesIdRouteWithChildren =
+  SitesIdRoute._addFileChildren(SitesIdRouteChildren)
+
 interface SitesRouteChildren {
-  SitesIdRoute: typeof SitesIdRoute
+  SitesIdRoute: typeof SitesIdRouteWithChildren
   SitesNewRoute: typeof SitesNewRoute
   SitesIndexRoute: typeof SitesIndexRoute
 }
 
 const SitesRouteChildren: SitesRouteChildren = {
-  SitesIdRoute: SitesIdRoute,
+  SitesIdRoute: SitesIdRouteWithChildren,
   SitesNewRoute: SitesNewRoute,
   SitesIndexRoute: SitesIndexRoute,
 }
@@ -215,8 +571,12 @@ const SitesRouteWithChildren = SitesRoute._addFileChildren(SitesRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AppsRoute: AppsRouteWithChildren,
   JobsRoute: JobsRouteWithChildren,
   LoginRoute: LoginRoute,
+  PlansRoute: PlansRouteWithChildren,
+  ServersRoute: ServersRouteWithChildren,
+  SettingsRoute: SettingsRoute,
   SitesRoute: SitesRouteWithChildren,
 }
 export const routeTree = rootRouteImport

@@ -1,5 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type CreateSitePayload, type Operator } from "./client";
+import {
+  api,
+  type CreateSitePayload,
+  type Operator,
+  type PlanInput,
+} from "./client";
 
 export function useMe() {
   return useQuery({
@@ -84,4 +89,180 @@ export function useCreateSite() {
       void queryClient.invalidateQueries({ queryKey: ["sites"] });
     },
   });
+}
+
+export function useServer(id: string) {
+  return useQuery({ queryKey: ["servers", id], queryFn: () => api.getServer(id) });
+}
+
+export function useCreateServer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => api.createServer(name),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["servers"] });
+    },
+  });
+}
+
+export function useDeleteServer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteServer(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["servers"] });
+    },
+  });
+}
+
+export function useValidateManifest() {
+  return useMutation({
+    mutationFn: (toml: string) => api.validateManifest(toml),
+  });
+}
+
+export function usePublishApp() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { toml?: string; url?: string }) => api.publishApp(payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["apps"] });
+    },
+  });
+}
+
+export function useCreatePlan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: PlanInput) => api.createPlan(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["plans"] });
+    },
+  });
+}
+
+export function useUpdatePlan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: PlanInput }) =>
+      api.updatePlan(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["plans"] });
+    },
+  });
+}
+
+export function useJobs() {
+  return useQuery({
+    queryKey: ["jobs"],
+    queryFn: () => api.listJobs(),
+    refetchInterval: 5000,
+  });
+}
+
+export function useSiteEnv(siteId: string) {
+  return useQuery({
+    queryKey: ["sites", siteId, "env"],
+    queryFn: () => api.getSiteEnv(siteId),
+  });
+}
+
+export function usePutSiteEnv(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (env: Record<string, string>) => api.putSiteEnv(siteId, env),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sites", siteId, "env"] });
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+export function useBackups(siteId: string) {
+  return useQuery({
+    queryKey: ["sites", siteId, "backups"],
+    queryFn: () => api.listBackups(siteId),
+  });
+}
+
+export function useTakeBackup(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.takeBackup(siteId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sites", siteId, "backups"] });
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+export function useRestoreBackup(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (backupId: string) => api.restoreBackup(siteId, backupId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+export function useSiteAction(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (action: "start" | "stop" | "restart" | "retry") =>
+      api.siteAction(siteId, action),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sites", siteId] });
+      void queryClient.invalidateQueries({ queryKey: ["sites"] });
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+export function useUpdateSite(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (version: string) => api.updateSite(siteId, version),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sites", siteId] });
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+export function useDeleteSite(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.deleteSite(siteId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sites"] });
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+export function useOperators() {
+  return useQuery({ queryKey: ["operators"], queryFn: () => api.listOperators() });
+}
+
+export function useCreateOperator() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      email,
+      password,
+      role,
+    }: {
+      email: string;
+      password: string;
+      role: string;
+    }) => api.createOperator(email, password, role),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["operators"] });
+    },
+  });
+}
+
+export function useAudit() {
+  return useQuery({ queryKey: ["audit"], queryFn: () => api.listAudit() });
 }

@@ -1,6 +1,7 @@
 import { Link, Navigate, Outlet, createRootRouteWithContext, useRouterState } from "@tanstack/react-router";
 import { Toaster } from "sonner";
 import { useLogout, useMe } from "@/lib/api";
+import { ConfirmProvider } from "@/components/ui/dialog";
 import type { RouterContextValue } from "@/router-context";
 
 export const Route = createRootRouteWithContext<RouterContextValue>()({
@@ -38,6 +39,7 @@ function RequireAuth() {
 function Shell({ email }: { email: string }) {
   const logout = useLogout();
   return (
+    <ConfirmProvider>
     <div className="min-h-dvh">
       <header className="flex items-center gap-4 border-b px-5 py-3">
         <Link to="/sites" className="text-base font-semibold tracking-tight">
@@ -49,6 +51,36 @@ function Shell({ email }: { email: string }) {
             className="text-muted-foreground hover:text-foreground [&.active]:text-foreground"
           >
             Sites
+          </Link>
+          <Link
+            to="/servers"
+            className="text-muted-foreground hover:text-foreground [&.active]:text-foreground"
+          >
+            Servers
+          </Link>
+          <Link
+            to="/apps"
+            className="text-muted-foreground hover:text-foreground [&.active]:text-foreground"
+          >
+            Apps
+          </Link>
+          <Link
+            to="/plans"
+            className="text-muted-foreground hover:text-foreground [&.active]:text-foreground"
+          >
+            Plans
+          </Link>
+          <Link
+            to="/jobs"
+            className="text-muted-foreground hover:text-foreground [&.active]:text-foreground"
+          >
+            Jobs
+          </Link>
+          <Link
+            to="/settings"
+            className="text-muted-foreground hover:text-foreground [&.active]:text-foreground"
+          >
+            Settings
           </Link>
           <Link
             to="/sites/new"
@@ -70,5 +102,6 @@ function Shell({ email }: { email: string }) {
         <Outlet />
       </main>
     </div>
+    </ConfirmProvider>
   );
 }
