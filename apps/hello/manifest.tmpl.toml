@@ -1,0 +1,55 @@
+# `hello` manifest template for `scripts/e2e.sh` (not a manifest by
+# itself: the script renders one file per version, replacing the
+# `__TOKENS__` with the version, the served archive URL and its sha256).
+#
+# - `__VERSION__`: 0.1.0, 0.1.1 or 0.1.2 (also `HELLO_VERSION`, which
+#   selects the boot migrations and the greeting).
+# - `__URL__` / `__SHA256__`: the artefact server and the archive digest.
+# - `__EXTRA_ENV__`: empty for 0.1.0 and 0.1.1; `HELLO_FAIL = { value =
+#   "1" }` for 0.1.2 (health 500 → the update fails → rollback with
+#   database restore, spec §6/§9).
+
+schema = 1
+
+[app]
+id = "hello"
+name = "Hello"
+version = "__VERSION__"
+homepage = "https://example.com/hello"
+health = "/healthz"
+admin_path = "/"
+startup_grace_s = 20
+
+[run]
+kind = "binary"
+workdir = "exec_dir"
+args = []
+
+[run.binary."x86_64-linux"]
+url = "__URL__"
+sha256 = "__SHA256__"
+exec = "hello"
+
+[needs]
+postgres = ">=16"
+dirs = ["uploads"]
+
+[env]
+HELLO_BIND = { from = "bind_addr" }
+DATABASE_URL = { from = "postgres_url" }
+HELLO_UPLOADS_DIR = { from = "dir", dir = "uploads" }
+HELLO_NAME = { value = "e2e" }
+HELLO_VERSION = { value = "__VERSION__" }
+__EXTRA_ENV__
+
+[limits.default]
+memory_mb = 512
+cpu_percent = 100
+disk_mb = 5120
+
+[backup]
+postgres = true
+dirs = ["uploads"]
+
+[update]
+strategy = "replace"
