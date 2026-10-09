@@ -459,6 +459,77 @@ fn to_proto_env(v: &setu_manifest::EnvVar) -> setu_proto::EnvVar {
     }
 }
 
+/// Slice form shared with the agent calls.
+pub(crate) fn to_proto_envs(vars: &[setu_manifest::EnvVar]) -> Vec<setu_proto::EnvVar> {
+    vars.iter().map(to_proto_env).collect()
+}
+
+/// Plaintext of the stored sealed env: name → (value, secret, once).
+/// Unseals secret values with the panel key; corrupt storage is
+/// `internal` (ciphertext never surfaces to callers).
+pub(crate) fn stored_plaintext(
+    site: &Site,
+    sealer: &Sealer,
+) -> Result<BTreeMap<String, (String, bool, bool)>, AppError> {
+    let mut out = BTreeMap::new();
+    let Some(arr) = site.env.as_array() else {
+        return Ok(out);
+    };
+    for v in arr {
+        let Some(name) = v.get("name").and_then(|n| n.as_str()) else {
+            continue;
+        };
+        let value = v
+            .get("value")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let secret = v.get("secret").and_then(|b| b.as_bool()).unwrap_or(false);
+        let once = v.get("once").and_then(|b| b.as_bool()).unwrap_or(false);
+        let plain = if secret {
+            sealer.open(&value).map_err(|e| {
+                tracing::error!(error = %e, "stored env failed to open");
+                AppError::internal()
+            })?
+        } else {
+            value
+        };
+        out.insert(name.to_string(), (plain, secret, once));
+    }
+    Ok(out)
+}
+
+/// Merge fresh resolution with stored values for update: `Generate` and
+/// `Prompt` entries keep their stored plaintext (an update must never
+/// rotate operator or app secrets); `Value` and `From` take the fresh
+/// resolution (author defaults refresh, derived paths re-derive).
+/// Names new to storage keep their fresh values.
+pub(crate) fn merge_update_env(
+    manifest: &Manifest,
+    fresh: &[setu_manifest::EnvVar],
+    stored: &BTreeMap<String, (String, bool, bool)>,
+) -> Vec<setu_manifest::EnvVar> {
+    use setu_manifest::EnvSpec;
+    fresh
+        .iter()
+        .map(|v| {
+            let sticky = matches!(
+                manifest.env.get(&v.name),
+                Some(EnvSpec::Generate(_)) | Some(EnvSpec::Prompt(_))
+            );
+            match (sticky, stored.get(&v.name)) {
+                (true, Some((val, secret, once))) => setu_manifest::EnvVar {
+                    name: v.name.clone(),
+                    value: val.clone(),
+                    secret: *secret,
+                    once: *once,
+                },
+                _ => v.clone(),
+            }
+        })
+        .collect()
+}
+
 /// Everything before the first agent call: manifest + plan + capacity
 /// checks, env resolution, and storing the SEALED env copy. Image
 /// manifests are rejected here, before anything is issued.

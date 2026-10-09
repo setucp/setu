@@ -25,7 +25,8 @@ use setu_manifest::{Manifest, Update};
 use setu_proto::Command;
 
 use crate::{
-    build_site, call_agent, fail, job_prompts, load_manifest, log_step, require_ok, JobCtx,
+    build_site, call_agent, fail, job_prompts, load_manifest, log_step, merge_update_env,
+    require_ok, sealed_env, stored_plaintext, to_proto_envs, JobCtx,
 };
 
 /// Update the site to `to_version`.
@@ -70,6 +71,31 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
     let server_id = site.server_id.clone();
     let old_version = site.app_version.clone();
 
+    // The file on disk holds the CURRENT values (provision wrote them,
+    // minus `once` secrets deleted after first health; the sealed DB copy
+    // retains everything). The merged env refreshes author `value` and
+    // derived `from` entries while keeping stored `generate`/`prompt`
+    // secrets — an update must never rotate them.
+    let current = match stored_plaintext(&site, &ctx.sealer) {
+        Ok(m) => m,
+        Err(e) => return Err(fail(ctx, site_id, "validate", e).await),
+    };
+    let merged = merge_update_env(&new_manifest, &new_built.env_manifest, &current);
+    let persistent: Vec<setu_manifest::EnvVar> =
+        merged.iter().filter(|v| !v.once).cloned().collect();
+    let has_once = persistent.len() != merged.len();
+    let current_proto = to_proto_envs(
+        &current
+            .iter()
+            .map(|(name, (value, secret, once))| setu_manifest::EnvVar {
+                name: name.clone(),
+                value: value.clone(),
+                secret: *secret,
+                once: *once,
+            })
+            .collect::<Vec<_>>(),
+    );
+
     log_step(ctx, "validate", true, None).await;
     ctx.db.sites().set_status(site_id, "updating", None).await?;
 
@@ -100,6 +126,16 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
     }
     log_step(ctx, "install", true, None).await;
 
+    // Write the merged env BEFORE stopping: the old process keeps its
+    // loaded env and is unaffected by the file swap. On failure the
+    // previous file is restored best-effort and the old site stays up.
+    if let Err(e) = write_env_file(ctx, &server_id, &new_built.spec, &to_proto_envs(&merged)).await
+    {
+        let _ = write_env_file(ctx, &server_id, &old_built.spec, &current_proto).await;
+        return abort_running(ctx, site_id, "write_env", e).await;
+    }
+    log_step(ctx, "write_env", true, None).await;
+
     if let Err(e) = update_call(
         ctx,
         "stop",
@@ -110,7 +146,16 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
     )
     .await
     {
-        return Err(rollback(ctx, &site, &old_version, "stop", e).await);
+        return Err(rollback(
+            ctx,
+            &site,
+            &old_version,
+            "stop",
+            e,
+            &old_built.spec,
+            &current_proto,
+        )
+        .await);
     }
     log_step(ctx, "stop", true, None).await;
 
@@ -125,7 +170,16 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
     )
     .await
     {
-        return Err(rollback(ctx, &site, &old_version, "switch_version", e).await);
+        return Err(rollback(
+            ctx,
+            &site,
+            &old_version,
+            "switch_version",
+            e,
+            &old_built.spec,
+            &current_proto,
+        )
+        .await);
     }
     log_step(ctx, "switch_version", true, None).await;
 
@@ -139,7 +193,16 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
     )
     .await
     {
-        return Err(rollback(ctx, &site, &old_version, "start", e).await);
+        return Err(rollback(
+            ctx,
+            &site,
+            &old_version,
+            "start",
+            e,
+            &old_built.spec,
+            &current_proto,
+        )
+        .await);
     }
     log_step(ctx, "start", true, None).await;
 
@@ -156,10 +219,41 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
     )
     .await
     {
-        return Err(rollback(ctx, &site, &old_version, "health", e).await);
+        return Err(rollback(
+            ctx,
+            &site,
+            &old_version,
+            "health",
+            e,
+            &old_built.spec,
+            &current_proto,
+        )
+        .await);
     }
     log_step(ctx, "health", true, None).await;
 
+    // Mirror provision: `once` secrets leave the env file after the new
+    // version's first healthy boot (file cleanup only — the running
+    // process already loaded them, so no restart). A cleanup failure is
+    // recorded but does not fail the update.
+    if has_once {
+        match write_env_file(
+            ctx,
+            &server_id,
+            &new_built.spec,
+            &to_proto_envs(&persistent),
+        )
+        .await
+        {
+            Ok(()) => log_step(ctx, "write_env_cleanup", true, None).await,
+            Err(e) => log_step(ctx, "write_env_cleanup", false, Some(&e.message)).await,
+        }
+    }
+
+    let sealed = sealed_env(&ctx.sealer, &merged);
+    if let Err(e) = ctx.db.sites().set_env(site_id, &sealed).await {
+        return Err(fail(ctx, site_id, "finish", e).await);
+    }
     ctx.db.sites().set_version(site_id, to_version).await?;
     match ctx.db.sites().set_status(site_id, "running", None).await {
         Ok(_) => {
@@ -241,6 +335,31 @@ async fn run_command_strategy(
     }
 }
 
+/// One agent `WriteEnv`: returns the error without touching site
+/// status; the caller picks the recovery (abort vs rollback).
+async fn write_env_file(
+    ctx: &JobCtx,
+    server_id: &str,
+    spec: &setu_proto::SiteSpec,
+    env: &[setu_proto::EnvVar],
+) -> Result<(), AppError> {
+    match call_agent(
+        ctx,
+        server_id,
+        Command::WriteEnv {
+            site: spec.clone(),
+            env: env.to_vec(),
+        },
+    )
+    .await
+    {
+        Ok(result) => require_ok(result)
+            .map(|_| ())
+            .map_err(|msg| AppError::new(ErrorCode::Internal, msg)),
+        Err(e) => Err(AppError::from(e)),
+    }
+}
+
 /// One agent call for the update flow: returns the error without touching
 /// site status; the caller picks the recovery (abort vs rollback).
 async fn update_call(
@@ -270,8 +389,10 @@ async fn abort_running(
     Err(err)
 }
 
-/// Post-stop failure: swap back, start, site `running` on the old
-/// version. The error always contains `rollback`. If the switch-back
+/// Post-stop failure: restore the previous env file (the update may
+/// have written new values, e.g. a poisoned default — the old binary
+/// must boot with its old env), swap back, start, site `running` on the
+/// old version. The error always contains `rollback`. If the switch-back
 /// itself fails the site is `failed` (never claim running-on-old);
 /// only a successful switch-back AND start restores `running`.
 async fn rollback(
@@ -280,9 +401,17 @@ async fn rollback(
     old_version: &str,
     step: &str,
     cause: AppError,
+    old_spec: &setu_proto::SiteSpec,
+    old_env: &[setu_proto::EnvVar],
 ) -> AppError {
     let cause_msg = cause.message.clone();
     log_step(ctx, step, false, Some(&cause_msg)).await;
+    if write_env_file(ctx, &site.server_id, old_spec, old_env)
+        .await
+        .is_err()
+    {
+        log_step(ctx, "rollback", false, Some("env restore failed")).await;
+    }
     let switched = matches!(
         call_agent(
             ctx,
