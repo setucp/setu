@@ -5,6 +5,7 @@ without this conversation.
 
 - Spec: `specs/2026-10-09-setu-design.md` (approved by the owner
   2026-10-09; open questions in §12 are the owner's).
+- Roadmap for phases 2–4: `ROADMAP.md` (scope only; plans are written per phase).
 - Plan: `plans/2026-10-09-setu-mvp.md` (16 tasks, TDD, subagent-
   driven). Ledger goes to `plans/2026-10-09-setu-mvp.ledger.md`.
 - The repo root already holds what Task 0 describes —
