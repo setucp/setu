@@ -83,3 +83,33 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+
+  # Plan Task 11 / spec §9: control plane + agent in a systemd container +
+  # hello + real Vyasa 0.2.0, 14 TAP assertions. Builds the musl binaries
+  # with the test-only features `test-root,e2e-hooks` (the release
+  # workflow never enables them).
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+          targets: x86_64-unknown-linux-musl
+      - name: musl C toolchain (ring, zstd)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      - name: End-to-end
+        shell: bash  # -eo pipefail: tee must not hide the exit code
+        env:
+          SETU_E2E_DIR: ${{ runner.temp }}/e2e
+        run: bash scripts/e2e.sh 2>&1 | tee "$RUNNER_TEMP/e2e.log"
+      - name: Upload e2e artefacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e
+          path: |
+            ${{ runner.temp }}/e2e.log
+            ${{ runner.temp }}/e2e/*.log
+            ${{ runner.temp }}/e2e/diag-*.txt

@@ -1,0 +1,12 @@
+#!/bin/sh
+# PID 1 of the e2e agent box. The base image declares
+# `VOLUME /sys/fs/cgroup`, so Docker shadows the container's own cgroup2
+# mount with an empty anonymous volume and systemd falls back to cgroup
+# v1 and dies. Mount the container's cgroup2 again (its private cgroup
+# namespace: this is the container's subtree, never the host's tree),
+# then hand over to systemd.
+set -eu
+if [ "$(stat -fc %T /sys/fs/cgroup)" != cgroup2fs ]; then
+  mount -t cgroup2 -o nsdelegate cgroup2 /sys/fs/cgroup
+fi
+exec /lib/systemd/systemd "$@"

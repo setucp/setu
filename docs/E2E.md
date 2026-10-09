@@ -1,86 +1,113 @@
 # End-to-end test
 
-`bash /home/gopal/Desktop/wp/setu-work-1/scripts/e2e.sh` — boots a
-throwaway control-plane Postgres (port 55441, container `setu-e2e-pg`),
-`setu serve` on `:7010`, and a privileged `jrei/systemd-ubuntu:24.04`
-container (`setu-e2e`) with the agent installed, then provisions
-`apps/hello` and asserts the whole lifecycle. TAP output (`ok N - name`),
-`E2E PASS` at the end. Takes 15–40 minutes (debug build + apt inside the
-container + provision/update/rollback/delete with real timeouts).
+```
+SETU_E2E_DIR=<dir> bash scripts/e2e.sh > <dir>/../e2e.log 2>&1; tail -60 <dir>/../e2e.log
+```
 
-## What it asserts
+Plan Task 11, spec §9. Builds the x86_64 musl `setu` (features
+`test-root,e2e-hooks`, which the release workflow never enables) and
+`apps/hello`, runs the control plane on the host and the agent in a
+systemd container, provisions `hello` and real Vyasa 0.2.0, and prints
+TAP: `1..14`, `ok N - name` / `not ok N - name` per assertion, then
+`E2E PASS` or `E2E FAIL`. About 6 minutes with a warm cargo cache
+(release build of the two binaries ~4 minutes cold).
 
-| # | Assertion |
-|---|---|
-| 1 | `setu` + `hello` build (debug); hello needs at most glibc 2.34 (runs on the container's 2.39) |
-| 2 | Control-plane Postgres up on 55441; migrate + owner operator |
-| 3 | `setu serve` answers `/healthz` + `/readyz`; owner login works |
-| 4 | Hello artefacts served over HTTP with computed sha256 |
-| 5 | Privileged systemd container settles; `agent install` joins |
-| 6 | Server `online` via heartbeat |
-| 7 | hello 0.1.0/0.1.1/0.1.2 published; Default plan present |
-| 8 | Provision → `running`; `curl -H 'Host: hello.test'` → `hello from hello` |
-| 9 | `MemoryMax=536870912` on the site unit (Default plan 512M); site user exists |
-| 10 | Manual backup completes; `db.dump` exists in the container |
-| 11 | Update to 0.1.1 → `running`, version + greeting (`hello-1`) observed |
-| 12 | Update to broken 0.1.2 fails with `rollback`; site stays `running` on 0.1.1 |
-| 13 | Agent killed mid-provision → command redelivered → site 2 `running` |
-| 14 | Delete → row 404, unit/drop-in/db/dir/user gone |
+## Topology and host safety
 
-## Rulings
+- Docker network `setu-e2e-net`, created and removed by the script.
+  `$HOSTIP` is the host's address on it (the bridge gateway, from `docker
+  network inspect`). Everything the host runs binds `$HOSTIP` only:
+  `setu serve` on `:7010` (`SETU_LISTEN`, `SETU_PUBLIC_URL=http://$HOSTIP:7010`),
+  the artefact server (`python3 -m http.server`) on `:8123`, and the
+  control-plane Postgres `setu-e2e-pg` (postgres:16-alpine) published on
+  `$HOSTIP:55441`. Nothing binds `0.0.0.0` on the host and port 5432 is
+  never used.
+- The agent box `setu-e2e` is the image `scripts/e2e/Dockerfile`
+  (`jrei/systemd-ubuntu:24.04` + `curl ca-certificates sudo python3
+  iproute2`; no Caddy, Postgres or nftables: `setu agent install`
+  installs them) run with `--privileged --cgroupns=private --network
+  setu-e2e-net`: no host network, no host cgroup bind mount.
+- Cleanup (trap) stops only what the script started: the PIDs it saved
+  in `$SETU_E2E_DIR/serve.pid` and `httpd.pid` (and only when the
+  process's command line still matches), the containers `setu-e2e` and
+  `setu-e2e-pg` (with their anonymous volumes), and the network. Never
+  anything by name. `SETU_E2E_KEEP=1` leaves them for debugging; the
+  next run removes them first.
+- Secrets never reach argv or the log: the setup token, owner password
+  and join token travel through the environment (`docker exec -e
+  SETU_JOIN_TOKEN` without a value) or stdin (`curl --data-binary @-`),
+  and the revealed Vyasa password is piped from the reveal response
+  straight into the login request.
 
-- **Debug, not release.** The script builds `target/debug/{setu,hello}`:
-  ~3x faster than release and small enough to `docker cp`. Cost if
-  wrong: none for correctness (same code paths); CI pays minutes back.
-- **Same bytes for 0.1.0/0.1.1/0.1.2.** The tarballs are identical; the
-  versions differ in manifest `version` + `HELLO_NAME` env value, which
-  is enough to observe the switch and the rollback. Cost if wrong: a
-  byte-identical update still exercises symlink switch + restart +
-  health, so nothing is lost.
-- **Direct `docker run`, not the Dockerfile.** `scripts/e2e/Dockerfile`
-  only pre-bakes `sudo curl ca-certificates`; the script installs them
-  with apt after boot (seconds) so there is one path, not two.
-  `E2E_IMAGE` is not a script knob: edit the `docker run` line to use a
-  prebuilt image.
-- **`agent install --tls internal` (e2e).** Test domains have no public
-  DNS, so ACME issuance would fail; Caddy issues from its internal CA
-  and the route checks use `curl -k --resolve <domain>:443:127.0.0.1`.
-  Production default keeps ACME on.
-- **Site users take the 8-char short id.** `setu-site-<full ULID>` is 36
-  chars and shadow `useradd` rejects names over 32 (`invalid user name`,
-  caught by the e2e at `WriteUnit`). Jobs builds `user` from
-  `short_id()` — the same uniqueness basis the plan already mandates
-  for db names (`site_<short>`); units keep the full id.
-- **Host inotify budget raised, never lowered.** Container-side systemd
-  runs as host root (no userns remap), so it draws inotify instances
-  from the host's `fs.inotify.max_user_instances` (default 128), which
-  production load on this host exhausts (kind, code-server, …). The
-  script bumps it to 8192 when lower via a throwaway privileged
-  container (`sysctl -w`; privileged Docker is already required). This
-  only adds headroom, persists until reboot, and is the standard tuning
-  for container hosts. Diagnosis evidence: `systemd` as PID 1 exited
-  255 with `Failed to create control group inotify object: Too many
-  open files` (visible only with `docker run -t`, since PID 1 logs to
-  `/dev/console`); a probe binary confirmed 0 instances creatable as
-  container root vs 58 as uid 1000. The script also passes `-t` so
-  `docker logs setu-e2e` shows the boot for debugging.
+## Setup (not numbered)
+
+Build; image; network; Postgres; `setu serve` with `SETU_DATA_DIR=
+$SETU_E2E_DIR/data`; `POST /api/v1/setup` with the token from
+`$SETU_E2E_DIR/data/setup-token` (every mutation carries `Origin:
+$SETU_PUBLIC_URL`, ledger R103); login (cookie jar); `POST /servers`
+(the install command must not contain the join token, R106); box up;
+`docker cp` the binary to `/opt/setu/setu` (root, 0755); `setu agent
+install --control-plane http://$HOSTIP:7010 --insecure --tls internal`
+with `SETU_JOIN_TOKEN` in the environment; a drop-in
+`SETU_AGENT_RECONCILE_SECS=10` for the agent; server `online` with a
+real heartbeat; `setu agent doctor` exits 0; three hello archives
+(same binary plus a `VERSION` file) and manifests rendered from
+`apps/hello/manifest.tmpl.toml`; `POST /apps` ×3. A setup failure prints
+`Bail out!` and diagnostics.
+
+## Assertions
+
+| # | Name | Checks |
+|---|---|---|
+| 1 | `provision_under_60s` | hello 0.1.0 on `hello.test`: job `done`, site `running`, elapsed < 60 s (printed) |
+| 2 | `serves_over_tls` | `curl -sk --resolve hello.test:443:127.0.0.1 https://hello.test/` = `hello from e2e v0.1.0` |
+| 3 | `ownership_and_modes` | `env` `root:root 600`, `data` `setu-site-<short> 750`, `bin` `root:root 755` |
+| 4 | `public_bind_refused_by_firewall` | a `0.0.0.0:25000` listener in the box answers on its loopback but not from the host (`$CTN_IP:25000`); `nft list table inet setu` ok |
+| 5 | `caddy_tcp_admin_closed + site_user_cannot_open_admin_socket` | `localhost:2019` closed; root can use `/run/caddy/admin.sock`, `setu-site-<short>` cannot |
+| 6 | `limits_and_metrics` | `MemoryMax=536870912`; within 90 s `GET /sites/{id}` has `metrics.memory_bytes > 0` and `disk_bytes > 0` |
+| 7 | `backup_restore` | note `a`; backup `done`; note `b`; restore `done` → `GET /notes` = `["a"]` and `GET /uploads` = `["note-1.txt"]` (database and `uploads` dir restored) |
+| 8 | `update_to_0_1_1` | job `done`, `running`, `app_version` 0.1.1, `/` says `v0.1.1`, `notes_v2` in `\dt` |
+| 9 | `rollback_restores_database` | update to 0.1.2 (`HELLO_FAIL=1`): job `failed` with `rollback: …`; `running` on 0.1.1; `notes_v3` absent, `notes_v2` present; notes `["a"]`; `/` says `v0.1.1` |
+| 10 | `agent_exit_mid_provision_recovers` | drop-in `SETU_AGENT_TEST_EXIT_AFTER=write_unit` + `Restart=no`; create `two.test`; agent unit goes `inactive`; drop-in removed, `daemon-reload`, restart; job `done`, site `running`, exactly one `step write_unit:` line in the job log, and the agent journal shows `posting the cached result` (or `duplicate command: returning the cached result`) for the `write_unit` command id |
+| 11 | `delete_site` | site 404; unit inactive, drop-in gone, `systemctl status` fails; user, database `site_<short>` and `/srv/setu/sites/<short>` gone; `GET /backups` lists the `pre_delete` backup with domain `hello.test`; `DELETE /backups/{bid}` → job `done`, `/var/lib/setu/backups/<short>/<bid>` gone, no longer listed |
+| 12 | `vyasa_0_2_0` | `POST /apps` with `crates/manifest/tests/corpus/vyasa_0_2_0.toml` (archive from GitHub, fetched by the agent in the box); `vyasa.test` `running` in < 60 s; `/readyz` 200; `/admin` contains `<div id="root"`; reveal `VYASA_ADMIN_PASSWORD`; `POST https://vyasa.test/api/v1/auth/login {email, password}` with `Origin: https://vyasa.test` → 200 |
+| 13 | `survives_container_restart` | `docker restart -s SIGRTMIN+3` (systemd's clean shutdown): `two.test` and `vyasa.test` serve over TLS within 60 s; `nft list table inet setu` ok |
+| 14 | `reconcile_repairs_lost_autosave` | `rm /var/lib/caddy/.config/caddy/autosave.json`; `systemctl restart caddy-api`; both routes back within 30 s through reconcile |
+
+## `apps/hello`
+
+One binary; the version and failure flag come from the manifest's `env`
+values. `GET /` → `hello from <HELLO_NAME> v<HELLO_VERSION>`;
+`/healthz` 500 when `HELLO_FAIL=1`, else 200 after `SELECT 1`;
+`GET|POST /notes` (table `notes`), each note also written to
+`HELLO_UPLOADS_DIR` (`uploads`, backed up) and listed by `GET /uploads`;
+a `last-boot` marker in `HELLO_STATE_DIR` (`state`, not backed up).
+Boot migrations: 0.1.1 creates `notes_v2` and refuses to boot when
+`notes_v3` exists; 0.1.2 creates `notes_v3` and serves (health fails).
+So a rollback that does not replace the database is visibly broken.
+
+## Requirements
+
+Docker with privileged containers on a cgroup v2 host; `jq curl openssl
+python3`; the `x86_64-unknown-linux-musl` target (in
+`rust-toolchain.toml`) and a C compiler for it (`musl-tools`; without
+`musl-gcc` the script sets `CC_x86_64_unknown_linux_musl=clang`, which
+builds `ring` and `zstd-sys` against the system headers, ledger R119);
+outbound HTTPS from the box (Ubuntu archive, Caddy, GitHub).
 
 ## Debugging
 
-- Full log: `/tmp/opencode/setu-e2e/e2e.log`; per-step logs beside it
-  (`serve.log`, `install.log`, `artifacts.log`).
-- While it runs: `docker exec setu-e2e systemctl status setu-agent 'setu-site@*'`;
-  `docker exec setu-e2e journalctl -u setu-agent -n 200`;
-  `docker exec setu-e2e cat /var/lib/setu/state.json`;
-  `docker exec setu-e2e curl -s --unix-socket /run/caddy/admin.sock -H 'Host: 127.0.0.1' http://x/config/`;
-  control-plane job log via `GET /api/v1/jobs/<id>` (cookie from login).
-- Cleanup is the script's trap (recorded PIDs + the two containers). If
-  it died hard: `docker rm -f setu-e2e setu-e2e-pg` and kill the PID in
-  `/tmp/opencode/setu-e2e/serve.pid` (and `artifacts.pid`) — nothing else.
-- Never touch `setu-test-pg` (port 55440) or host Postgres (5432).
+`SETU_E2E_KEEP=1`, then: `docker exec setu-e2e systemctl status
+setu-agent caddy-api 'setu-site@*'`; `docker exec setu-e2e journalctl
+-u setu-agent -n 200`; `docker exec setu-e2e cat
+/var/lib/setu/state.json`; `docker exec setu-e2e curl -s --unix-socket
+/run/caddy/admin.sock http://localhost/config/`; `GET
+/api/v1/jobs/<id>` with the cookie jar `$SETU_E2E_DIR/cookies.txt`.
+Each `not ok` writes `$SETU_E2E_DIR/diag-NN-<name>.txt` (serve log,
+unit status, agent and site journals, state, Caddy routes, the job
+logs) and prints its tail. Fix the code, never the assertion.
 
 ## CI
 
-The `e2e` job in `.github/workflows/ci.yml` runs the script on
-`ubuntu-latest` (privileged Docker is available on GitHub-hosted
-runners), gated to Rust/script/image changes, timeout 40 minutes.
+Job `e2e` in `.github/workflows/ci.yml` on `ubuntu-24.04` with the musl
+target and `musl-tools`; uploads the log and diagnostics on failure.
