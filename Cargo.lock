@@ -2322,6 +2322,7 @@ dependencies = [
  "setu-manifest",
  "setu-proto",
  "setu-testkit",
+ "sqlx",
  "thiserror",
  "tokio",
  "tracing",
