@@ -1,0 +1,9 @@
+/target
+/ui/node_modules
+/ui/dist
+/.superpowers/
+/.sqlx-cache/
+*.log
+.env
+.env.*
+/.run/
