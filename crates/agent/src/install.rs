@@ -260,15 +260,14 @@ async fn ensure_services() -> Result<(), InstallError> {
     }
     Ok(())
 }
-/// Make sure Caddy's admin API listens on 127.0.0.1:2019 (best effort:
-//  skipped when already reachable).
+/// Make sure Caddy serves the agent-managed `srv0` (converge, not just
+/// probe): a fresh distro Caddy answers the admin API with its default
+/// Caddyfile config, whose catch-all route would shadow every site route
+/// (found by the e2e: "Caddy works!" instead of the app). `/load` the
+/// bootstrap only when `srv0` is missing or holds no `setu-` route —
+/// never on a live server, where wiping would drop running sites.
 async fn ensure_caddy_admin() -> Result<(), InstallError> {
-    let probe = reqwest::Client::new()
-        .get("http://127.0.0.1:2019/config/")
-        .timeout(std::time::Duration::from_secs(3))
-        .send()
-        .await;
-    if probe.is_ok_and(|r| r.status().is_success()) {
+    if caddy_is_managed().await {
         return Ok(());
     }
     // Point Caddy at a minimal config with the admin API enabled; the
@@ -288,6 +287,33 @@ async fn ensure_caddy_admin() -> Result<(), InstallError> {
         ));
     }
     Ok(())
+}
+
+/// True when Caddy already serves agent-managed config: `srv0` exists and
+/// holds at least one `setu-` route — a live server we must never wipe.
+/// Fresh/foreign configs (default Caddyfile catch-all, missing `srv0`,
+/// empty array) return false so `ensure_caddy_admin` `/load`s the
+/// bootstrap. Reloading identical bytes on a site-less server is harmless.
+async fn caddy_is_managed() -> bool {
+    let routes: Result<reqwest::Response, _> = reqwest::Client::new()
+        .get("http://127.0.0.1:2019/config/apps/http/servers/srv0/routes")
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await;
+    let Ok(resp) = routes else {
+        return false;
+    };
+    if !resp.status().is_success() {
+        return false;
+    }
+    let Ok(list) = resp.json::<Option<Vec<serde_json::Value>>>().await else {
+        return false;
+    };
+    list.unwrap_or_default().iter().any(|r| {
+        r.get("@id")
+            .and_then(|v| v.as_str())
+            .is_some_and(|id| id.starts_with("setu-"))
+    })
 }
 
 /// Bootstrap Caddy config posted by `ensure_caddy_admin`. `auto_https_off`

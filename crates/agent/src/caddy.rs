@@ -64,10 +64,8 @@ impl CaddyAdmin {
         )
     }
 
-    /// Numeric index of the route carrying `@id`, or `None` when absent.
-    /// A missing/`null` routes key reads as empty (bootstrap always sets
-    /// `[]`; anything else is a broken Caddy config and errors).
-    async fn route_index(&self, id: &str) -> anyhow::Result<Option<usize>> {
+    /// Full routes array (`[]` when the key is missing/`null`).
+    async fn list_routes(&self) -> anyhow::Result<Vec<serde_json::Value>> {
         let resp = self
             .client
             .get(self.routes_url())
@@ -81,8 +79,14 @@ impl CaddyAdmin {
             .json()
             .await
             .map_err(|e| anyhow::anyhow!("caddy list routes: bad json: {e}"))?;
-        let routes = routes.unwrap_or_default();
-        Ok(routes
+        Ok(routes.unwrap_or_default())
+    }
+
+    /// Numeric index of the route carrying `@id`, or `None` when absent.
+    async fn route_index(&self, id: &str) -> anyhow::Result<Option<usize>> {
+        Ok(self
+            .list_routes()
+            .await?
             .iter()
             .position(|r| r.get("@id").and_then(|v| v.as_str()) == Some(id)))
     }
@@ -93,32 +97,26 @@ impl Caddy for CaddyAdmin {
     /// Idempotent upsert: the admin API addresses `routes` (a JSON
     /// array) by numeric index only — `@id` in the path is rejected
     /// (`invalid array index`, found by the e2e against real Caddy).
-    /// So: list, replace by index when present, else POST-append.
+    /// Our route goes FIRST in the array (whole-collection PUT): a
+    /// foreign catch-all (distro default page) must never shadow a
+    /// host-specific route, since Caddy evaluates routes in order.
     async fn set_route(&self, domain: &str, port: u16) -> anyhow::Result<()> {
         if !valid_domain(domain) {
             anyhow::bail!("caddy set_route: invalid domain {domain:?}");
         }
         let body = route_body(domain, port);
         let id = route_id(domain);
-        let idx = self.route_index(&id).await?;
-        let resp = match idx {
-            Some(i) => self
-                .client
-                .put(self.routes_url() + &format!("/{i}"))
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| anyhow::anyhow!("caddy set_route {domain}: {e}"))?,
-            None => self
-                .client
-                .post(self.routes_url())
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| anyhow::anyhow!("caddy set_route {domain}: {e}"))?,
-        };
+        let mut routes = self.list_routes().await?;
+        routes.retain(|r| r.get("@id").and_then(|v| v.as_str()) != Some(id.as_str()));
+        routes.insert(0, body);
+        let resp = self
+            .client
+            .put(self.routes_url())
+            .header("Content-Type", "application/json")
+            .json(&routes)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("caddy set_route {domain}: {e}"))?;
         if !resp.status().is_success() {
             anyhow::bail!("caddy set_route {domain}: HTTP {}", resp.status());
         }
@@ -242,13 +240,20 @@ mod tests {
             let routes = routes.clone();
             let collection = routes.clone();
             Router::new()
-                // Collection: GET lists, POST appends.
+                // Collection: GET lists, POST appends, PUT replaces the
+                // whole array (real Caddy supports all three).
                 .route(
                     "/config/apps/http/servers/srv0/routes",
-                    any(move |body: String| {
+                    any(move |method: axum::http::Method, body: String| {
                         let routes = collection.clone();
                         async move {
                             let mut lock = routes.lock().expect("mock lock");
+                            if method == axum::http::Method::PUT {
+                                let v: Vec<serde_json::Value> =
+                                    serde_json::from_str(&body).unwrap_or_default();
+                                *lock = v;
+                                return (StatusCode::OK, Json(serde_json::Value::Null));
+                            }
                             if body.is_empty() {
                                 return (
                                     StatusCode::OK,
@@ -327,5 +332,29 @@ mod tests {
             lock[0]["handle"][0]["upstreams"][0]["dial"],
             "127.0.0.1:20003"
         );
+    }
+
+    #[tokio::test]
+    async fn admin_prepends_ahead_of_foreign_catchall() {
+        let (base, routes, _guard) = mock_admin().await;
+        // A foreign catch-all (distro default page): ours must land
+        // ahead of it and never duplicate.
+        routes.lock().expect("mock lock").push(serde_json::json!({
+            "@id": "default-catchall",
+            "handle": [{"handler": "static_response", "body": "Caddy works!"}],
+        }));
+        let c = CaddyAdmin::new(base);
+        c.set_route("a.test", 20001).await.expect("create");
+        c.set_route("a.test", 20002).await.expect("repoint");
+        {
+            let lock = routes.lock().expect("mock lock");
+            assert_eq!(lock.len(), 2, "routes: {lock:?}");
+            assert_eq!(lock[0]["@id"], "setu-a.test", "ours first: {lock:?}");
+            assert_eq!(
+                lock[0]["handle"][0]["upstreams"][0]["dial"], "127.0.0.1:20002",
+                "repoint applied once: {lock:?}"
+            );
+            assert_eq!(lock[1]["@id"], "default-catchall", "foreign kept: {lock:?}");
+        }
     }
 }
