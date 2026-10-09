@@ -125,6 +125,21 @@ if ! sudo -u postgres psql -tAc "SELECT 1" >/dev/null 2>&1; then
     fi
 fi
 db_password="$(openssl rand -hex 24)"
+secret_key="$(openssl rand -hex 32)"
+if [[ -f /etc/setu/setu.toml ]]; then
+    # Re-runs (e.g. to change the public URL) must NEVER rotate the
+    # secret key or the database password: the former seals every site
+    # secret, the latter is baked into every DATABASE_URL. Reuse both.
+    old_secret="$(sed -n 's/^secret_key *= *"//p' /etc/setu/setu.toml | tr -d '"' | head -n 1)"
+    old_password="$(sed -n 's|^database_url *= *"postgres://setu:\([^@]*\)@.*|\1|p' /etc/setu/setu.toml | head -n 1)"
+    if [[ -n "$old_secret" && -n "$old_password" ]]; then
+        secret_key="$old_secret"
+        db_password="$old_password"
+        say "Reusing existing secret key and database password from /etc/setu/setu.toml"
+    else
+        fail "refusing to overwrite /etc/setu/setu.toml with fresh secrets (unparseable existing file; move it aside first)"
+    fi
+fi
 sudo -u postgres psql -v ON_ERROR_STOP=1 -q <<SQL
 DO \$\$
 BEGIN
@@ -138,7 +153,6 @@ END
 SELECT 'CREATE DATABASE setu OWNER setu' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'setu')\gexec
 SQL
 
-secret_key="$(openssl rand -hex 32)"
 umask 077
 cat > /etc/setu/setu.toml <<TOML
 # Setu control-plane config (written by install.sh; prefer env overrides).

@@ -16,6 +16,9 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-only"
+# Never published to crates.io (single binary + private repo); also
+# silences cargo-deny's path-wildcard complaint for workspace members.
+publish = false
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

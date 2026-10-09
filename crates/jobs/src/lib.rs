@@ -307,7 +307,7 @@ pub(crate) fn build_spec(
     let (site_dir, data_dir, run_dir, env_file) = site_paths(site);
     Ok(setu_proto::SiteSpec {
         site_id: site.id.clone(),
-        short_id: setu_common::short_id(&site.id),
+        short_id: setu_common::short_id(&site.id).to_lowercase(),
         // Usernames cap at 32 chars (shadow `useradd` rejects longer):
         // the 8-char short id, same uniqueness basis as db names.
         user: format!(
@@ -392,7 +392,7 @@ pub(crate) fn build_site(
     })?;
     let spec = setu_proto::SiteSpec {
         site_id: site.id.clone(),
-        short_id: setu_common::short_id(&site.id),
+        short_id: setu_common::short_id(&site.id).to_lowercase(),
         // Usernames cap at 32 chars (shadow `useradd` rejects longer):
         // the 8-char short id, same uniqueness basis as db names.
         user: format!(
@@ -427,7 +427,7 @@ pub(crate) fn minimal_spec(site: &Site) -> setu_proto::SiteSpec {
     let (site_dir, data_dir, run_dir, env_file) = site_paths(site);
     setu_proto::SiteSpec {
         site_id: site.id.clone(),
-        short_id: setu_common::short_id(&site.id),
+        short_id: setu_common::short_id(&site.id).to_lowercase(),
         // Usernames cap at 32 chars (shadow `useradd` rejects longer):
         // the 8-char short id, same uniqueness basis as db names.
         user: format!(
