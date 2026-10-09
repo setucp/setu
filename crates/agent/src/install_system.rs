@@ -105,6 +105,7 @@ impl SystemCommands for RealCommands {
 pub struct RecordingCommands {
     calls: Arc<Mutex<Vec<String>>>,
     caddy: Option<FakeAdmin>,
+    fail_on: Option<String>,
 }
 
 impl RecordingCommands {
@@ -114,6 +115,13 @@ impl RecordingCommands {
 
     pub fn starting_caddy(mut self, admin: FakeAdmin) -> Self {
         self.caddy = Some(admin);
+        self
+    }
+
+    /// Every command whose line contains `needle` fails (after being
+    /// recorded).
+    pub fn failing_on(mut self, needle: &str) -> Self {
+        self.fail_on = Some(needle.to_string());
         self
     }
 
@@ -134,10 +142,14 @@ impl SystemCommands for RecordingCommands {
                 admin.set_up(true);
             }
         }
+        let fail = self.fail_on.as_deref().is_some_and(|n| line.contains(n));
         self.calls
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(line);
+        if fail {
+            anyhow::bail!("recorded failure");
+        }
         Ok(String::new())
     }
 }

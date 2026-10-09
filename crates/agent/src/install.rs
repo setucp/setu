@@ -201,9 +201,77 @@ pub fn apt_commands() -> Vec<Vec<&'static str>> {
     ]
 }
 
+/// Caddy's own Debian package from its GitHub release, used when Caddy's
+/// apt repository cannot be reached (Cloudsmith answered `402 Access to
+/// the repository has been restricted` for every path in October 2026;
+/// ledger R116). Pinned by the SHA-512 the release's
+/// `caddy_<v>_checksums.txt` publishes; x86_64 only (the only release
+/// target).
+pub const CADDY_DEB_URL: &str =
+    "https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.deb";
+/// SHA-512 of [`CADDY_DEB_URL`].
+pub const CADDY_DEB_SHA512: &str = "47e8351c2317b427af14a103e763ca1118a3d2396a88b4c0669cdec9c4a68a957690194e2423a1633f53135741c33a41bdac2b55515b7d0f7adc8b733add50d9";
+const CADDY_DEB_PATH: &str = "/var/cache/apt/archives/setu-caddy_2.11.7_amd64.deb";
+
+/// The fallback after a failed repository install: drop the Caddy list
+/// (a failing source breaks every later `apt-get update`), install the
+/// spec packages except Caddy from the distribution, then Caddy's
+/// release `.deb`, verified before `apt-get` sees it.
+pub fn caddy_deb_fallback_commands() -> Vec<Vec<String>> {
+    let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    vec![
+        v(&["rm", "-f", "/etc/apt/sources.list.d/caddy-stable.list"]),
+        v(&["apt-get", "update"]),
+        v(&[
+            "apt-get",
+            "install",
+            "-y",
+            "sudo",
+            "gnupg",
+            "postgresql-16",
+            "nftables",
+            "zstd",
+        ]),
+        v(&[
+            "curl",
+            "-fsSL",
+            "--proto",
+            "=https",
+            "--retry",
+            "3",
+            "-o",
+            CADDY_DEB_PATH,
+            CADDY_DEB_URL,
+        ]),
+        v(&[
+            "sh",
+            "-c",
+            &format!("echo '{CADDY_DEB_SHA512}  {CADDY_DEB_PATH}' | sha512sum -c --quiet -"),
+        ]),
+        v(&["apt-get", "install", "-y", CADDY_DEB_PATH]),
+        v(&["rm", "-f", CADDY_DEB_PATH]),
+    ]
+}
+
 async fn ensure_packages(sys: &dyn SystemCommands) -> Result<(), InstallError> {
-    for argv in apt_commands() {
-        sys.run(argv[0], &argv[1..]).await.map_err(step("apt"))?;
+    let cmds = apt_commands();
+    for (i, argv) in cmds.iter().enumerate() {
+        if let Err(e) = sys.run(argv[0], &argv[1..]).await {
+            // The first two commands use only the distribution archive:
+            // their failure is not Caddy's repository.
+            if i < 2 || std::env::consts::ARCH != "x86_64" {
+                return Err(step("apt")(e));
+            }
+            tracing::warn!(error = %format!("{e:#}"), "Caddy apt repository failed; installing Caddy's release package");
+            eprintln!("setu: Caddy's apt repository failed ({e:#}); using {CADDY_DEB_URL}");
+            for argv in caddy_deb_fallback_commands() {
+                let args: Vec<&str> = argv[1..].iter().map(String::as_str).collect();
+                sys.run(&argv[0], &args)
+                    .await
+                    .map_err(step("apt (caddy release package)"))?;
+            }
+            break;
+        }
     }
     // policy-rc.d (containers, hardened hosts) can skip the deb's own
     // start; converge Postgres explicitly. Caddy is `install_system`'s.
@@ -485,6 +553,50 @@ mod tests {
             joined[install],
             "apt-get install -y sudo gnupg postgresql-16 caddy nftables zstd"
         );
+    }
+
+    #[tokio::test]
+    async fn caddy_repo_failure_falls_back_to_the_verified_release_package() {
+        let sys = crate::install_system::RecordingCommands::new()
+            .failing_on("dl.cloudsmith.io/public/caddy/stable/debian.deb.txt");
+        ensure_packages(&sys).await.expect("fallback succeeds");
+        let calls = sys.calls();
+        let fail = calls
+            .iter()
+            .position(|c| c.contains("debian.deb.txt"))
+            .expect("repo step ran");
+        let rest = &calls[fail + 1..];
+        assert_eq!(rest[0], "rm -f /etc/apt/sources.list.d/caddy-stable.list");
+        assert!(
+            rest.contains(&"apt-get install -y sudo gnupg postgresql-16 nftables zstd".to_string())
+        );
+        let get = rest
+            .iter()
+            .position(|c| c.starts_with("curl ") && c.ends_with(CADDY_DEB_URL))
+            .expect("download");
+        let check = rest
+            .iter()
+            .position(|c| c.contains("sha512sum -c") && c.contains(CADDY_DEB_SHA512))
+            .expect("verify");
+        let inst = rest
+            .iter()
+            .position(|c| c == &format!("apt-get install -y {CADDY_DEB_PATH}"))
+            .expect("install deb");
+        assert!(get < check && check < inst, "{rest:?}");
+        assert!(rest
+            .iter()
+            .all(|c| !c.contains("install -y sudo gnupg postgresql-16 caddy")));
+        assert_eq!(
+            calls.last().map(String::as_str),
+            Some("systemctl enable --now postgresql")
+        );
+    }
+
+    #[tokio::test]
+    async fn distribution_apt_failure_is_not_retried() {
+        let sys = crate::install_system::RecordingCommands::new().failing_on("debian-keyring");
+        assert!(ensure_packages(&sys).await.is_err());
+        assert!(sys.calls().iter().all(|c| !c.contains(CADDY_DEB_URL)));
     }
 
     #[test]
