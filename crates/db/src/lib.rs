@@ -2,26 +2,29 @@
 //!
 //! Schema lives in `migrations/` (forward-only sqlx files, applied under
 //! a Postgres advisory lock). Repositories hang off [`Db`]:
-//! `db.servers().create_pending(..)`, `db.sites().next_port(..)`, …
+//! `db.servers().create_pending(..)`, `db.sites().create(..)`, …
 //! Unique violations map to [`AppError`] `conflict`, missing rows to
 //! `not_found`; anything else is `internal` (logged, never leaked).
 
 mod repo;
 
+/// The embedded migrations (`crates/db/migrations`).
+pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
 pub use repo::{
-    AgentCommand, AgentCommands, App, AppVersion, Apps, Audit, AuditEntry, Backup, Backups, Job,
-    Jobs, Metrics, NewSite, Operator, Operators, Plan, Plans, Server, Servers, Site, Sites,
+    AgentCommand, App, AppVersion, Apps, Audit, AuditEntry, Backup, Backups, Commands, CreateError,
+    HeartbeatInput, HeartbeatOutcome, Job, Jobs, JoinError, JoinInput, LatestMetric, Metrics,
+    NewPlan, NewSite, Operator, Operators, Plan, Plans, Server, ServerStatus, Servers, Session,
+    Sessions, Settings, Site, Sites, WaitError,
 };
 pub use setu_common::{AppError, ErrorCode};
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
-/// 64-bit advisory-lock key for migrations: first 8 bytes of
-/// `sha256("setu-migrate")` as big-endian i64 (`-4436319754632771127`).
-/// A fixed 64-bit key avoids colliding with other lock users; the lock
+/// Advisory-lock key for migrations (plan Task 5: `0x5e7a`); the lock
 /// serialises `migrate()` across concurrently booting control planes.
-const MIGRATE_LOCK_KEY: i64 = -4436319754632771127;
+const MIGRATE_LOCK_KEY: i64 = 0x5e7a;
 
 /// Control-plane database handle.
 #[derive(Debug, Clone)]
@@ -51,7 +54,7 @@ impl Db {
             .bind(MIGRATE_LOCK_KEY)
             .execute(&self.pool)
             .await?;
-        let result = sqlx::migrate!("./migrations").run(&self.pool).await;
+        let result = MIGRATOR.run(&self.pool).await;
         // Best-effort unlock: the migration result below is authoritative.
         sqlx::query("SELECT pg_advisory_unlock($1)")
             .bind(MIGRATE_LOCK_KEY)
@@ -93,8 +96,16 @@ impl Db {
         Jobs::new(&self.pool)
     }
 
-    pub fn agent_commands(&self) -> AgentCommands<'_> {
-        AgentCommands::new(&self.pool)
+    pub fn commands(&self) -> Commands<'_> {
+        Commands::new(&self.pool)
+    }
+
+    pub fn sessions(&self) -> Sessions<'_> {
+        Sessions::new(&self.pool)
+    }
+
+    pub fn settings(&self) -> Settings<'_> {
+        Settings::new(&self.pool)
     }
 
     pub fn backups(&self) -> Backups<'_> {
@@ -123,7 +134,8 @@ pub(crate) fn map_db_error(e: sqlx::Error) -> AppError {
                     Some("app_versions_app_id_version_key") => "app version already exists",
                     Some("operators_email_key") => "email already in use",
                     Some("plans_name_key") => "plan name already in use",
-                    Some("operator_tokens_token_hash_key") => "token already exists",
+                    Some("sites_server_id_short_id_key") => "short id already in use",
+                    Some("jobs_one_active_per_site_idx") => "site already has an active job",
                     _ => "already exists",
                 });
             }

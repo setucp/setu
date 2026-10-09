@@ -1,13 +1,13 @@
-//! Repository tests over throwaway databases (`setu-testkit::TestDb`).
-//!
-//! Each test gets its own database, so tests run in parallel safely.
-//! The concurrent-port test shares one pool across 20 tasks on purpose.
+//! Repository tests over throwaway databases (`setu-testkit::TestDb`),
+//! plan Task 5. Each test gets its own database, so tests run in
+//! parallel safely.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
-use setu_common::ErrorCode;
-use setu_db::{Db, NewSite};
-use setu_proto::{Command, CommandResult, Heartbeat, JoinRequest};
+use setu_common::{ErrorCode, Sealer};
+use setu_db::{CreateError, Db, JoinError, JoinInput, NewPlan, NewSite, WaitError};
+use setu_proto::{Command, CommandResult, EnvVar, Limits, SiteSpec};
 use setu_testkit::TestDb;
 
 async fn test_db() -> (TestDb, Db) {
@@ -16,458 +16,994 @@ async fn test_db() -> (TestDb, Db) {
     (test_db, db)
 }
 
-fn manifest_json(app: &str, version: &str) -> serde_json::Value {
-    serde_json::json!({
-        "app": {
-            "id": app,
-            "name": app,
-            "version": version,
-            "homepage": "https://example.com",
-        }
-    })
+fn sealer() -> Sealer {
+    let key = setu_common::config::SecretKey::from_hex(&"ab".repeat(32)).expect("key");
+    Sealer::new(&key)
 }
 
-fn join_request(join_token: &str) -> JoinRequest {
-    JoinRequest {
-        join_token: join_token.to_string(),
+fn join_input(nonce: &str, memory_mb: i64) -> JoinInput {
+    JoinInput {
+        nonce: nonce.to_string(),
         hostname: "web1".to_string(),
+        public_ip: None,
         arch: "x86_64".to_string(),
         os: "linux".to_string(),
         cpu_cores: 4,
-        memory_mb: 8192,
+        memory_mb,
         disk_mb: 102_400,
     }
 }
 
-fn test_heartbeat() -> Heartbeat {
-    Heartbeat {
-        agent_version: "0.1.0".to_string(),
-        load1: 0.5,
-        mem_free_mb: 1024,
-        disk_free_mb: 2048,
-        units: vec![],
-        metrics: vec![],
+async fn exec(test: &TestDb, sql: &str, id: &str) {
+    sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+        .bind(id)
+        .execute(&test.pool)
+        .await
+        .expect(sql);
+}
+
+/// A joined (hence online) server with `memory_mb`.
+async fn online_server(db: &Db, memory_mb: i64, is_control_plane: bool) -> setu_db::Server {
+    let (_, join_token) = db
+        .servers()
+        .create_pending("web", is_control_plane)
+        .await
+        .expect("create pending");
+    db.servers()
+        .join(&join_token, &join_input("n", memory_mb), &sealer())
+        .await
+        .expect("join")
+        .0
+}
+
+/// App "hello" 0.1.0 plus a plan of `memory_mb`; returns the plan id.
+async fn catalogue(db: &Db, memory_mb: i32) -> String {
+    db.apps()
+        .upsert_version(&serde_json::json!({
+            "app": {"id": "hello", "name": "hello", "version": "0.1.0"}
+        }))
+        .await
+        .expect("upsert app version");
+    db.plans()
+        .create(&NewPlan {
+            name: format!("p{memory_mb}"),
+            memory_mb,
+            cpu_percent: 100,
+            disk_mb: 1024,
+            allowed_app_ids: None,
+        })
+        .await
+        .expect("plan")
+        .id
+}
+
+fn new_site(server_id: Option<&str>, plan_id: &str, domain: &str, mem: i64) -> NewSite {
+    NewSite {
+        name: domain.to_string(),
+        app_id: "hello".to_string(),
+        app_version: "0.1.0".to_string(),
+        server_id: server_id.map(str::to_string),
+        plan_id: plan_id.to_string(),
+        domain: domain.to_string(),
+        owner_email: "owner@example.com".to_string(),
+        env_sealed: serde_json::json!([]),
+        plan_memory_mb: mem,
     }
 }
 
-/// App + plan rows every site test needs.
-async fn catalogue(db: &Db, app: &str, version: &str) -> String {
-    db.apps()
-        .upsert_version(&manifest_json(app, version))
-        .await
-        .expect("upsert app version");
-    db.plans().seed_default().await.expect("seed plan").id
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn new_site(
-    db: &Db,
-    name: &str,
-    server_id: &str,
-    plan_id: &str,
-    domain: &str,
-    port: i32,
-) -> setu_db::Site {
+async fn site(db: &Db) -> setu_db::Site {
+    let server = online_server(db, 100_000, false).await;
+    let plan = catalogue(db, 512).await;
     db.sites()
-        .create(&NewSite {
-            name: name.to_string(),
-            app_id: "hello".to_string(),
-            app_version: "0.1.0".to_string(),
-            server_id: server_id.to_string(),
-            plan_id: plan_id.to_string(),
-            domain: domain.to_string(),
-            port,
-            data_dir: format!("/srv/setu/sites/{name}"),
-            db_name: format!("site_{name}"),
-            env: serde_json::json!({}),
-            owner_email: "owner@example.com".to_string(),
-        })
+        .create(&new_site(Some(&server.id), &plan, "a.example.com", 512))
         .await
         .expect("create site")
 }
 
+fn spec() -> SiteSpec {
+    SiteSpec {
+        site_id: "s".to_string(),
+        short_id: "abcd1234".to_string(),
+        user: "setu-site-abcd1234".to_string(),
+        data_dir: "/srv/setu/sites/abcd1234/data".into(),
+        run_dir: "/srv/setu/sites/abcd1234/run".into(),
+        port: 20000,
+        exec: "/srv/setu/sites/abcd1234/bin/current/hello".into(),
+        args: vec![],
+        env_file: "/srv/setu/sites/abcd1234/env".into(),
+        limits: Limits {
+            memory_mb: 512,
+            cpu_percent: 100,
+            disk_mb: 1024,
+        },
+        health_path: "/health".to_string(),
+        binary: None,
+    }
+}
+
+const PW: &str = "pw-SECRET-1";
+const ENV_SECRET: &str = "env-SECRET-2";
+
+fn secret_commands() -> [Command; 2] {
+    [
+        Command::CreateDatabase {
+            db: "site_abcd1234".to_string(),
+            role: "site_abcd1234".to_string(),
+            password: PW.to_string(),
+        },
+        Command::WriteEnv {
+            site: spec(),
+            env: vec![EnvVar {
+                name: "TOKEN".to_string(),
+                value: ENV_SECRET.to_string(),
+                secret: true,
+                once: false,
+            }],
+        },
+    ]
+}
+
+/// The stored command JSON holds neither secret, and the secret fields
+/// are present but null.
+async fn assert_redacted(db: &Db, id: &str) {
+    let row = db.commands().get(id).await.expect("row");
+    let text = row.command.to_string();
+    assert!(
+        !text.contains(PW) && !text.contains(ENV_SECRET),
+        "secret survived: {}",
+        row.status
+    );
+    match row.command["kind"].as_str() {
+        Some("create_database") => assert!(row.command["password"].is_null()),
+        Some("write_env") => assert!(row.command["env"][0]["value"].is_null()),
+        other => panic!("unexpected kind {other:?}"),
+    }
+}
+
+fn result(id: &str, ok: bool) -> CommandResult {
+    CommandResult {
+        id: id.to_string(),
+        ok,
+        output: serde_json::json!({}),
+        log: String::new(),
+        error: None,
+    }
+}
+
+const TTL: Duration = Duration::from_secs(120);
+
+// ---------------------------------------------------------------- sessions
+
 #[tokio::test]
-async fn operators_create_count_and_by_email() {
-    let _test = test_db().await.0;
-    let db = Db::new(_test.pool.clone());
-    assert_eq!(db.operators().count().await.unwrap(), 0);
+async fn session_round_trip_and_sliding_expiry() {
+    let (test, db) = test_db().await;
     let op = db
         .operators()
-        .create("owner@example.com", "argon2:hash", "owner")
+        .create("Owner@Example.com", "argon2:hash", "owner")
         .await
         .unwrap();
     assert_eq!(op.email, "owner@example.com");
-    assert_eq!(db.operators().count().await.unwrap(), 1);
-    let found = db
-        .operators()
-        .by_email("owner@example.com")
-        .await
-        .unwrap()
-        .expect("operator by email");
-    assert_eq!(found.id, op.id);
-    // Duplicate email is a conflict, not an internal error.
-    let err = db
-        .operators()
-        .create("owner@example.com", "argon2:other", "viewer")
-        .await
-        .expect_err("duplicate email must fail");
-    assert_eq!(err.code, ErrorCode::Conflict);
+    let cookie = db.sessions().create(&op.id).await.unwrap();
+    assert_eq!(cookie.len(), 43, "32 bytes base64url without padding");
+
+    let (session, who) = db.sessions().load(&cookie).await.unwrap().expect("loads");
+    assert_eq!(who.id, op.id);
+    assert_ne!(session.id_hash, cookie, "only the hash is stored");
+    let week = chrono::Duration::days(7);
+    assert!(session.expires_at > chrono::Utc::now() + week - chrono::Duration::minutes(1));
+
+    // Last refreshed 30 minutes ago: not refreshed yet.
+    exec(
+        &test,
+        "UPDATE sessions SET expires_at = now() + interval '7 days' - interval '30 minutes' WHERE operator_id = $1",
+        &op.id,
+    )
+    .await;
+    let (s, _) = db.sessions().load(&cookie).await.unwrap().unwrap();
+    assert!(s.expires_at < chrono::Utc::now() + week - chrono::Duration::minutes(29));
+
+    // Last refreshed 2 hours ago: the expiry slides to 7 days again.
+    exec(
+        &test,
+        "UPDATE sessions SET expires_at = now() + interval '7 days' - interval '2 hours' WHERE operator_id = $1",
+        &op.id,
+    )
+    .await;
+    let (s, _) = db.sessions().load(&cookie).await.unwrap().unwrap();
+    assert!(s.expires_at > chrono::Utc::now() + week - chrono::Duration::minutes(1));
+
+    // Garbage and unknown cookies are None, not errors.
+    assert!(db.sessions().load("not base64!").await.unwrap().is_none());
+    let other = db.sessions().create(&op.id).await.unwrap();
+    db.sessions().destroy(&other).await.unwrap();
+    assert!(db.sessions().load(&other).await.unwrap().is_none());
+
+    // Expired: gone, and purged.
+    exec(
+        &test,
+        "UPDATE sessions SET expires_at = now() - interval '1 second' WHERE operator_id = $1",
+        &op.id,
+    )
+    .await;
+    assert!(db.sessions().load(&cookie).await.unwrap().is_none());
+    assert_eq!(db.sessions().purge_expired().await.unwrap(), 1);
 }
 
 #[tokio::test]
-async fn join_token_is_single_use() {
+async fn password_change_destroys_sessions() {
     let (_test, db) = test_db().await;
-    let (pending, join_token) = db.servers().create_pending("web1").await.unwrap();
-    assert_eq!(pending.status, "pending");
-
-    let (server, server_token) = db
-        .servers()
-        .join(&join_token, &join_request(&join_token))
+    let a = db
+        .operators()
+        .create("a@x.io", "h1", "owner")
         .await
-        .expect("first join succeeds");
-    assert!(!server_token.is_empty());
-
-    // The server token authenticates from here on.
-    let authed = db
-        .servers()
-        .by_token(&server_token)
+        .unwrap();
+    let b = db
+        .operators()
+        .create("b@x.io", "h1", "viewer")
         .await
-        .expect("by_token")
-        .expect("server found by token");
+        .unwrap();
+    let a1 = db.sessions().create(&a.id).await.unwrap();
+    let a2 = db.sessions().create(&a.id).await.unwrap();
+    let b1 = db.sessions().create(&b.id).await.unwrap();
+
+    db.operators().set_password_hash(&a.id, "h2").await.unwrap();
+
+    assert!(db.sessions().load(&a1).await.unwrap().is_none());
+    assert!(db.sessions().load(&a2).await.unwrap().is_none());
+    assert!(db.sessions().load(&b1).await.unwrap().is_some());
+    let a = db.operators().by_id(&a.id).await.unwrap().unwrap();
+    assert_eq!(a.password_hash, "h2");
+}
+
+// ---------------------------------------------------------------- servers
+
+#[tokio::test]
+async fn join_retry_same_nonce_returns_same_token() {
+    let (_test, db) = test_db().await;
+    let (pending, join_token) = db.servers().create_pending("web1", false).await.unwrap();
+    assert_eq!(
+        pending.status(chrono::Utc::now()),
+        setu_db::ServerStatus::Pending
+    );
+    let (server, t1) = db
+        .servers()
+        .join(&join_token, &join_input("nonce-1", 4096), &sealer())
+        .await
+        .expect("first join");
+    assert!(t1.starts_with("setu_srv_"));
+    assert_eq!(
+        server.status(chrono::Utc::now()),
+        setu_db::ServerStatus::Online
+    );
+    assert!(server
+        .join_token_sealed
+        .as_deref()
+        .is_some_and(|s| !s.contains(&t1)));
+
+    let (again, t2) = db
+        .servers()
+        .join(&join_token, &join_input("nonce-1", 4096), &sealer())
+        .await
+        .expect("retry with the same nonce");
+    assert_eq!(t1, t2);
+    assert_eq!(again.id, server.id);
+    let authed = db.servers().by_token(&t1).await.unwrap().expect("by token");
     assert_eq!(authed.id, server.id);
-    assert!(db.servers().by_token("bogus").await.unwrap().is_none());
+}
 
-    // Redeeming the same join token again is 401.
+#[tokio::test]
+async fn join_retry_different_nonce_is_refused() {
+    let (_test, db) = test_db().await;
+    let (_, join_token) = db.servers().create_pending("web1", false).await.unwrap();
+    db.servers()
+        .join(&join_token, &join_input("nonce-1", 4096), &sealer())
+        .await
+        .expect("first join");
     let err = db
         .servers()
-        .join(&join_token, &join_request(&join_token))
+        .join(&join_token, &join_input("nonce-2", 4096), &sealer())
         .await
-        .expect_err("second join must fail");
-    assert_eq!(err.code, ErrorCode::Unauthorized);
+        .expect_err("different nonce");
+    assert!(matches!(err, JoinError::NonceMismatch), "{err:?}");
+    assert!(matches!(
+        db.servers()
+            .join("setu_join_bogus", &join_input("nonce-1", 1), &sealer())
+            .await,
+        Err(JoinError::Unknown)
+    ));
 }
 
 #[tokio::test]
 async fn join_token_expires() {
-    let (_test, db) = test_db().await;
-    let (pending, join_token) = db.servers().create_pending("web1").await.unwrap();
-    sqlx::query(
-        "UPDATE servers SET join_token_expires_at = now() - INTERVAL '1 hour' WHERE id = $1",
+    let (test, db) = test_db().await;
+    // Never used, past its hour.
+    let (pending, join_token) = db.servers().create_pending("web1", false).await.unwrap();
+    exec(
+        &test,
+        "UPDATE servers SET join_expires_at = now() - interval '1 second' WHERE id = $1",
+        &pending.id,
     )
-    .bind(&pending.id)
-    .execute(&_test.pool)
-    .await
-    .unwrap();
+    .await;
     let err = db
         .servers()
-        .join(&join_token, &join_request(&join_token))
+        .join(&join_token, &join_input("n", 4096), &sealer())
         .await
-        .expect_err("expired join must fail");
-    assert_eq!(err.code, ErrorCode::Unauthorized);
-}
+        .expect_err("expired");
+    assert!(matches!(err, JoinError::Expired), "{err:?}");
 
-#[tokio::test]
-async fn heartbeat_marks_online_and_stores_metrics() {
-    let (_test, db) = test_db().await;
-    let (pending, join_token) = db.servers().create_pending("web1").await.unwrap();
-    let (server, _) = db
+    // Used, and the 60 s retry window has passed: refused, sealed token nulled.
+    let (pending, join_token) = db.servers().create_pending("web2", false).await.unwrap();
+    db.servers()
+        .join(&join_token, &join_input("n", 4096), &sealer())
+        .await
+        .unwrap();
+    exec(
+        &test,
+        "UPDATE servers SET joined_at = now() - interval '61 seconds' WHERE id = $1",
+        &pending.id,
+    )
+    .await;
+    let err = db
         .servers()
-        .join(&join_token, &join_request(&join_token))
+        .join(&join_token, &join_input("n", 4096), &sealer())
         .await
-        .unwrap();
-    // Join proves liveness: the server counts as online immediately.
-    assert_eq!(db.servers().online().await.unwrap().len(), 1);
+        .expect_err("window passed");
+    assert!(matches!(err, JoinError::Expired), "{err:?}");
+    let row = db.servers().get(&pending.id).await.unwrap();
+    assert!(row.join_token_sealed.is_none());
+}
 
-    let updated = db
+#[tokio::test]
+async fn heartbeat_reports_boot_change_and_keeps_own_metrics() {
+    let (_test, db) = test_db().await;
+    let site = site(&db).await;
+    let metric = |site_id: &str| setu_proto::SiteMetric {
+        site_id: site_id.to_string(),
+        at: chrono::Utc::now(),
+        cpu_seconds: 1.5,
+        memory_bytes: 10,
+        disk_bytes: 20,
+    };
+    let hb = |boot: &'static str, m: &'static [setu_proto::SiteMetric]| setu_db::HeartbeatInput {
+        agent_version: "0.1.0",
+        boot_id: Some(boot),
+        metrics: m,
+    };
+    let metrics: &'static [setu_proto::SiteMetric] =
+        Box::leak(vec![metric(&site.id), metric("foreign")].into_boxed_slice());
+    let first = db
         .servers()
-        .heartbeat(&server.id, &test_heartbeat())
+        .heartbeat(&site.server_id, &hb("b1", metrics))
         .await
         .unwrap();
-    assert_eq!(updated.status, "online");
-    assert!(updated.last_seen_at.is_some());
-
-    // A stale last_seen drops out of online() but the row stays listed.
-    sqlx::query("UPDATE servers SET last_seen_at = now() - INTERVAL '5 minutes' WHERE id = $1")
-        .bind(&pending.id)
-        .execute(&_test.pool)
+    assert!(first.boot_changed, "no boot id stored yet");
+    let same = db
+        .servers()
+        .heartbeat(&site.server_id, &hb("b1", &[]))
         .await
         .unwrap();
-    assert!(db.servers().online().await.unwrap().is_empty());
-    assert_eq!(db.servers().list().await.unwrap().len(), 1);
+    assert!(!same.boot_changed);
+    let changed = db
+        .servers()
+        .heartbeat(&site.server_id, &hb("b2", &[]))
+        .await
+        .unwrap();
+    assert!(changed.boot_changed);
+    let latest = db
+        .metrics()
+        .latest_for_site(&site.id)
+        .await
+        .unwrap()
+        .expect("metric");
+    assert_eq!(latest.memory_bytes, 10);
+    assert!(db
+        .metrics()
+        .latest_for_site("foreign")
+        .await
+        .unwrap()
+        .is_none());
 }
 
-#[tokio::test]
-async fn next_port_skips_taken_ports() {
-    let (_test, db) = test_db().await;
-    let server = db.servers().create_pending("web1").await.unwrap().0;
-    let plan_id = catalogue(&db, "hello", "0.1.0").await;
-
-    let first = db.sites().next_port(&server.id).await.unwrap();
-    assert_eq!(first, 20000);
-    new_site(&db, "a", &server.id, &plan_id, "a.example.com", first).await;
-
-    let second = db.sites().next_port(&server.id).await.unwrap();
-    assert_eq!(second, 20001);
-    new_site(&db, "b", &server.id, &plan_id, "b.example.com", second).await;
-
-    // A gap is reused before the high-water mark advances.
-    sqlx::query("DELETE FROM sites WHERE domain = $1")
-        .bind("a.example.com")
-        .execute(&_test.pool)
-        .await
-        .unwrap();
-    assert_eq!(db.sites().next_port(&server.id).await.unwrap(), 20000);
-}
+// ---------------------------------------------------------------- sites
 
 #[tokio::test]
-async fn ports_are_unique_under_concurrent_provisioning() {
+async fn create_site_allocates_distinct_ports_under_concurrency() {
     let (_test, db) = test_db().await;
-    let server = db.servers().create_pending("web1").await.unwrap().0;
-    let plan_id = catalogue(&db, "hello", "0.1.0").await;
-    let db = std::sync::Arc::new(db);
-
-    let mut handles = Vec::new();
+    let server = online_server(&db, 1_000_000, false).await;
+    let plan = catalogue(&db, 64).await;
+    let mut tasks = Vec::new();
     for i in 0..20 {
         let db = db.clone();
-        let server_id = server.id.clone();
-        let plan_id = plan_id.clone();
-        handles.push(tokio::spawn(async move {
-            let name = format!("s{i:02}");
-            // next_port can race with a concurrent insert; the
-            // UNIQUE(server_id, port) constraint rejects the loser,
-            // which retries until it holds a free port.
-            loop {
-                let port = db.sites().next_port(&server_id).await.unwrap();
-                match db
-                    .sites()
-                    .create(&NewSite {
-                        name: name.clone(),
-                        app_id: "hello".to_string(),
-                        app_version: "0.1.0".to_string(),
-                        server_id: server_id.clone(),
-                        plan_id: plan_id.clone(),
-                        domain: format!("{name}.example.com"),
-                        port,
-                        data_dir: format!("/srv/setu/sites/{name}"),
-                        db_name: format!("site_{name}"),
-                        env: serde_json::json!({}),
-                        owner_email: "owner@example.com".to_string(),
-                    })
-                    .await
-                {
-                    Ok(_) => return port,
-                    Err(e) if e.code == ErrorCode::Conflict => continue,
-                    Err(e) => panic!("unexpected site create error: {e}"),
-                }
-            }
+        let plan = plan.clone();
+        // Half name the server, half let `create` pick it.
+        let server_id = (i % 2 == 0).then(|| server.id.clone());
+        tasks.push(tokio::spawn(async move {
+            db.sites()
+                .create(&new_site(
+                    server_id.as_deref(),
+                    &plan,
+                    &format!("s{i}.example.com"),
+                    64,
+                ))
+                .await
         }));
     }
-    let mut ports = Vec::new();
-    for h in handles {
-        ports.push(h.await.expect("task joins"));
+    let mut ports = HashSet::new();
+    let mut shorts = HashSet::new();
+    for t in tasks {
+        let site = t.await.unwrap().expect("create under concurrency");
+        assert_eq!(site.server_id, server.id);
+        assert_eq!(site.db_name, format!("site_{}", site.short_id));
+        assert_eq!(site.db_role, site.db_name);
+        assert!(setu_common::is_short_id(&site.short_id));
+        ports.insert(site.port);
+        shorts.insert(site.short_id);
     }
-    ports.sort_unstable();
-    let mut deduped = ports.clone();
-    deduped.dedup();
-    assert_eq!(ports.len(), 20, "all tasks provisioned");
-    assert_eq!(deduped.len(), 20, "ports are all distinct: {ports:?}");
+    assert_eq!(ports.len(), 20);
+    assert_eq!(shorts.len(), 20);
+    assert_eq!(
+        ports,
+        (20000..20020).collect::<HashSet<i32>>(),
+        "lowest free ports"
+    );
 }
 
 #[tokio::test]
-async fn claim_skips_locked_jobs() {
+async fn create_site_refuses_over_85_percent() {
     let (_test, db) = test_db().await;
-    let j1 = db
-        .jobs()
-        .enqueue("provision_site", None, None, None)
+    // 85 % of 2000 = 1700. Each site costs 512 + 256.
+    let server = online_server(&db, 2000, false).await;
+    let plan = catalogue(&db, 512).await;
+    let s = |d: &str| new_site(Some(&server.id), &plan, d, 512);
+    db.sites()
+        .create(&s("a.example.com"))
         .await
-        .unwrap();
-    let j2 = db
-        .jobs()
-        .enqueue("provision_site", None, None, None)
+        .expect("768 ≤ 1700");
+    db.sites()
+        .create(&s("b.example.com"))
         .await
-        .unwrap();
-
-    let jobs = db.jobs();
-    let (c1, c2) = tokio::join!(jobs.claim("w1"), jobs.claim("w2"));
-    let c1 = c1.unwrap().expect("first claim hits");
-    let c2 = c2.unwrap().expect("second claim hits");
-    assert_ne!(c1.id, c2.id, "concurrent claims hold different jobs");
-    assert!(c1.id == j1.id || c1.id == j2.id);
-    assert!(c2.id == j1.id || c2.id == j2.id);
-    assert_eq!(c1.status, "running");
-    assert!(db.jobs().claim("w3").await.unwrap().is_none());
-
-    db.jobs().append_log(&c1.id, "step one\n").await.unwrap();
-    db.jobs().finish(&c1.id, true, None).await.expect("finish");
-    let done = db.jobs().get(&c1.id).await.unwrap();
-    assert_eq!(done.status, "completed");
-    assert!(done.log.contains("step one"));
+        .expect("1280 ≤ 1700");
+    let err = db
+        .sites()
+        .create(&s("c.example.com"))
+        .await
+        .expect_err("1792 > 1700");
+    assert!(matches!(err, CreateError::NoCapacity), "{err:?}");
+    // Auto-pick sees the same rule.
+    let err = db
+        .sites()
+        .create(&new_site(None, &plan, "d.example.com", 512))
+        .await
+        .expect_err("no server fits");
+    assert!(matches!(err, CreateError::NoCapacity), "{err:?}");
 }
 
 #[tokio::test]
-async fn requeue_stale_requeues_only_delivered_uncompleted() {
+async fn create_site_counts_control_plane_overhead() {
     let (_test, db) = test_db().await;
-    let server = db.servers().create_pending("web1").await.unwrap().0;
-    let cmd = || Command::Status {
-        site_id: "site-1".to_string(),
-    };
+    let cp = online_server(&db, 2000, true).await;
+    let plain = online_server(&db, 2000, false).await;
+    let plan = catalogue(&db, 512).await;
+    for (server, domain) in [(&cp, "a.example.com"), (&plain, "b.example.com")] {
+        db.sites()
+            .create(&new_site(Some(&server.id), &plan, domain, 512))
+            .await
+            .expect("first site fits both");
+    }
+    // Second site: 512 + 512 + 256 = 1280 ≤ 1700 on the plain server,
+    // + 512 control-plane overhead = 1792 > 1700 on the control plane's.
+    let err = db
+        .sites()
+        .create(&new_site(Some(&cp.id), &plan, "c.example.com", 512))
+        .await
+        .expect_err("control plane full");
+    assert!(matches!(err, CreateError::NoCapacity), "{err:?}");
+    db.sites()
+        .create(&new_site(Some(&plain.id), &plan, "d.example.com", 512))
+        .await
+        .expect("plain server has room");
+    // Auto-pick skips the control plane's server.
+    let picked = db
+        .sites()
+        .create(&new_site(None, &plan, "e.example.com", 64))
+        .await
+        .expect("auto");
+    assert_eq!(picked.server_id, plain.id);
+}
 
-    // Never delivered: untouched by requeue.
-    let _fresh = db
-        .agent_commands()
-        .enqueue(&server.id, &cmd())
+#[tokio::test]
+async fn create_site_rejects_duplicate_domain() {
+    let (test, db) = test_db().await;
+    let site = site(&db).await;
+    let err = db
+        .sites()
+        .create(&new_site(
+            Some(&site.server_id),
+            &site.plan_id,
+            "a.example.com",
+            512,
+        ))
         .await
-        .unwrap();
-    // Delivered long ago, never completed: requeued.
-    let stale = db
-        .agent_commands()
-        .enqueue(&server.id, &cmd())
-        .await
-        .unwrap();
-    let first = db
-        .agent_commands()
-        .next_for(&server.id)
-        .await
-        .unwrap()
-        .expect("delivers the oldest undelivered");
-    assert_eq!(first.id, _fresh.id);
-    let second = db
-        .agent_commands()
-        .next_for(&server.id)
-        .await
-        .unwrap()
-        .expect("delivers the next");
-    assert_eq!(second.id, stale.id);
-    // Delivered and completed: untouched by requeue.
-    let done = db
-        .agent_commands()
-        .enqueue(&server.id, &cmd())
-        .await
-        .unwrap();
-    db.agent_commands()
-        .next_for(&server.id)
-        .await
-        .unwrap()
-        .expect("delivers the third");
-    db.agent_commands()
-        .complete(
-            &done.id,
-            &CommandResult {
-                id: done.id.clone(),
-                ok: true,
-                output: serde_json::json!({}),
-                log: "ok".to_string(),
-                error: None,
-            },
-        )
-        .await
-        .unwrap();
-
-    // Age only the stale delivery past the cutoff.
-    sqlx::query(
-        "UPDATE agent_commands SET delivered_at = now() - INTERVAL '2 hours' WHERE id = $1",
-    )
-    .bind(&stale.id)
-    .execute(&_test.pool)
-    .await
-    .unwrap();
-
-    let requeued = db
-        .agent_commands()
-        .requeue_stale(Duration::from_secs(3600))
-        .await
-        .unwrap();
-    assert_eq!(requeued, 1);
-
-    // The stale command is deliverable again; the fresh one (never
-    // delivered) and the completed one are not duplicated.
-    let redelivered = db
-        .agent_commands()
-        .next_for(&server.id)
-        .await
-        .unwrap()
-        .expect("stale command redelivered");
-    assert_eq!(redelivered.id, stale.id);
+        .expect_err("duplicate");
+    assert!(matches!(err, CreateError::DomainTaken), "{err:?}");
     assert!(db
-        .agent_commands()
-        .next_for(&server.id)
+        .sites()
+        .by_domain_excluding("a.example.com", &site.id)
         .await
         .unwrap()
         .is_none());
 
-    // wait() resolves once a result lands.
-    let pending = db
-        .agent_commands()
-        .enqueue(&server.id, &cmd())
-        .await
-        .unwrap();
-    let waiter = {
-        let db = Db::new(_test.pool.clone());
-        let id = pending.id.clone();
-        tokio::spawn(async move { db.agent_commands().wait(&id, Duration::from_secs(10)).await })
-    };
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    db.agent_commands()
-        .complete(
-            &pending.id,
-            &CommandResult {
-                id: pending.id.clone(),
-                ok: false,
-                output: serde_json::json!({}),
-                log: "boom".to_string(),
-                error: Some("boom".to_string()),
-            },
-        )
-        .await
-        .unwrap();
-    let result = waiter.await.expect("waiter joins").expect("wait resolves");
-    assert!(!result.ok);
-    assert_eq!(result.error.as_deref(), Some("boom"));
-
-    // wait() on an id nobody completes times out as agent_unreachable.
-    let orphan = db
-        .agent_commands()
-        .enqueue(&server.id, &cmd())
+    // Cordoned and offline servers refuse too.
+    db.servers()
+        .set_cordoned(&site.server_id, true)
         .await
         .unwrap();
     let err = db
-        .agent_commands()
-        .wait(&orphan.id, Duration::from_millis(600))
+        .sites()
+        .create(&new_site(
+            Some(&site.server_id),
+            &site.plan_id,
+            "b.example.com",
+            512,
+        ))
         .await
-        .expect_err("wait must time out");
-    assert_eq!(err.code, ErrorCode::AgentUnreachable);
+        .expect_err("cordoned");
+    assert!(matches!(err, CreateError::Cordoned), "{err:?}");
+    db.servers()
+        .set_cordoned(&site.server_id, false)
+        .await
+        .unwrap();
+    exec(
+        &test,
+        "UPDATE servers SET last_seen_at = now() - interval '5 minutes' WHERE id = $1",
+        &site.server_id,
+    )
+    .await;
+    let err = db
+        .sites()
+        .create(&new_site(
+            Some(&site.server_id),
+            &site.plan_id,
+            "b.example.com",
+            512,
+        ))
+        .await
+        .expect_err("offline");
+    assert!(matches!(err, CreateError::ServerOffline), "{err:?}");
+    let err = db
+        .sites()
+        .create(&new_site(None, &site.plan_id, "b.example.com", 512))
+        .await
+        .expect_err("nothing online");
+    assert!(matches!(err, CreateError::NoServer), "{err:?}");
+    let err = db
+        .servers()
+        .delete(&site.server_id)
+        .await
+        .expect_err("has sites");
+    assert_eq!(err.code, ErrorCode::Conflict);
+}
+
+// ---------------------------------------------------------------- jobs
+
+#[tokio::test]
+async fn claim_skips_locked_and_reclaims_expired_lease() {
+    let (test, db) = test_db().await;
+    let lease = Duration::from_secs(60);
+    let j1 = db
+        .jobs()
+        .enqueue("backup_site", None, None, None)
+        .await
+        .unwrap();
+    let j2 = db
+        .jobs()
+        .enqueue("backup_site", None, None, None)
+        .await
+        .unwrap();
+
+    // Another transaction holds j1's row lock: claim skips it.
+    let mut tx = test.pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM jobs WHERE id = $1 FOR UPDATE")
+        .bind(&j1.id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let got = db.jobs().claim("w1", lease).await.unwrap().expect("j2");
+    assert_eq!(got.id, j2.id);
+    tx.rollback().await.unwrap();
+
+    let got = db.jobs().claim("w1", lease).await.unwrap().expect("j1");
+    assert_eq!(got.id, j1.id);
+    assert_eq!(got.locked_by.as_deref(), Some("w1"));
+    assert!(
+        db.jobs().claim("w2", lease).await.unwrap().is_none(),
+        "leases held"
+    );
+
+    // w1 died: its lease runs out and w2 reclaims the job.
+    exec(
+        &test,
+        "UPDATE jobs SET locked_until = now() - interval '1 second' WHERE id = $1",
+        &j1.id,
+    )
+    .await;
+    let got = db
+        .jobs()
+        .claim("w2", lease)
+        .await
+        .unwrap()
+        .expect("reclaimed");
+    assert_eq!(got.id, j1.id);
+    assert_eq!(got.attempts, 2);
+    assert!(!db.jobs().renew(&j1.id, "w1", lease).await.unwrap());
+    assert!(db.jobs().renew(&j1.id, "w2", lease).await.unwrap());
+
+    db.jobs().set_step(&j1.id, "install").await.unwrap();
+    assert_eq!(
+        db.jobs().get_step(&j1.id).await.unwrap().as_deref(),
+        Some("install")
+    );
+    let done = db.jobs().finish(&j1.id, true, None).await.unwrap();
+    assert_eq!(done.status, "done");
+    assert!(done.locked_by.is_none());
 }
 
 #[tokio::test]
-async fn site_domain_is_unique() {
+async fn enqueue_second_active_job_for_site_is_conflict() {
     let (_test, db) = test_db().await;
-    let server = db.servers().create_pending("web1").await.unwrap().0;
-    let plan_id = catalogue(&db, "hello", "0.1.0").await;
-    new_site(&db, "a", &server.id, &plan_id, "dup.example.com", 20000).await;
-
-    let err = db
-        .sites()
-        .create(&NewSite {
-            name: "b".to_string(),
-            app_id: "hello".to_string(),
-            app_version: "0.1.0".to_string(),
-            server_id: server.id.clone(),
-            plan_id: plan_id.clone(),
-            domain: "dup.example.com".to_string(),
-            port: 20001,
-            data_dir: "/srv/setu/sites/b".to_string(),
-            db_name: "site_b".to_string(),
-            env: serde_json::json!({}),
-            owner_email: "owner@example.com".to_string(),
-        })
+    let site = site(&db).await;
+    let first = db
+        .jobs()
+        .enqueue(
+            "provision_site",
+            Some(&site.id),
+            Some(&site.server_id),
+            None,
+        )
         .await
-        .expect_err("duplicate domain must fail");
+        .unwrap();
+    let err = db
+        .jobs()
+        .enqueue("backup_site", Some(&site.id), Some(&site.server_id), None)
+        .await
+        .expect_err("second active job");
     assert_eq!(err.code, ErrorCode::Conflict);
+    assert_eq!(
+        db.jobs()
+            .active_for_site(&site.id)
+            .await
+            .unwrap()
+            .map(|j| j.id),
+        Some(first.id.clone())
+    );
+    db.jobs()
+        .finish(&first.id, false, Some("boom"))
+        .await
+        .unwrap();
+    db.jobs()
+        .enqueue("backup_site", Some(&site.id), Some(&site.server_id), None)
+        .await
+        .expect("allowed once the first is finished");
+}
 
-    let site = db
-        .sites()
-        .by_domain("dup.example.com")
+// ---------------------------------------------------------------- commands
+
+#[tokio::test]
+async fn complete_nulls_secret_fields() {
+    let (_test, db) = test_db().await;
+    let server = online_server(&db, 4096, false).await;
+    for cmd in secret_commands() {
+        let env = db
+            .commands()
+            .enqueue(&server.id, None, &cmd, TTL)
+            .await
+            .unwrap();
+        let delivered = db
+            .commands()
+            .next_for(&server.id)
+            .await
+            .unwrap()
+            .expect("delivered");
+        assert_eq!(delivered.command, cmd, "the agent receives the secret");
+        db.commands()
+            .complete(&env.id, &result(&env.id, true))
+            .await
+            .unwrap();
+        assert_eq!(db.commands().get(&env.id).await.unwrap().status, "done");
+        assert_redacted(&db, &env.id).await;
+    }
+}
+
+#[tokio::test]
+async fn cancel_nulls_secret_fields() {
+    let (_test, db) = test_db().await;
+    let server = online_server(&db, 4096, false).await;
+    for cmd in secret_commands() {
+        let env = db
+            .commands()
+            .enqueue(&server.id, None, &cmd, TTL)
+            .await
+            .unwrap();
+        assert!(db.commands().cancel(&env.id).await.unwrap());
+        assert_eq!(
+            db.commands().get(&env.id).await.unwrap().status,
+            "cancelled"
+        );
+        assert_redacted(&db, &env.id).await;
+        // A late result never overwrites a cancelled row.
+        db.commands()
+            .complete(&env.id, &result(&env.id, true))
+            .await
+            .unwrap();
+        assert_eq!(
+            db.commands().get(&env.id).await.unwrap().status,
+            "cancelled"
+        );
+    }
+    assert!(db.commands().next_for(&server.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn expired_command_nulls_secret_fields() {
+    let (_test, db) = test_db().await;
+    let server = online_server(&db, 4096, false).await;
+    for cmd in secret_commands() {
+        let env = db
+            .commands()
+            .enqueue(&server.id, None, &cmd, Duration::ZERO)
+            .await
+            .unwrap();
+        assert!(db.commands().next_for(&server.id).await.unwrap().is_none());
+        assert_eq!(db.commands().get(&env.id).await.unwrap().status, "expired");
+        assert_redacted(&db, &env.id).await;
+    }
+    // The prune safety net redacts a stale non-terminal row too.
+    let [cmd, _] = secret_commands();
+    let env = db
+        .commands()
+        .enqueue(&server.id, None, &cmd, TTL)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE agent_commands SET created_at = now() - interval '25 hours' WHERE id = $1")
+        .bind(&env.id)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    db.commands()
+        .prune(Duration::from_secs(48 * 3600))
+        .await
+        .unwrap();
+    assert_eq!(db.commands().get(&env.id).await.unwrap().status, "expired");
+    assert_redacted(&db, &env.id).await;
+}
+
+#[tokio::test]
+async fn next_for_marks_expired() {
+    let (test, db) = test_db().await;
+    let server = online_server(&db, 4096, false).await;
+    let start = |id: &str| Command::Start {
+        site_id: id.to_string(),
+    };
+    let old = db
+        .commands()
+        .enqueue(&server.id, Some("abcd1234"), &start("a"), TTL)
+        .await
+        .unwrap();
+    let live = db
+        .commands()
+        .enqueue(&server.id, None, &start("b"), TTL)
+        .await
+        .unwrap();
+    exec(
+        &test,
+        "UPDATE agent_commands SET expires_at = now() - interval '1 second' WHERE id = $1",
+        &old.id,
+    )
+    .await;
+    let got = db
+        .commands()
+        .next_for(&server.id)
         .await
         .unwrap()
-        .expect("by_domain finds the first site");
-    assert_eq!(site.name, "a");
+        .expect("live one");
+    assert_eq!(got.id, live.id);
+    assert_eq!(got.attempts, 1);
+    assert_eq!(db.commands().get(&old.id).await.unwrap().status, "expired");
+    assert_eq!(
+        db.commands().get(&live.id).await.unwrap().status,
+        "delivered"
+    );
+    assert!(matches!(
+        db.commands().wait(&old.id, Duration::from_secs(1)).await,
+        Err(WaitError::Expired)
+    ));
+}
+
+#[tokio::test]
+async fn wait_returns_cancelled() {
+    let (_test, db) = test_db().await;
+    let server = online_server(&db, 4096, false).await;
+    let cmd = Command::Inventory;
+    let env = db
+        .commands()
+        .enqueue(&server.id, None, &cmd, TTL)
+        .await
+        .unwrap();
+    let waiter = {
+        let db = db.clone();
+        let id = env.id.clone();
+        tokio::spawn(async move { db.commands().wait(&id, Duration::from_secs(10)).await })
+    };
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    db.commands().cancel(&env.id).await.unwrap();
+    let res = tokio::time::timeout(Duration::from_secs(5), waiter)
+        .await
+        .expect("wait returns promptly")
+        .unwrap();
+    assert!(matches!(res, Err(WaitError::Cancelled)), "{res:?}");
+
+    // And a short wait on a pending command times out; a completed one
+    // returns its result.
+    let env = db
+        .commands()
+        .enqueue(&server.id, None, &cmd, TTL)
+        .await
+        .unwrap();
+    assert!(matches!(
+        db.commands()
+            .wait(&env.id, Duration::from_millis(350))
+            .await,
+        Err(WaitError::Timeout)
+    ));
+    db.commands()
+        .complete(&env.id, &result(&env.id, false))
+        .await
+        .unwrap();
+    let r = db
+        .commands()
+        .wait(&env.id, Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert!(!r.ok);
+}
+
+#[tokio::test]
+async fn requeue_delivered_requeues_only_delivered() {
+    let (_test, db) = test_db().await;
+    let server = online_server(&db, 4096, false).await;
+    let other = online_server(&db, 4096, false).await;
+    let cmd = Command::Inventory;
+    let done = db
+        .commands()
+        .enqueue(&server.id, None, &cmd, TTL)
+        .await
+        .unwrap();
+    db.commands().next_for(&server.id).await.unwrap();
+    db.commands()
+        .complete(&done.id, &result(&done.id, true))
+        .await
+        .unwrap();
+    let delivered = db
+        .commands()
+        .enqueue(&server.id, None, &cmd, TTL)
+        .await
+        .unwrap();
+    db.commands().next_for(&server.id).await.unwrap();
+    let queued = db
+        .commands()
+        .enqueue(&server.id, None, &cmd, TTL)
+        .await
+        .unwrap();
+    let elsewhere = db
+        .commands()
+        .enqueue(&other.id, None, &cmd, TTL)
+        .await
+        .unwrap();
+    db.commands().next_for(&other.id).await.unwrap();
+
+    assert_eq!(
+        db.commands().requeue_delivered(&server.id).await.unwrap(),
+        1
+    );
+    let status = |id: String| {
+        let db = db.clone();
+        async move { db.commands().get(&id).await.unwrap().status }
+    };
+    assert_eq!(status(done.id).await, "done");
+    assert_eq!(status(delivered.id.clone()).await, "queued");
+    assert_eq!(status(queued.id).await, "queued");
+    assert_eq!(status(elsewhere.id).await, "delivered");
+    let again = db
+        .commands()
+        .next_for(&server.id)
+        .await
+        .unwrap()
+        .expect("redelivered");
+    assert_eq!(again.id, delivered.id);
+    assert_eq!(again.attempts, 2);
+}
+
+#[tokio::test]
+async fn prune_deletes_terminal_by_created_at() {
+    let (test, db) = test_db().await;
+    let server = online_server(&db, 4096, false).await;
+    let cmd = Command::Inventory;
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        let env = db
+            .commands()
+            .enqueue(&server.id, None, &cmd, TTL)
+            .await
+            .unwrap();
+        ids.push(env.id);
+    }
+    // [0]: created 2 days ago, completed just now -> pruned (by created_at).
+    // [1]: created now, done -> kept.  [2]: created 2 days ago but
+    // delivered and live -> becomes expired (safety net) and is pruned.
+    for id in &ids[..2] {
+        db.commands().complete(id, &result(id, true)).await.unwrap();
+    }
+    for id in [&ids[0], &ids[2]] {
+        exec(
+            &test,
+            "UPDATE agent_commands SET created_at = now() - interval '2 days' WHERE id = $1",
+            id,
+        )
+        .await;
+    }
+    let n = db
+        .commands()
+        .prune(Duration::from_secs(24 * 3600))
+        .await
+        .unwrap();
+    assert_eq!(n, 2);
+    assert!(db.commands().get(&ids[0]).await.is_err());
+    assert_eq!(db.commands().get(&ids[1]).await.unwrap().status, "done");
+    assert!(db.commands().get(&ids[2]).await.is_err());
+}
+
+// ---------------------------------------------------------------- misc
+
+#[tokio::test]
+async fn settings_and_backups_round_trip() {
+    let (_test, db) = test_db().await;
+    assert!(db.settings().get("k").await.unwrap().is_none());
+    db.settings()
+        .set("k", &serde_json::json!({"a": 1}))
+        .await
+        .unwrap();
+    db.settings()
+        .set("k", &serde_json::json!({"a": 2}))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.settings().get("k").await.unwrap(),
+        Some(serde_json::json!({"a": 2}))
+    );
+
+    let site = site(&db).await;
+    let mut scheduled = Vec::new();
+    for _ in 0..3 {
+        scheduled.push(db.backups().create(&site, "scheduled").await.unwrap());
+    }
+    let pre = db.backups().create(&site, "pre_update").await.unwrap();
+    assert_eq!(pre.site_short_id, site.short_id);
+    let beyond = db.backups().scheduled_beyond(&site.id, 2).await.unwrap();
+    assert_eq!(beyond.len(), 1);
+    sqlx::query("UPDATE backups SET taken_at = now() - interval '31 days' WHERE id = $1")
+        .bind(&pre.id)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    let old = db.backups().pre_older_than(30).await.unwrap();
+    assert_eq!(old.iter().map(|b| &b.id).collect::<Vec<_>>(), vec![&pre.id]);
+    db.backups().mark_deleted(&pre.id).await.unwrap();
+    assert!(db.backups().pre_older_than(30).await.unwrap().is_empty());
+    assert_eq!(db.backups().list_for_site(&site.id).await.unwrap().len(), 3);
+
+    // Backups outlive their site.
+    db.sites().delete(&site.id).await.unwrap();
+    let b = db.backups().get(&scheduled[0].id).await.unwrap();
+    assert!(b.site_id.is_none());
+    assert_eq!(b.domain, "a.example.com");
 }

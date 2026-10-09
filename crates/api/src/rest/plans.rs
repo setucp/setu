@@ -37,8 +37,12 @@ impl PlanOut {
         Self {
             id: p.id.clone(),
             name: p.name.clone(),
-            limits: p.limits.clone(),
-            allowed_app_ids: p.allowed_app_ids.clone(),
+            limits: serde_json::json!({
+                "memory_mb": p.memory_mb,
+                "cpu_percent": p.cpu_percent,
+                "disk_mb": p.disk_mb,
+            }),
+            allowed_app_ids: serde_json::json!(p.allowed_app_ids.clone().unwrap_or_default()),
             created_at: p.created_at,
             updated_at: p.updated_at,
         }
@@ -71,15 +75,27 @@ pub struct UpdatePlanRequest {
     pub allowed_app_ids: Option<Vec<String>>,
 }
 
-fn checked_limits(limits: &PlanLimitsIn) -> Result<Value, AppError> {
-    if limits.memory_mb == 0 || limits.cpu_percent == 0 || limits.disk_mb == 0 {
+/// The stored plan; `allowed_app_ids` absent or empty means every app.
+fn new_plan(
+    name: &str,
+    limits: &PlanLimitsIn,
+    allowed_app_ids: Option<Vec<String>>,
+) -> Result<setu_db::NewPlan, AppError> {
+    let positive = |v: u32| i32::try_from(v).ok().filter(|v| *v > 0);
+    let (Some(memory_mb), Some(cpu_percent), Some(disk_mb)) = (
+        positive(limits.memory_mb),
+        positive(limits.cpu_percent),
+        positive(limits.disk_mb),
+    ) else {
         return Err(AppError::validation("plan limits must all be positive"));
-    }
-    Ok(serde_json::json!({
-        "memory_mb": limits.memory_mb,
-        "cpu_percent": limits.cpu_percent,
-        "disk_mb": limits.disk_mb,
-    }))
+    };
+    Ok(setu_db::NewPlan {
+        name: name.to_string(),
+        memory_mb,
+        cpu_percent,
+        disk_mb,
+        allowed_app_ids: allowed_app_ids.filter(|ids| !ids.is_empty()),
+    })
 }
 
 /// List plans (viewer and above).
@@ -125,16 +141,8 @@ pub async fn create(
     if body.name.trim().is_empty() {
         return Err(AppError::validation("plan name must not be empty"));
     }
-    let limits = checked_limits(&body.limits)?;
-    let allowed = body
-        .allowed_app_ids
-        .map(|ids| Value::Array(ids.into_iter().map(Value::String).collect()))
-        .unwrap_or(Value::Array(Vec::new()));
-    let plan = state
-        .db
-        .plans()
-        .create(body.name.trim(), &limits, &allowed)
-        .await?;
+    let plan = new_plan(body.name.trim(), &body.limits, body.allowed_app_ids)?;
+    let plan = state.db.plans().create(&plan).await?;
     audit(
         &state.db,
         Some(&caller.id),
@@ -193,16 +201,8 @@ pub async fn update(
     if body.name.trim().is_empty() {
         return Err(AppError::validation("plan name must not be empty"));
     }
-    let limits = checked_limits(&body.limits)?;
-    let allowed = body
-        .allowed_app_ids
-        .map(|ids| Value::Array(ids.into_iter().map(Value::String).collect()))
-        .unwrap_or(Value::Array(Vec::new()));
-    let plan = state
-        .db
-        .plans()
-        .update(&id, body.name.trim(), &limits, &allowed)
-        .await?;
+    let plan = new_plan(body.name.trim(), &body.limits, body.allowed_app_ids)?;
+    let plan = state.db.plans().update(&id, &plan).await?;
     audit(
         &state.db,
         Some(&caller.id),

@@ -38,18 +38,12 @@ impl Runner {
 
 async fn worker_loop(db: &Db, agent: &Arc<dyn AgentClient>, sealer: &Sealer, idx: usize) {
     let worker = format!("runner-{idx}");
-    // Re-queue on the first iteration so a restarted control plane
-    // picks up commands stranded by the previous one.
-    let mut last_requeue = std::time::Instant::now() - Duration::from_secs(3600);
+    // Lease long enough for the slowest step until WS5 adds renewal
+    // (install 15 min, backup/restore 60 min); a dead runner's jobs are
+    // reclaimed once it runs out.
+    let lease = Duration::from_secs(65 * 60);
     loop {
-        if last_requeue.elapsed() > Duration::from_secs(30) {
-            let _ = db
-                .agent_commands()
-                .requeue_stale(Duration::from_secs(120))
-                .await;
-            last_requeue = std::time::Instant::now();
-        }
-        match db.jobs().claim(&worker).await {
+        match db.jobs().claim(&worker, lease).await {
             Ok(Some(job)) => handle_job(db, agent, sealer, &job).await,
             Ok(None) => tokio::time::sleep(Duration::from_secs(1)).await,
             Err(e) => {
@@ -81,8 +75,8 @@ async fn handle_job(db: &Db, agent: &Arc<dyn AgentClient>, sealer: &Sealer, job:
         "update_site" => {
             let to_version = job
                 .payload
-                .as_ref()
-                .and_then(|p| p.get("to_version").or_else(|| p.get("version")))
+                .get("to_version")
+                .or_else(|| job.payload.get("version"))
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
             match (job.site_id.as_deref(), to_version) {
@@ -99,8 +93,7 @@ async fn handle_job(db: &Db, agent: &Arc<dyn AgentClient>, sealer: &Sealer, job:
         "restore_site" => {
             let backup_id = job
                 .payload
-                .as_ref()
-                .and_then(|p| p.get("backup_id"))
+                .get("backup_id")
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
             match (job.site_id.as_deref(), backup_id) {
@@ -128,22 +121,6 @@ async fn handle_job(db: &Db, agent: &Arc<dyn AgentClient>, sealer: &Sealer, job:
             Some(site_id) => start_site(&ctx, site_id).await,
             None => Err(AppError::validation("start_site job has no site_id")),
         },
-        "reconcile" => {
-            match db
-                .agent_commands()
-                .requeue_stale(Duration::from_secs(120))
-                .await
-            {
-                Ok(_) => {
-                    log_step(&ctx, "reconcile", true, None).await;
-                    Ok(())
-                }
-                Err(e) => {
-                    log_step(&ctx, "reconcile", false, Some(&e.message.clone())).await;
-                    Err(e)
-                }
-            }
-        }
         other => Err(AppError::validation(format!("unknown job kind {other}"))),
     };
     match result {

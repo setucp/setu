@@ -176,94 +176,42 @@ pub(crate) async fn load_manifest(
     })
 }
 
-#[derive(serde::Deserialize)]
-struct LimitsJson {
-    memory_mb: u32,
-    cpu_percent: u32,
-    disk_mb: u32,
-}
-
-/// Plan limits win; the manifest default is the fallback when the stored
-/// plan JSON is unreadable.
-pub(crate) fn plan_limits(plan: &Plan, manifest: &Manifest) -> setu_proto::Limits {
-    if let Ok(limits) = serde_json::from_value::<LimitsJson>(plan.limits.clone()) {
-        return setu_proto::Limits {
-            memory_mb: limits.memory_mb,
-            cpu_percent: limits.cpu_percent,
-            disk_mb: limits.disk_mb,
-        };
-    }
+/// The plan's limits (plan columns are required since ledger R45's
+/// schema, so the manifest default is no longer a fallback).
+pub(crate) fn plan_limits(plan: &Plan, _manifest: &Manifest) -> setu_proto::Limits {
+    let pos = |v: i32| u32::try_from(v).unwrap_or(0);
     setu_proto::Limits {
-        memory_mb: manifest.limits.default.memory_mb,
-        cpu_percent: manifest.limits.default.cpu_percent,
-        disk_mb: manifest.limits.default.disk_mb,
+        memory_mb: pos(plan.memory_mb),
+        cpu_percent: pos(plan.cpu_percent),
+        disk_mb: pos(plan.disk_mb),
     }
 }
 
-/// A server counts as online when it reports `online` and was seen
-/// within the last 60 s (mirrors `servers().online()`).
-fn server_online(server: &setu_db::Server) -> bool {
-    if server.status != "online" {
-        return false;
-    }
-    match server.last_seen_at {
-        Some(seen) => (chrono::Utc::now() - seen).num_seconds() < 60,
-        None => false,
-    }
-}
-
-/// Capacity check (spec §5 step 1): the summed plan memory of the
-/// server's live sites plus this site must stay under 90 % of the
-/// server's memory. Unknown capacity (or unloadable plans) skips the
-/// check rather than blocking provisioning.
+/// Provision-time guard: the site's server must be online. Capacity is
+/// admitted once, by `sites().create` (85 % rule, spec §3); WS6 owns the
+/// provision `validate` step.
 pub(crate) async fn check_capacity(
     db: &Db,
     site: &Site,
-    plan: &Plan,
-    manifest: &Manifest,
+    _plan: &Plan,
+    _manifest: &Manifest,
 ) -> Result<(), AppError> {
     let server = db.servers().get(&site.server_id).await?;
-    if !server_online(&server) {
+    if server.status(chrono::Utc::now()) != setu_db::ServerStatus::Online {
         return Err(AppError::validation(format!(
             "server {} ({}) is offline",
             server.name, server.id
         )));
     }
-    let server_mem = match server.memory_mb {
-        Some(m) if m > 0 => m as u64,
-        _ => return Ok(()),
-    };
-    let need = plan_limits(plan, manifest).memory_mb as u64;
-    let sites = db.sites().list().await?;
-    let mut used = 0u64;
-    for other in sites.iter().filter(|s| {
-        s.server_id == site.server_id
-            && s.id != site.id
-            && s.status != "failed"
-            && s.status != "deleting"
-    }) {
-        if let Ok(p) = db.plans().get(&other.plan_id).await {
-            if let Ok(l) = serde_json::from_value::<LimitsJson>(p.limits) {
-                used += u64::from(l.memory_mb);
-            }
-        }
-    }
-    if used + need > (server_mem as f64 * 0.9) as u64 {
-        return Err(AppError::conflict(
-            "server has insufficient memory capacity",
-        ));
-    }
     Ok(())
 }
 
-/// Site directory layout derived from the stored data dir:
-/// `<site_dir>/data` is stored, siblings are `run` and `env`.
+/// Site directory layout, derived from the short id only (spec §4):
+/// `/srv/setu/sites/<short>/{data,run,env}`. WS5 drops paths from the
+/// protocol entirely.
 pub(crate) fn site_paths(site: &Site) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
-    let data_dir = PathBuf::from(&site.data_dir);
-    let site_dir = data_dir.parent().map_or_else(
-        || PathBuf::from(format!("/srv/setu/sites/{}", site.id)),
-        PathBuf::from,
-    );
+    let site_dir = PathBuf::from(format!("/srv/setu/sites/{}", site.short_id));
+    let data_dir = site_dir.join("data");
     let run_dir = site_dir.join("run");
     let env_file = site_dir.join("env");
     (site_dir, data_dir, run_dir, env_file)
@@ -305,13 +253,8 @@ pub(crate) fn build_spec(
     let (site_dir, data_dir, run_dir, env_file) = site_paths(site);
     Ok(setu_proto::SiteSpec {
         site_id: site.id.clone(),
-        short_id: setu_common::short_id(&site.id).to_lowercase(),
-        // Usernames cap at 32 chars (shadow `useradd` rejects longer):
-        // the 8-char short id, same uniqueness basis as db names.
-        user: format!(
-            "setu-site-{}",
-            setu_common::short_id(&site.id).to_lowercase()
-        ),
+        short_id: site.short_id.clone(),
+        user: format!("setu-site-{}", site.short_id),
         data_dir,
         run_dir,
         port: site.port as u16,
@@ -354,19 +297,14 @@ pub(crate) fn build_site(
     let db_password = random_db_password();
     let db_url = format!(
         "postgres://{}:{}@127.0.0.1:5432/{}",
-        site.db_name, db_password, site.db_name
+        site.db_role, db_password, site.db_name
     );
     let mut input = resolve_input(site, db_url, prompts);
     let env_manifest = setu_manifest::resolve_env(manifest, &mut input).map_err(resolve_error)?;
     let spec = setu_proto::SiteSpec {
         site_id: site.id.clone(),
-        short_id: setu_common::short_id(&site.id).to_lowercase(),
-        // Usernames cap at 32 chars (shadow `useradd` rejects longer):
-        // the 8-char short id, same uniqueness basis as db names.
-        user: format!(
-            "setu-site-{}",
-            setu_common::short_id(&site.id).to_lowercase()
-        ),
+        short_id: site.short_id.clone(),
+        user: format!("setu-site-{}", site.short_id),
         data_dir,
         run_dir,
         port: site.port as u16,
@@ -423,13 +361,8 @@ pub(crate) fn minimal_spec(site: &Site) -> setu_proto::SiteSpec {
     let (site_dir, data_dir, run_dir, env_file) = site_paths(site);
     setu_proto::SiteSpec {
         site_id: site.id.clone(),
-        short_id: setu_common::short_id(&site.id).to_lowercase(),
-        // Usernames cap at 32 chars (shadow `useradd` rejects longer):
-        // the 8-char short id, same uniqueness basis as db names.
-        user: format!(
-            "setu-site-{}",
-            setu_common::short_id(&site.id).to_lowercase()
-        ),
+        short_id: site.short_id.clone(),
+        user: format!("setu-site-{}", site.short_id),
         data_dir,
         run_dir,
         port: site.port as u16,
@@ -511,9 +444,7 @@ pub(crate) async fn prepare_site(ctx: &JobCtx, site: &Site) -> Result<Prep, AppE
         ));
     }
     let plan = ctx.db.plans().get(&site.plan_id).await?;
-    let allowed: Vec<String> =
-        serde_json::from_value(plan.allowed_app_ids.clone()).unwrap_or_default();
-    if !allowed.is_empty() && !allowed.iter().any(|a| a == &site.app_id) {
+    if !plan.allows(&site.app_id) {
         return Err(AppError::validation(format!(
             "plan does not allow app {}",
             site.app_id
@@ -553,12 +484,7 @@ pub(crate) async fn job_prompts(ctx: &JobCtx) -> BTreeMap<String, String> {
     let Ok(job) = ctx.db.jobs().get(job_id).await else {
         return out;
     };
-    let Some(obj) = job
-        .payload
-        .as_ref()
-        .and_then(|p| p.get("prompts"))
-        .and_then(|p| p.as_object())
-    else {
+    let Some(obj) = job.payload.get("prompts").and_then(|p| p.as_object()) else {
         return out;
     };
     for (k, v) in obj {

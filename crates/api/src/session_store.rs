@@ -1,23 +1,24 @@
-//! Postgres-backed session store for `tower-sessions`.
+//! `tower-sessions` store over the spec §3 `sessions` table.
 //!
-//! Ruling (Task 7): `tower-sessions-sqlx-store` (all published versions)
-//! requires `sqlx 0.8`, but the workspace pins `sqlx 0.9` (Task 5). Rather
-//! than downgrade the database layer, this module implements the same
-//! [`SessionStore`] contract directly over the existing `sessions` table
-//! (`id TEXT PK, data BYTEA, expiry TIMESTAMPTZ`) with `sqlx 0.9`.
-//! Encoding matches the upstream store: the full `Record` as MessagePack.
-//! Cost if wrong: sessions stop working when the upstream crate releases a
-//! `sqlx 0.9` version — swapping the store is a one-line change in
-//! [`super::rest::router`] plus deleting this module.
+//! Ruling (Task 7): `tower-sessions-sqlx-store` requires `sqlx 0.8`, so
+//! this module implements [`SessionStore`] directly. Ruling R78 (WS4):
+//! the table now has the spec shape (`id_hash`, `operator_id`,
+//! `created_at`, `expires_at`), so the adapter stores the SHA-256 of
+//! the tower session id as `id_hash` and the record's only datum, the
+//! operator id, as `operator_id`; a record without an operator id (an
+//! anonymous session) is not persisted. Password changes delete the
+//! operator's rows (`operators().set_password_hash`). WS8 replaces
+//! tower-sessions with `db.sessions()` (32-byte cookie, sliding 7 days).
 
 use async_trait::async_trait;
 use sqlx::PgPool;
 use tower_sessions::session_store::{Error as StoreError, Result as StoreResult};
 use tower_sessions::{session::Record, SessionStore};
 
-/// Session store over the `sessions` table. `Debug` is manual: it holds no
-/// secrets (record data may hold an operator id only), but the pool's debug
-/// could include the connection URL, so redact it.
+use crate::auth::SESSION_OPERATOR_ID;
+
+/// Session store over the `sessions` table. `Debug` is manual: the
+/// pool's debug could include the connection URL.
 #[derive(Clone)]
 pub struct PgSessionStore {
     pool: PgPool,
@@ -29,18 +30,34 @@ impl std::fmt::Debug for PgSessionStore {
     }
 }
 
+fn id_hash(id: &tower_sessions::session::Id) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(id.to_string().as_bytes()))
+}
+
+fn backend(e: sqlx::Error) -> StoreError {
+    StoreError::Backend(e.to_string())
+}
+
+fn operator_id(record: &Record) -> Option<String> {
+    record
+        .data
+        .get(SESSION_OPERATOR_ID)
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
 impl PgSessionStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 
-    /// Delete rows past their expiry. Called periodically from `serve` and
-    /// from tests setup; loads also enforce expiry eagerly.
+    /// Delete rows past their expiry. Called periodically from `serve`.
     pub async fn delete_expired(&self) -> Result<u64, StoreError> {
-        let n = sqlx::query("DELETE FROM sessions WHERE expiry <= now()")
+        let n = sqlx::query("DELETE FROM sessions WHERE expires_at <= now()")
             .execute(&self.pool)
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?
+            .map_err(backend)?
             .rows_affected();
         Ok(n)
     }
@@ -49,29 +66,42 @@ impl PgSessionStore {
         chrono::DateTime::from_timestamp(record.expiry_date.unix_timestamp(), 0)
             .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC)
     }
+
+    /// Insert or refresh; `Ok(false)` when the id is taken by another row
+    /// (only on `create`).
+    async fn upsert(&self, record: &Record, overwrite: bool) -> StoreResult<bool> {
+        let Some(op) = operator_id(record) else {
+            return Ok(true);
+        };
+        let sql = if overwrite {
+            "INSERT INTO sessions (id_hash, operator_id, expires_at) VALUES ($1, $2, $3)
+             ON CONFLICT (id_hash) DO UPDATE
+               SET operator_id = excluded.operator_id, expires_at = excluded.expires_at"
+        } else {
+            "INSERT INTO sessions (id_hash, operator_id, expires_at) VALUES ($1, $2, $3)
+             ON CONFLICT (id_hash) DO NOTHING"
+        };
+        let res = sqlx::query(sql)
+            .bind(id_hash(&record.id))
+            .bind(op)
+            .bind(Self::expiry_timestamp(record))
+            .execute(&self.pool)
+            .await;
+        match res {
+            Ok(r) => Ok(r.rows_affected() == 1),
+            // The operator was deleted meanwhile: nothing to persist.
+            Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("23503") => Ok(true),
+            Err(e) => Err(backend(e)),
+        }
+    }
 }
 
 #[async_trait]
 impl SessionStore for PgSessionStore {
     async fn create(&self, record: &mut Record) -> StoreResult<()> {
-        // Session-ID collision mitigation (same as the reference stores):
-        // retry with a fresh id while the PK rejects the insert.
+        // Session-ID collision mitigation (same as the reference stores).
         for _ in 0..5 {
-            let data =
-                rmp_serde::to_vec(&*record).map_err(|e| StoreError::Encode(e.to_string()))?;
-            let expiry = Self::expiry_timestamp(record);
-            let n = sqlx::query(
-                "INSERT INTO sessions (id, data, expiry)
-                 VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
-            )
-            .bind(record.id.to_string())
-            .bind(data)
-            .bind(expiry)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?
-            .rows_affected();
-            if n == 1 {
+            if self.upsert(record, false).await? {
                 return Ok(());
             }
             record.id = Default::default();
@@ -82,47 +112,41 @@ impl SessionStore for PgSessionStore {
     }
 
     async fn save(&self, record: &Record) -> StoreResult<()> {
-        let data = rmp_serde::to_vec(record).map_err(|e| StoreError::Encode(e.to_string()))?;
-        let expiry = Self::expiry_timestamp(record);
-        sqlx::query(
-            "INSERT INTO sessions (id, data, expiry)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (id) DO UPDATE SET data = excluded.data, expiry = excluded.expiry",
-        )
-        .bind(record.id.to_string())
-        .bind(data)
-        .bind(expiry)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| StoreError::Backend(e.to_string()))?;
-        Ok(())
+        self.upsert(record, true).await.map(|_| ())
     }
 
     async fn load(&self, session_id: &tower_sessions::session::Id) -> StoreResult<Option<Record>> {
-        let row: Option<(Vec<u8>, chrono::DateTime<chrono::Utc>)> =
-            sqlx::query_as("SELECT data, expiry FROM sessions WHERE id = $1")
-                .bind(session_id.to_string())
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| StoreError::Backend(e.to_string()))?;
-        let Some((data, _)) = row else {
+        let row: Option<(String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+            "SELECT operator_id, expires_at FROM sessions
+             WHERE id_hash = $1 AND expires_at > now()",
+        )
+        .bind(id_hash(session_id))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
+        let Some((operator_id, expires_at)) = row else {
             return Ok(None);
         };
-        let record: Record =
-            rmp_serde::from_slice(&data).map_err(|e| StoreError::Decode(e.to_string()))?;
-        if record.expiry_date <= time::OffsetDateTime::now_utc() {
-            self.delete(session_id).await?;
-            return Ok(None);
-        }
-        Ok(Some(record))
+        let expiry_date = time::OffsetDateTime::from_unix_timestamp(expires_at.timestamp())
+            .map_err(|e| StoreError::Decode(e.to_string()))?;
+        let mut data = std::collections::HashMap::new();
+        data.insert(
+            SESSION_OPERATOR_ID.to_string(),
+            serde_json::Value::String(operator_id),
+        );
+        Ok(Some(Record {
+            id: *session_id,
+            data,
+            expiry_date,
+        }))
     }
 
     async fn delete(&self, session_id: &tower_sessions::session::Id) -> StoreResult<()> {
-        sqlx::query("DELETE FROM sessions WHERE id = $1")
-            .bind(session_id.to_string())
+        sqlx::query("DELETE FROM sessions WHERE id_hash = $1")
+            .bind(id_hash(session_id))
             .execute(&self.pool)
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(backend)?;
         Ok(())
     }
 }

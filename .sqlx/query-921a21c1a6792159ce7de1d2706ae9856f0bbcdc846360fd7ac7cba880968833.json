@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(SUM(p.memory_mb), 0)::BIGINT AS \"used!\"\n             FROM sites s JOIN plans p ON p.id = s.plan_id\n             WHERE s.server_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "used!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "921a21c1a6792159ce7de1d2706ae9856f0bbcdc846360fd7ac7cba880968833"
+}

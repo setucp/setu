@@ -120,35 +120,34 @@ async fn online_server(srv: &TestServer, name: &str, memory_mb: u64) -> String {
     let (_pending, join_token) = srv
         .db
         .servers()
-        .create_pending(name)
+        .create_pending(name, false)
         .await
         .expect("create pending");
-    let req = setu_proto::JoinRequest {
-        join_token,
+    let input = setu_db::JoinInput {
+        nonce: String::new(),
         hostname: name.to_string(),
+        public_ip: None,
         arch: "x86_64".to_string(),
         os: "linux".to_string(),
         cpu_cores: 4,
-        memory_mb,
+        memory_mb: i64::try_from(memory_mb).expect("memory fits"),
         disk_mb: 102400,
     };
+    let key = setu_common::SecretKey::from_hex(&"ab".repeat(32)).expect("key");
     let (server, _token) = srv
         .db
         .servers()
-        .join(&req.join_token, &req)
+        .join(&join_token, &input, &setu_common::Sealer::new(&key))
         .await
         .expect("join");
     srv.db
         .servers()
         .heartbeat(
             &server.id,
-            &setu_proto::Heartbeat {
-                agent_version: "0.1.0".to_string(),
-                load1: 0.1,
-                mem_free_mb: 1024,
-                disk_free_mb: 2048,
-                units: vec![],
-                metrics: vec![],
+            &setu_db::HeartbeatInput {
+                agent_version: "0.1.0",
+                boot_id: None,
+                metrics: &[],
             },
         )
         .await
@@ -203,7 +202,7 @@ async fn post_site(
     )
 }
 
-/// Poll `GET /jobs/{id}` until `completed`/`failed` (or the row is gone,
+/// Poll `GET /jobs/{id}` until `done`/`failed` (or the row is gone,
 /// which is how a finished delete reads); returns the last body, or
 /// `None` when the row vanished.
 async fn poll_job(srv: &TestServer, client: &reqwest::Client, job_id: &str) -> Option<Value> {
@@ -219,7 +218,7 @@ async fn poll_job(srv: &TestServer, client: &reqwest::Client, job_id: &str) -> O
         assert_eq!(resp.status(), reqwest::StatusCode::OK);
         let body: Value = resp.json().await.expect("job body is json");
         match body["status"].as_str().unwrap_or("") {
-            "completed" | "failed" => return Some(body),
+            "done" | "failed" => return Some(body),
             _ => tokio::time::sleep(Duration::from_millis(500)).await,
         }
     }
@@ -256,7 +255,7 @@ async fn create_site_returns_job_and_provisions_to_running() {
     let job = poll_job(&srv, &owner, &job_id)
         .await
         .expect("provision job row survives");
-    assert_eq!(job["status"], json!("completed"));
+    assert_eq!(job["status"], json!("done"));
     assert_eq!(job["kind"], json!("provision_site"));
 
     let site = get_site(&srv, &owner, &site_id).await;
@@ -398,7 +397,6 @@ async fn update_site_409_while_job_running() {
 
     // A `running` site with a live job (enqueued straight in the repo,
     // so no race with the Runner).
-    let port = srv.db.sites().next_port(&server_id).await.expect("port");
     let site = srv
         .db
         .sites()
@@ -406,14 +404,12 @@ async fn update_site_409_while_job_running() {
             name: unique("site"),
             app_id: "hello".to_string(),
             app_version: "0.1.0".to_string(),
-            server_id: server_id.clone(),
+            server_id: Some(server_id.clone()),
             plan_id,
             domain: format!("{}.example.com", unique("busy")),
-            port,
-            data_dir: "/srv/setu/sites/busy/data".to_string(),
-            db_name: "site_busy".to_string(),
-            env: json!([]),
             owner_email: "owner@example.com".to_string(),
+            env_sealed: json!([]),
+            plan_memory_mb: 512,
         })
         .await
         .expect("create site");
@@ -802,7 +798,7 @@ async fn backups_roundtrip_and_restore_enqueues() {
     let done = poll_job(&srv, &owner, &bk_job)
         .await
         .expect("backup job row");
-    assert_eq!(done["status"], json!("completed"));
+    assert_eq!(done["status"], json!("done"));
 
     let list: Value = owner
         .get(srv.url(&format!("/api/v1/sites/{site_id}/backups")))
@@ -828,7 +824,7 @@ async fn backups_roundtrip_and_restore_enqueues() {
     let rs_done = poll_job(&srv, &owner, &rs_job)
         .await
         .expect("restore job row");
-    assert_eq!(rs_done["status"], json!("completed"));
+    assert_eq!(rs_done["status"], json!("done"));
     assert_eq!(
         get_site(&srv, &owner, &site_id).await["status"],
         json!("running")
@@ -1034,4 +1030,69 @@ async fn env_put_persists_var_missing_from_stored_env() {
             .expect("HELLO_EXTRA persisted")["value"],
         json!("brand-new")
     );
+}
+
+/// Security finding 1: the database URL (it embeds the site's Postgres
+/// password) never reaches a viewer, even when the stored row's
+/// `secret` flag is false (rows written before `postgres_url` was
+/// always secret, or tampered): `GET env` masks on the `secret` flag
+/// and on the manifest source.
+#[tokio::test]
+async fn env_get_never_returns_postgres_url_to_viewers() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let with_db = hello_toml("0.1.0")
+        .replace(
+            "[needs]\ndirs = [\"media\"]",
+            "[needs]\npostgres = \">=16\"\ndirs = [\"media\"]",
+        )
+        .replace(
+            "HELLO_LABEL = { value = \"hello-world\" }",
+            "HELLO_LABEL = { value = \"hello-world\" }\nHELLO_DB = { from = \"postgres_url\" }",
+        );
+    publish(&srv, &owner, &with_db).await;
+    let server_id = online_server(&srv, "envdb-1", 8192).await;
+    let (site_id, job_id) = post_site(
+        &srv,
+        &owner,
+        Some(&server_id),
+        &format!("{}.example.com", unique("envdb")),
+    )
+    .await;
+    poll_job(&srv, &owner, &job_id).await.expect("provisioned");
+
+    // Flip the stored flag off: the API must still mask the URL.
+    sqlx::query(
+        "UPDATE sites SET env = (SELECT jsonb_agg(CASE WHEN e->>'name' = 'HELLO_DB'
+                                   THEN e || '{\"secret\": false}' ELSE e END)
+                                  FROM jsonb_array_elements(env) e)
+         WHERE id = $1",
+    )
+    .bind(&site_id)
+    .execute(srv.db.pool())
+    .await
+    .expect("tamper flag");
+
+    let viewer = srv.login_as("viewer").await;
+    for client in [&viewer, &owner] {
+        let resp = client
+            .get(srv.url(&format!("/api/v1/sites/{site_id}/env")))
+            .send()
+            .await
+            .expect("get env sends");
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        let text = resp.text().await.expect("env body");
+        assert!(!text.contains("postgres://"), "database URL leaked");
+        let env: Value = serde_json::from_str(&text).expect("env json");
+        let db = env["env"]
+            .as_array()
+            .expect("env array")
+            .iter()
+            .find(|v| v["name"] == json!("HELLO_DB"))
+            .expect("HELLO_DB listed")
+            .clone();
+        assert_eq!(db["masked"], json!(true));
+        assert_eq!(db["secret"], json!(true));
+    }
 }

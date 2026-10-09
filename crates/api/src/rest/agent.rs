@@ -75,7 +75,23 @@ pub async fn join(
     State(state): State<AppState>,
     ApiJson(body): ApiJson<JoinRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let (server, token) = state.db.servers().join(&body.join_token, &body).await?;
+    // proto's `JoinRequest` gains `nonce` in WS5; until then every agent
+    // joins with the empty nonce (ledger R76).
+    let input = setu_db::JoinInput {
+        nonce: String::new(),
+        hostname: body.hostname.clone(),
+        public_ip: None,
+        arch: body.arch.clone(),
+        os: body.os.clone(),
+        cpu_cores: i32::try_from(body.cpu_cores).unwrap_or(i32::MAX),
+        memory_mb: i64::try_from(body.memory_mb).unwrap_or(i64::MAX),
+        disk_mb: i64::try_from(body.disk_mb).unwrap_or(i64::MAX),
+    };
+    let (server, token) = state
+        .db
+        .servers()
+        .join(&body.join_token, &input, &state.sealer)
+        .await?;
     tracing::info!(server_id = %server.id, "agent joined");
     Ok(Json(JoinResponse {
         server_id: server.id,
@@ -107,8 +123,8 @@ fn parse_wait(raw: Option<String>) -> Result<Duration, AppError> {
 
 /// The next undelivered command for this server (200), or 204 when none
 /// arrives within the wait window. Delivery marks the command delivered
-/// and counts the attempt; agents are idempotent, so the control plane
-/// may redeliver after `requeue_stale`. Polled per server at 600/min
+/// and counts the attempt; a new agent `boot_id` requeues delivered
+/// commands (spec §5). Polled per server at 600/min
 /// (spec §7); past that the poll is 429.
 #[utoipa::path(
     get,
@@ -132,7 +148,7 @@ pub async fn commands(
     let budget = parse_wait(query.wait)?;
     let deadline = tokio::time::Instant::now() + budget;
     loop {
-        if let Some(envelope) = state.db.agent_commands().next_for(&server.id).await? {
+        if let Some(envelope) = state.db.commands().next_for(&server.id).await? {
             return Ok(Json(envelope).into_response());
         }
         if tokio::time::Instant::now() >= deadline {
@@ -173,7 +189,7 @@ pub async fn result(
     }
     state
         .db
-        .agent_commands()
+        .commands()
         .complete_for(&server.id, &id, &body)
         .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -197,6 +213,22 @@ pub async fn heartbeat(
     ApiJson(body): ApiJson<Heartbeat>,
 ) -> Result<impl IntoResponse, AppError> {
     let server = agent_server(&headers, &state).await?;
-    state.db.servers().heartbeat(&server.id, &body).await?;
+    // proto's `Heartbeat` gains `boot_id` in WS5 (until then `None`,
+    // so `boot_changed` stays false).
+    let outcome = state
+        .db
+        .servers()
+        .heartbeat(
+            &server.id,
+            &setu_db::HeartbeatInput {
+                agent_version: &body.agent_version,
+                boot_id: None,
+                metrics: &body.metrics,
+            },
+        )
+        .await?;
+    if outcome.boot_changed {
+        state.db.commands().requeue_delivered(&server.id).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }

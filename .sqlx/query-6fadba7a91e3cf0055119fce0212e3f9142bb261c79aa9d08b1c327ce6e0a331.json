@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE agent_commands\n             SET status = 'cancelled', command = setu_redact_command(command)\n             WHERE id = $1 AND status IN ('queued', 'delivered')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6fadba7a91e3cf0055119fce0212e3f9142bb261c79aa9d08b1c327ce6e0a331"
+}

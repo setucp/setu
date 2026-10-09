@@ -1,0 +1,91 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, join_expires_at, join_nonce, join_token_sealed, joined_at,\n                    (joined_at IS NOT NULL\n                     AND joined_at > now() - make_interval(secs => $2)) AS \"in_window!\",\n                    (join_expires_at IS NOT NULL AND join_expires_at > now()) AS \"valid!\"\n             FROM servers WHERE join_token_hash = $1 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "join_expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "join_expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "join_nonce",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "join_nonce"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "join_token_sealed",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "join_token_sealed"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "joined_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "joined_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "in_window!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "valid!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "62cf8162803f2096cc22998c0342b1879bc4893ace6f3382d5d07c706be1a341"
+}

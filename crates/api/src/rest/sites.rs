@@ -26,7 +26,6 @@ use utoipa::ToSchema;
 use crate::auth::{audit, audit_ip, require_role, Role};
 use crate::state::AppState;
 
-use super::servers::effective_status;
 use super::ApiJson;
 
 /// Masked placeholder returned for secret env values (the plaintext is
@@ -66,7 +65,8 @@ impl SiteOut {
             status: s.status.clone(),
             failed_step: s.failed_step.clone(),
             port: s.port,
-            data_dir: s.data_dir.clone(),
+            // Derived (spec §4); WS8 drops it from the API.
+            data_dir: format!("/srv/setu/sites/{}/data", s.short_id),
             db_name: s.db_name.clone(),
             owner_email: s.owner_email.clone(),
             created_at: s.created_at,
@@ -109,7 +109,7 @@ impl JobOut {
             attempts: j.attempts,
             log: j.log.clone(),
             error: j.error.clone(),
-            worker: j.worker.clone(),
+            worker: j.locked_by.clone(),
             created_at: j.created_at,
             started_at: j.started_at,
             finished_at: j.finished_at,
@@ -217,6 +217,19 @@ fn stored_env(site: &setu_db::Site) -> Vec<StoredVar> {
         .collect()
 }
 
+/// A value no role ever reads back from `GET env`: flagged `secret`, or
+/// sourced from `postgres_url` (it embeds the site's database password;
+/// security finding 1), whatever the stored flag says.
+fn always_masked(manifest: Option<&setu_manifest::Manifest>, var: &StoredVar) -> bool {
+    var.secret
+        || manifest
+            .and_then(|m| m.env.get(&var.name))
+            .is_some_and(|spec| {
+                matches!(spec, setu_manifest::EnvSpec::From(f)
+                    if f.from == setu_manifest::EnvSource::PostgresUrl)
+            })
+}
+
 /// Open one stored env value (`v1:` or `plain:`); anything else is
 /// corrupt storage and surfaces as `internal`.
 fn open_stored(sealer: &setu_common::Sealer, value: &str) -> Result<String, AppError> {
@@ -235,107 +248,13 @@ fn load_manifest(version: &setu_db::AppVersion) -> Result<setu_manifest::Manifes
     })
 }
 
-fn plan_memory_mb(plan: &setu_db::Plan) -> u32 {
-    plan_memory_mb_with_default(plan, 512)
-}
-
-/// Plan limits win; `default` covers unreadable stored JSON. The jobs
-/// crate mirrors this with the manifest default (`plan_limits`); the two
-/// must agree for a given plan, so `create` passes the manifest default
-/// for the new site's own admission check.
-fn plan_memory_mb_with_default(plan: &setu_db::Plan, default: u32) -> u32 {
-    plan.limits
-        .get("memory_mb")
-        .and_then(|v| v.as_u64())
-        .and_then(|v| u32::try_from(v).ok())
-        .unwrap_or(default)
-}
-
-/// Memory used on `server_id` by live sites (mirrors
-/// `jobs::check_capacity`: `failed`/`deleting` rows do not count).
-async fn used_memory_mb(db: &setu_db::Db, server_id: &str, exclude: Option<&str>) -> u64 {
-    let Ok(sites) = db.sites().list().await else {
-        return 0;
-    };
-    let mut used = 0u64;
-    for other in sites.iter().filter(|s| {
-        s.server_id == server_id
-            && Some(s.id.as_str()) != exclude
-            && s.status != "failed"
-            && s.status != "deleting"
-    }) {
-        if let Ok(p) = db.plans().get(&other.plan_id).await {
-            used += u64::from(plan_memory_mb(&p));
-        }
-    }
-    used
-}
-
-/// The server must exist and read `online` (computed at read time, same
-/// as `GET /servers/{id}`); with known capacity the 90 % rule from spec
-/// §5 applies. Offline is `validation` (the server may come back);
-/// exhausted capacity is `conflict`.
-async fn check_server_for_site(
-    db: &setu_db::Db,
-    server_id: &str,
-    need_mb: u64,
-) -> Result<setu_db::Server, AppError> {
-    let server = db.servers().get(server_id).await?;
-    if effective_status(&server) != "online" {
-        return Err(AppError::validation(format!(
-            "server {} ({}) is offline",
-            server.name, server.id
-        )));
-    }
-    if let Some(mem) = server.memory_mb.filter(|m| *m > 0) {
-        let used = used_memory_mb(db, server_id, None).await;
-        if used + need_mb > (f64::from(mem as i32) * 0.9) as u64 {
-            return Err(AppError::conflict(
-                "server has insufficient memory capacity",
-            ));
-        }
-    }
-    Ok(server)
-}
-
-/// Auto-pick the online server with the most free memory (unknown-memory
-/// servers sort last with free 0 but stay eligible).
-async fn pick_server(db: &setu_db::Db, need_mb: u64) -> Result<setu_db::Server, AppError> {
-    let servers = db.servers().list().await?;
-    let mut best: Option<(i64, setu_db::Server)> = None;
-    for server in servers {
-        if effective_status(&server) != "online" {
-            continue;
-        }
-        let used = used_memory_mb(db, &server.id, None).await as i64;
-        match server.memory_mb.filter(|m| *m > 0) {
-            Some(mem) => {
-                if (used as u64) + need_mb > (f64::from(mem as i32) * 0.9) as u64 {
-                    continue;
-                }
-                let free = mem - used;
-                if best.as_ref().is_none_or(|(f, _)| free > *f) {
-                    best = Some((free, server));
-                }
-            }
-            None => {
-                if best.is_none() {
-                    best = Some((0, server));
-                }
-            }
-        }
-    }
-    best.map(|(_, s)| s)
-        .ok_or_else(|| AppError::conflict("no online server with capacity available"))
-}
-
 /// Reject overlapping work: any `queued`/`running` job for the site is a
 /// 409 so two state machines never interleave on one site.
 pub(crate) async fn require_no_running_job(
     db: &setu_db::Db,
     site_id: &str,
 ) -> Result<(), AppError> {
-    if db.jobs().running_for_site(site_id).await?.is_some() {
+    if db.jobs().active_for_site(site_id).await?.is_some() {
         return Err(AppError::conflict("a job is already running for this site"));
     }
     Ok(())
@@ -354,7 +273,7 @@ pub(crate) async fn provision_prompts(
         .await?
         .into_iter()
         .filter(|j| j.site_id.as_deref() == Some(site_id) && j.kind == "provision_site")
-        .find_map(|j| j.payload.as_ref().and_then(|p| p.get("prompts")).cloned())
+        .find_map(|j| j.payload.get("prompts").cloned())
         .unwrap_or(serde_json::json!({})))
 }
 
@@ -420,9 +339,15 @@ pub async fn create(
     if !body.owner_email.contains('@') {
         return Err(AppError::validation("owner_email must contain @"));
     }
-    // Pre-check for the friendly 409; the UNIQUE constraint below is the
-    // backstop under races.
-    if state.db.sites().by_domain(&domain).await?.is_some() {
+    // Pre-check for the friendly 409 before resolving env; `create`
+    // re-checks inside its transaction.
+    if state
+        .db
+        .sites()
+        .by_domain_excluding(&domain, "")
+        .await?
+        .is_some()
+    {
         return Err(AppError::conflict("domain already in use"));
     }
 
@@ -454,23 +379,12 @@ pub async fn create(
             e
         }
     })?;
-    let allowed: Vec<String> =
-        serde_json::from_value(plan.allowed_app_ids.clone()).unwrap_or_default();
-    if !allowed.is_empty() && !allowed.iter().any(|a| a == &body.app_id) {
+    if !plan.allows(&body.app_id) {
         return Err(AppError::validation(format!(
             "plan does not allow app {}",
             body.app_id
         )));
     }
-    let need_mb = u64::from(plan_memory_mb_with_default(
-        &plan,
-        manifest.limits.default.memory_mb,
-    ));
-    let server = match &body.server_id {
-        Some(id) => check_server_for_site(&state.db, id, need_mb).await?,
-        None => pick_server(&state.db, need_mb).await?,
-    };
-
     // Resolve env now (prompts included) so `GET env` works immediately;
     // the provision job re-resolves with the same prompts from its
     // payload and stores the sealed copy again before the first agent
@@ -516,72 +430,30 @@ pub async fn create(
         serde_json::Value::Array(arr)
     };
 
-    // Insert with retry on the port backstop: `next_port` serialises on
-    // the server row, but two control planes (or a racing delete) can
-    // still collide — the UNIQUE(server_id, port) loser re-picks.
-    let created = {
-        let mut last_err = None;
-        let mut row = None;
-        for _ in 0..6 {
-            let port = state.db.sites().next_port(&server.id).await?;
-            let attempt = state
-                .db
-                .sites()
-                .create(&setu_db::NewSite {
-                    name: name.clone(),
-                    app_id: body.app_id.clone(),
-                    app_version: body.version.clone(),
-                    server_id: server.id.clone(),
-                    plan_id: plan.id.clone(),
-                    domain: domain.clone(),
-                    port,
-                    data_dir: format!("/srv/setu/sites/pending-{port}/data"),
-                    db_name: format!("site_pending_{port}"),
-                    env: sealed.clone(),
-                    owner_email: body.owner_email.clone(),
-                })
-                .await;
-            match attempt {
-                Ok(s) => {
-                    row = Some(s);
-                    break;
-                }
-                Err(e)
-                    if e.code == ErrorCode::Conflict
-                        && e.message.contains("port already in use") =>
-                {
-                    last_err = Some(e);
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        match row {
-            Some(s) => s,
-            None => {
-                return Err(
-                    last_err.unwrap_or_else(|| AppError::conflict("no free ports on server"))
-                );
-            }
-        }
-    };
-
-    // Real names now that the id exists: `site_<short>` and the agent's
-    // fixed site root (Ruling R47/R48: never derived from the control
-    // plane's own `data_dir`; agents derive paths themselves from rev3 WS5).
-    let short = setu_common::short_id(&created.id).to_lowercase();
-    let db_name = format!("site_{short}");
-    let data_dir = format!("/srv/setu/sites/{}/data", created.id);
-    sqlx::query("UPDATE sites SET db_name = $2, data_dir = $3 WHERE id = $1")
-        .bind(&created.id)
-        .bind(&db_name)
-        .bind(&data_dir)
-        .execute(state.db.pool())
+    // Server pick, capacity (85 %), port and short id in one
+    // transaction (spec §3); `db_name`/`db_role` are `site_<short>`.
+    let site = state
+        .db
+        .sites()
+        .create(&setu_db::NewSite {
+            name: name.clone(),
+            app_id: body.app_id.clone(),
+            app_version: body.version.clone(),
+            server_id: body.server_id.clone(),
+            plan_id: plan.id.clone(),
+            domain: domain.clone(),
+            owner_email: body.owner_email.clone(),
+            env_sealed: sealed,
+            plan_memory_mb: i64::from(plan.memory_mb),
+        })
         .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "site db_name backfill failed");
-            AppError::internal()
+        .map_err(|e| match e {
+            // A named server that does not exist is the caller's error.
+            setu_db::CreateError::NoServer if body.server_id.is_some() => {
+                AppError::validation("unknown server")
+            }
+            e => AppError::from(e),
         })?;
-    let site = state.db.sites().get(&created.id).await?;
 
     let job = state
         .db
@@ -961,18 +833,28 @@ pub async fn env_get(
 ) -> Result<impl IntoResponse, AppError> {
     require_role(&session, &state.db, Role::Viewer).await?;
     let site = state.db.sites().get(&id).await?;
+    // The manifest is only consulted to mask `postgres_url` sources; a
+    // missing version masks on the stored flag alone.
+    let manifest = state
+        .db
+        .apps()
+        .version(&site.app_id, &site.app_version)
+        .await
+        .ok()
+        .and_then(|v| load_manifest(&v).ok());
     let env = stored_env(&site)
         .into_iter()
         .map(|v| {
+            let secret = always_masked(manifest.as_ref(), &v);
             Ok(EnvEntryOut {
-                value: if v.secret {
+                value: if secret {
                     MASKED_VALUE.to_string()
                 } else {
                     open_stored(&state.sealer, &v.value)?
                 },
                 name: v.name,
-                masked: v.secret,
-                secret: v.secret,
+                masked: secret,
+                secret,
                 once: v.once,
                 has_value: true,
             })
@@ -1156,11 +1038,8 @@ fn env_site_spec(
     manifest: &setu_manifest::Manifest,
     plan: &setu_db::Plan,
 ) -> setu_proto::SiteSpec {
-    let data_dir = std::path::PathBuf::from(&site.data_dir);
-    let site_dir = data_dir.parent().map_or_else(
-        || std::path::PathBuf::from(format!("/srv/setu/sites/{}", site.id)),
-        std::path::PathBuf::from,
-    );
+    let site_dir = std::path::PathBuf::from(format!("/srv/setu/sites/{}", site.short_id));
+    let data_dir = site_dir.join("data");
     let (exec, args) = match manifest.run.target(setu_manifest::Target::X86_64Linux) {
         Some(t) => (
             site_dir.join("bin").join("current").join(&t.exec),
@@ -1170,31 +1049,18 @@ fn env_site_spec(
     };
     setu_proto::SiteSpec {
         site_id: site.id.clone(),
-        short_id: setu_common::short_id(&site.id).to_lowercase(),
-        user: format!(
-            "setu-site-{}",
-            setu_common::short_id(&site.id).to_lowercase()
-        ),
-        data_dir: data_dir.clone(),
+        short_id: site.short_id.clone(),
+        user: format!("setu-site-{}", site.short_id),
+        data_dir,
         run_dir: site_dir.join("run"),
         port: site.port as u16,
         exec,
         args,
         env_file: site_dir.join("env"),
         limits: setu_proto::Limits {
-            memory_mb: plan_memory_mb(plan),
-            cpu_percent: plan
-                .limits
-                .get("cpu_percent")
-                .and_then(|v| v.as_u64())
-                .and_then(|v| u32::try_from(v).ok())
-                .unwrap_or(100),
-            disk_mb: plan
-                .limits
-                .get("disk_mb")
-                .and_then(|v| v.as_u64())
-                .and_then(|v| u32::try_from(v).ok())
-                .unwrap_or(5120),
+            memory_mb: u32::try_from(plan.memory_mb).unwrap_or(512),
+            cpu_percent: u32::try_from(plan.cpu_percent).unwrap_or(100),
+            disk_mb: u32::try_from(plan.disk_mb).unwrap_or(5120),
         },
         health_path: manifest.app.health.clone(),
         binary: None,

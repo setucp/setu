@@ -116,17 +116,28 @@ pub async fn setup(manifest_src: &str) -> (setu_testkit::TestDb, Fx) {
     let test_db = setu_testkit::TestDb::new().await;
     let db = Db::new(test_db.pool.clone());
 
-    let (pending, join_token) = db.servers().create_pending("test-server").await.unwrap();
-    let join_req = setu_proto::JoinRequest {
-        join_token: join_token.clone(),
+    let (pending, join_token) = db
+        .servers()
+        .create_pending("test-server", false)
+        .await
+        .unwrap();
+    let join = setu_db::JoinInput {
+        nonce: "test-nonce".to_string(),
         hostname: "test-host".to_string(),
+        public_ip: None,
         arch: "x86_64".to_string(),
         os: "linux".to_string(),
         cpu_cores: 4,
         memory_mb: 8192,
         disk_mb: 102400,
     };
-    let (server, _server_token) = db.servers().join(&join_token, &join_req).await.unwrap();
+    let key = setu_common::SecretKey::from_hex(&"cd".repeat(32)).unwrap();
+    let sealer = setu_common::Sealer::new(&key);
+    let (server, _server_token) = db
+        .servers()
+        .join(&join_token, &join, &sealer)
+        .await
+        .unwrap();
 
     let manifest = Manifest::parse(manifest_src)
         .unwrap_or_else(|errors| panic!("test manifest must parse: {errors:?}"));
@@ -134,26 +145,26 @@ pub async fn setup(manifest_src: &str) -> (setu_testkit::TestDb, Fx) {
     let app_version = db.apps().upsert_version(&manifest_json).await.unwrap();
 
     let plan = db.plans().seed_default().await.unwrap();
-    let port = db.sites().next_port(&server.id).await.unwrap();
     let site = db
         .sites()
         .create(&NewSite {
             name: "hello-site".to_string(),
             app_id: app_version.app_id.clone(),
             app_version: app_version.version.clone(),
-            server_id: server.id.clone(),
+            server_id: Some(server.id.clone()),
             plan_id: plan.id.clone(),
             domain: "hello.example.com".to_string(),
-            port,
-            data_dir: format!("/srv/setu/sites/hello-{port}/data"),
-            db_name: format!("site_hello_{port}"),
-            env: json!([]),
             owner_email: "owner@example.com".to_string(),
+            env_sealed: json!([]),
+            plan_memory_mb: i64::from(plan.memory_mb),
         })
         .await
         .unwrap();
 
-    assert_eq!(pending.status, "pending");
+    assert_eq!(
+        pending.status(chrono::Utc::now()),
+        setu_db::ServerStatus::Pending
+    );
     (
         test_db,
         Fx {

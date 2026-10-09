@@ -35,10 +35,12 @@ impl BackupOut {
     fn from_row(b: &setu_db::Backup) -> Self {
         Self {
             id: b.id.clone(),
-            site_id: b.site_id.clone(),
+            // The row outlives its site (`site_id` nulled); WS8 makes
+            // these optional and drops `location`.
+            site_id: b.site_id.clone().unwrap_or_default(),
             taken_at: b.taken_at,
             size_bytes: b.size_bytes,
-            location: b.location.clone(),
+            location: format!("/var/lib/setu/backups/{}/{}", b.site_short_id, b.id),
             kind: b.kind.clone(),
             status: b.status.clone(),
         }
@@ -151,7 +153,7 @@ pub async fn restore(
     let caller = require_role(&session, &state.db, Role::Operator).await?;
     let site = state.db.sites().get(&id).await?;
     let backup = state.db.backups().get(&bid).await?;
-    if backup.site_id != site.id {
+    if backup.site_id.as_deref() != Some(site.id.as_str()) {
         return Err(AppError::validation("backup does not belong to this site"));
     }
     require_no_running_job(&state.db, &id).await?;

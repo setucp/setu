@@ -162,6 +162,8 @@ fn norm_host(h: &str) -> &str {
 }
 
 /// Record one audit row; failures are logged, never fatal to the request.
+/// `target_kind` is the action's prefix (`site.create` → `site`); WS8
+/// passes it explicitly.
 pub async fn audit(
     db: &Db,
     operator_id: Option<&str>,
@@ -169,7 +171,12 @@ pub async fn audit(
     target: Option<&str>,
     ip: Option<&str>,
 ) {
-    if let Err(e) = db.audit().record(operator_id, action, target, ip).await {
+    let target_kind = target.and(action.split('.').next());
+    if let Err(e) = db
+        .audit()
+        .record(operator_id, action, target_kind, target, ip)
+        .await
+    {
         tracing::error!(error = %e, "audit record failed");
     }
 }

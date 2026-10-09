@@ -1,5 +1,6 @@
-//! `operators` repo: panel users (password hashing is Task 7; this
-//! repo stores the given hash opaquely).
+//! `operators` repo: panel users (password hashing lives in the api;
+//! this repo stores the given hash opaquely). Emails are stored
+//! lowercase.
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
@@ -12,11 +13,11 @@ use crate::{map_db_error, AppError};
 const SETUP_LOCK_KEY: i64 = -8640242326146119732;
 
 /// One panel user. Holds credential material: `Debug` redacts it.
+#[derive(Clone)]
 pub struct Operator {
     pub id: String,
     pub email: String,
     pub password_hash: String,
-    pub totp_secret: Option<String>,
     pub role: String,
     pub created_at: DateTime<Utc>,
 }
@@ -27,10 +28,6 @@ impl std::fmt::Debug for Operator {
             .field("id", &self.id)
             .field("email", &self.email)
             .field("password_hash", &"[redacted]")
-            .field(
-                "totp_secret",
-                &self.totp_secret.as_ref().map(|_| "[redacted]"),
-            )
             .field("role", &self.role)
             .field("created_at", &self.created_at)
             .finish()
@@ -53,44 +50,35 @@ impl<'a> Operators<'a> {
         password_hash: &str,
         role: &str,
     ) -> Result<Operator, AppError> {
-        let id = setu_common::new_id();
         sqlx::query_as!(
-            OperatorRow,
+            Operator,
             "INSERT INTO operators (id, email, password_hash, role)
              VALUES ($1, $2, $3, $4)
-             RETURNING id, email, password_hash, totp_secret, role, created_at",
-            id,
-            email,
+             RETURNING id, email, password_hash, role, created_at",
+            setu_common::new_id(),
+            email.to_lowercase(),
             password_hash,
             role,
         )
         .fetch_one(self.pool)
         .await
         .map_err(map_db_error)
-        .map(|r| r.into_operator())
     }
 
     /// Create the first operator atomically: the check and the insert
     /// run under a transaction-scoped advisory lock, so two concurrent
     /// `POST /setup` calls cannot both succeed (the loser gets 409
-    /// `conflict`, whatever email it used). `UNIQUE(email)` alone only
-    /// stops identical emails.
+    /// `conflict`, whatever email it used).
     pub async fn create_first_owner(
         &self,
         email: &str,
         password_hash: &str,
     ) -> Result<Operator, AppError> {
-        let mut tx = self.pool.begin().await.map_err(|e| {
-            tracing::error!(error = %e, "setup transaction failed");
-            AppError::internal()
-        })?;
+        let mut tx = self.pool.begin().await.map_err(map_db_error)?;
         sqlx::query!("SELECT pg_advisory_xact_lock($1)", SETUP_LOCK_KEY)
             .execute(&mut *tx)
             .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "setup lock failed");
-                AppError::internal()
-            })?;
+            .map_err(map_db_error)?;
         let n: Option<i64> = sqlx::query_scalar!("SELECT COUNT(*) FROM operators")
             .fetch_one(&mut *tx)
             .await
@@ -98,51 +86,44 @@ impl<'a> Operators<'a> {
         if n.unwrap_or(0) != 0 {
             return Err(AppError::conflict("setup already complete"));
         }
-        let id = setu_common::new_id();
         let op = sqlx::query_as!(
-            OperatorRow,
+            Operator,
             "INSERT INTO operators (id, email, password_hash, role)
              VALUES ($1, $2, $3, 'owner')
-             RETURNING id, email, password_hash, totp_secret, role, created_at",
-            id,
-            email,
+             RETURNING id, email, password_hash, role, created_at",
+            setu_common::new_id(),
+            email.to_lowercase(),
             password_hash,
         )
         .fetch_one(&mut *tx)
         .await
-        .map_err(map_db_error)
-        .map(|r| r.into_operator())?;
-        tx.commit().await.map_err(|e| {
-            tracing::error!(error = %e, "setup commit failed");
-            AppError::internal()
-        })?;
+        .map_err(map_db_error)?;
+        tx.commit().await.map_err(map_db_error)?;
         Ok(op)
     }
 
     pub async fn by_email(&self, email: &str) -> Result<Option<Operator>, AppError> {
         sqlx::query_as!(
-            OperatorRow,
-            "SELECT id, email, password_hash, totp_secret, role, created_at
+            Operator,
+            "SELECT id, email, password_hash, role, created_at
              FROM operators WHERE email = $1",
-            email,
+            email.to_lowercase(),
         )
         .fetch_optional(self.pool)
         .await
         .map_err(map_db_error)
-        .map(|r| r.map(|r| r.into_operator()))
     }
 
     pub async fn by_id(&self, id: &str) -> Result<Option<Operator>, AppError> {
         sqlx::query_as!(
-            OperatorRow,
-            "SELECT id, email, password_hash, totp_secret, role, created_at
+            Operator,
+            "SELECT id, email, password_hash, role, created_at
              FROM operators WHERE id = $1",
             id,
         )
         .fetch_optional(self.pool)
         .await
         .map_err(map_db_error)
-        .map(|r| r.map(|r| r.into_operator()))
     }
 
     pub async fn count(&self) -> Result<i64, AppError> {
@@ -152,27 +133,40 @@ impl<'a> Operators<'a> {
             .map_err(map_db_error)?;
         Ok(n.unwrap_or(0))
     }
-}
 
-#[derive(sqlx::FromRow)]
-struct OperatorRow {
-    id: String,
-    email: String,
-    password_hash: String,
-    totp_secret: Option<String>,
-    role: String,
-    created_at: DateTime<Utc>,
-}
+    pub async fn list(&self) -> Result<Vec<Operator>, AppError> {
+        sqlx::query_as!(
+            Operator,
+            "SELECT id, email, password_hash, role, created_at
+             FROM operators ORDER BY email, id",
+        )
+        .fetch_all(self.pool)
+        .await
+        .map_err(map_db_error)
+    }
 
-impl OperatorRow {
-    fn into_operator(self) -> Operator {
-        Operator {
-            id: self.id,
-            email: self.email,
-            password_hash: self.password_hash,
-            totp_secret: self.totp_secret,
-            role: self.role,
-            created_at: self.created_at,
+    /// Replace the password hash and delete every session of the
+    /// operator, in one transaction (spec §3: all sessions die on a
+    /// password change).
+    pub async fn set_password_hash(&self, id: &str, password_hash: &str) -> Result<(), AppError> {
+        let mut tx = self.pool.begin().await.map_err(map_db_error)?;
+        let n = sqlx::query!(
+            "UPDATE operators SET password_hash = $2 WHERE id = $1",
+            id,
+            password_hash,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(map_db_error)?
+        .rows_affected();
+        if n == 0 {
+            return Err(AppError::not_found("operator not found"));
         }
+        sqlx::query!("DELETE FROM sessions WHERE operator_id = $1", id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_db_error)?;
+        tx.commit().await.map_err(map_db_error)?;
+        Ok(())
     }
 }

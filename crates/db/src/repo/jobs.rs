@@ -1,4 +1,10 @@
-//! `jobs` repo: the Postgres work queue (`FOR UPDATE SKIP LOCKED`).
+//! `jobs` repo: the Postgres work queue with leases. A claim takes a
+//! `queued` job, or a `running` one whose lease (`locked_until`) has
+//! expired, with `FOR UPDATE SKIP LOCKED`; the runner renews the lease
+//! while it works. One active (`queued`/`running`) job per site is
+//! enforced by a partial unique index.
+
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -6,32 +12,35 @@ use sqlx::PgPool;
 
 use crate::{map_db_error, AppError};
 
-/// Known job kinds; anything else is rejected with `validation`.
+/// Job kinds (spec §3); anything else is rejected with `validation`.
 pub const JOB_KINDS: &[&str] = &[
     "provision_site",
     "update_site",
     "backup_site",
     "restore_site",
     "delete_site",
+    "delete_backup",
+    "env_update",
     "restart_site",
     "stop_site",
     "start_site",
-    "reconcile",
 ];
 
-/// One unit of background work. `payload` may carry secrets (prompt
-/// answers before they are sealed): `Debug` redacts it.
+/// One unit of background work. `payload` may carry sealed values and
+/// the step cursor: `Debug` redacts it.
+#[derive(Clone)]
 pub struct Job {
     pub id: String,
     pub kind: String,
     pub site_id: Option<String>,
     pub server_id: Option<String>,
     pub status: String,
+    pub payload: Value,
     pub attempts: i32,
-    pub payload: Option<Value>,
+    pub locked_by: Option<String>,
+    pub locked_until: Option<DateTime<Utc>>,
     pub log: String,
     pub error: Option<String>,
-    pub worker: Option<String>,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
@@ -47,29 +56,10 @@ impl std::fmt::Debug for Job {
             .field("status", &self.status)
             .field("attempts", &self.attempts)
             .field("payload", &"[redacted]")
+            .field("locked_by", &self.locked_by)
+            .field("locked_until", &self.locked_until)
             .field("error", &self.error)
-            .field("worker", &self.worker)
             .finish()
-    }
-}
-
-impl Clone for Job {
-    fn clone(&self) -> Self {
-        Self {
-            id: self.id.clone(),
-            kind: self.kind.clone(),
-            site_id: self.site_id.clone(),
-            server_id: self.server_id.clone(),
-            status: self.status.clone(),
-            attempts: self.attempts,
-            payload: self.payload.clone(),
-            log: self.log.clone(),
-            error: self.error.clone(),
-            worker: self.worker.clone(),
-            created_at: self.created_at,
-            started_at: self.started_at,
-            finished_at: self.finished_at,
-        }
     }
 }
 
@@ -83,6 +73,7 @@ impl<'a> Jobs<'a> {
         Self { pool }
     }
 
+    /// Queue a job. `conflict` when the site already has an active job.
     pub async fn enqueue(
         &self,
         kind: &str,
@@ -93,12 +84,13 @@ impl<'a> Jobs<'a> {
         if !JOB_KINDS.contains(&kind) {
             return Err(AppError::validation(format!("unknown job kind {kind}")));
         }
+        let payload = payload.cloned().unwrap_or_else(|| serde_json::json!({}));
         sqlx::query_as!(
-            JobRow,
+            Job,
             "INSERT INTO jobs (id, kind, site_id, server_id, payload)
              VALUES ($1, $2, $3, $4, $5)
-             RETURNING id, kind, site_id, server_id, status, attempts, payload,
-                       log, error, worker, created_at, started_at, finished_at",
+             RETURNING id, kind, site_id, server_id, status, payload, attempts, locked_by,
+                       locked_until, log, error, created_at, started_at, finished_at",
             setu_common::new_id(),
             kind,
             site_id,
@@ -108,33 +100,93 @@ impl<'a> Jobs<'a> {
         .fetch_one(self.pool)
         .await
         .map_err(map_db_error)
-        .map(|r| r.into_job())
     }
 
-    /// Atomically move the oldest `queued` job to `running`. The
-    /// select-and-update is a single statement, so concurrent workers
-    /// never receive the same job (`SKIP LOCKED` covers the case where
-    /// a sibling transaction holds a row lock).
-    pub async fn claim(&self, worker: &str) -> Result<Option<Job>, AppError> {
+    /// Claim the oldest `queued` job, or a `running` job whose lease
+    /// expired (its runner died), and lease it to `worker`.
+    pub async fn claim(&self, worker: &str, lease: Duration) -> Result<Option<Job>, AppError> {
         sqlx::query_as!(
-            JobRow,
-            "UPDATE jobs SET status = 'running', started_at = now(),
-                             attempts = attempts + 1, worker = $1
+            Job,
+            "UPDATE jobs SET status = 'running', locked_by = $1,
+                             locked_until = now() + make_interval(secs => $2),
+                             attempts = attempts + 1,
+                             started_at = COALESCE(started_at, now())
              WHERE id = (
                  SELECT id FROM jobs
                  WHERE status = 'queued'
+                    OR (status = 'running' AND locked_until < now())
                  ORDER BY created_at, id
                  FOR UPDATE SKIP LOCKED
                  LIMIT 1
              )
-             RETURNING id, kind, site_id, server_id, status, attempts, payload,
-                       log, error, worker, created_at, started_at, finished_at",
+             RETURNING id, kind, site_id, server_id, status, payload, attempts, locked_by,
+                       locked_until, log, error, created_at, started_at, finished_at",
             worker,
+            crate::repo::secs(lease),
         )
         .fetch_optional(self.pool)
         .await
         .map_err(map_db_error)
-        .map(|r| r.map(|r| r.into_job()))
+    }
+
+    /// Extend the lease; `false` when `worker` no longer holds the job
+    /// (it was reclaimed or finished).
+    pub async fn renew(&self, id: &str, worker: &str, lease: Duration) -> Result<bool, AppError> {
+        let n = sqlx::query!(
+            "UPDATE jobs SET locked_until = now() + make_interval(secs => $3)
+             WHERE id = $1 AND locked_by = $2 AND status = 'running'",
+            id,
+            worker,
+            crate::repo::secs(lease),
+        )
+        .execute(self.pool)
+        .await
+        .map_err(map_db_error)?
+        .rows_affected();
+        Ok(n == 1)
+    }
+
+    /// Store the step cursor (`payload.step`).
+    pub async fn set_step(&self, id: &str, step: &str) -> Result<(), AppError> {
+        let n = sqlx::query!(
+            "UPDATE jobs SET payload = jsonb_set(payload, '{step}', to_jsonb($2::text))
+             WHERE id = $1",
+            id,
+            step,
+        )
+        .execute(self.pool)
+        .await
+        .map_err(map_db_error)?
+        .rows_affected();
+        if n == 0 {
+            return Err(AppError::not_found("job not found"));
+        }
+        Ok(())
+    }
+
+    /// The step cursor, if any.
+    pub async fn get_step(&self, id: &str) -> Result<Option<String>, AppError> {
+        sqlx::query_scalar!(
+            "SELECT payload->>'step' AS step FROM jobs WHERE id = $1",
+            id
+        )
+        .fetch_optional(self.pool)
+        .await
+        .map_err(map_db_error)?
+        .ok_or_else(|| AppError::not_found("job not found"))
+    }
+
+    /// Replace the payload.
+    pub async fn set_payload(&self, id: &str, payload: &Value) -> Result<(), AppError> {
+        let n = sqlx::query!("UPDATE jobs SET payload = $2 WHERE id = $1", id, payload)
+            .execute(self.pool)
+            .await
+            .map_err(map_db_error)?
+            .rows_affected();
+        if n == 0 {
+            return Err(AppError::not_found("job not found"));
+        }
+        Ok(())
     }
 
     pub async fn append_log(&self, id: &str, chunk: &str) -> Result<(), AppError> {
@@ -149,14 +201,16 @@ impl<'a> Jobs<'a> {
         Ok(())
     }
 
+    /// End the job `done` or `failed` and release the lease.
     pub async fn finish(&self, id: &str, ok: bool, error: Option<&str>) -> Result<Job, AppError> {
-        let status = if ok { "completed" } else { "failed" };
+        let status = if ok { "done" } else { "failed" };
         sqlx::query_as!(
-            JobRow,
-            "UPDATE jobs SET status = $2, finished_at = now(), error = $3
+            Job,
+            "UPDATE jobs SET status = $2, finished_at = now(), error = $3,
+                             locked_by = NULL, locked_until = NULL
              WHERE id = $1
-             RETURNING id, kind, site_id, server_id, status, attempts, payload,
-                       log, error, worker, created_at, started_at, finished_at",
+             RETURNING id, kind, site_id, server_id, status, payload, attempts, locked_by,
+                       locked_until, log, error, created_at, started_at, finished_at",
             id,
             status,
             error,
@@ -164,91 +218,54 @@ impl<'a> Jobs<'a> {
         .fetch_optional(self.pool)
         .await
         .map_err(map_db_error)?
-        .map(|r| r.into_job())
         .ok_or_else(|| AppError::not_found("job not found"))
+    }
+
+    /// Put `running` jobs whose lease expired back to `queued` (boot
+    /// recovery). Returns how many.
+    pub async fn reset_expired_running(&self) -> Result<u64, AppError> {
+        Ok(sqlx::query!(
+            "UPDATE jobs SET status = 'queued', locked_by = NULL, locked_until = NULL
+             WHERE status = 'running' AND locked_until < now()"
+        )
+        .execute(self.pool)
+        .await
+        .map_err(map_db_error)?
+        .rows_affected())
     }
 
     pub async fn list_recent(&self, limit: i64) -> Result<Vec<Job>, AppError> {
         sqlx::query_as!(
-            JobRow,
-            "SELECT id, kind, site_id, server_id, status, attempts, payload,
-                    log, error, worker, created_at, started_at, finished_at
-             FROM jobs ORDER BY created_at DESC, id DESC LIMIT $1",
+            Job,
+            "SELECT id, kind, site_id, server_id, status, payload, attempts, locked_by,
+                       locked_until, log, error, created_at, started_at, finished_at FROM jobs ORDER BY created_at DESC, id DESC LIMIT $1",
             limit,
         )
         .fetch_all(self.pool)
         .await
         .map_err(map_db_error)
-        .map(|rows| rows.into_iter().map(|r| r.into_job()).collect())
     }
 
     pub async fn get(&self, id: &str) -> Result<Job, AppError> {
-        sqlx::query_as!(
-            JobRow,
-            "SELECT id, kind, site_id, server_id, status, attempts, payload,
-                    log, error, worker, created_at, started_at, finished_at
-             FROM jobs WHERE id = $1",
-            id,
-        )
-        .fetch_optional(self.pool)
-        .await
-        .map_err(map_db_error)?
-        .map(|r| r.into_job())
-        .ok_or_else(|| AppError::not_found("job not found"))
+        sqlx::query_as!(Job, "SELECT id, kind, site_id, server_id, status, payload, attempts, locked_by,
+                       locked_until, log, error, created_at, started_at, finished_at FROM jobs WHERE id = $1", id)
+            .fetch_optional(self.pool)
+            .await
+            .map_err(map_db_error)?
+            .ok_or_else(|| AppError::not_found("job not found"))
     }
 
-    /// Any live (`queued` or `running`) job for the site, newest first.
-    /// Mutating site routes use this to reject overlapping work.
-    pub async fn running_for_site(&self, site_id: &str) -> Result<Option<Job>, AppError> {
+    /// The site's active (`queued`/`running`) job, if any.
+    pub async fn active_for_site(&self, site_id: &str) -> Result<Option<Job>, AppError> {
         sqlx::query_as!(
-            JobRow,
-            "SELECT id, kind, site_id, server_id, status, attempts, payload,
-                    log, error, worker, created_at, started_at, finished_at
-             FROM jobs
-             WHERE site_id = $1 AND status IN ('queued', 'running')
-             ORDER BY created_at DESC, id DESC LIMIT 1",
+            Job,
+            "SELECT id, kind, site_id, server_id, status, payload, attempts, locked_by,
+                       locked_until, log, error, created_at, started_at, finished_at FROM jobs
+             WHERE site_id = $1 AND status IN ('queued', 'running')",
             site_id,
         )
         .fetch_optional(self.pool)
         .await
         .map_err(map_db_error)
-        .map(|r| r.map(|r| r.into_job()))
-    }
-}
-
-#[derive(sqlx::FromRow)]
-struct JobRow {
-    id: String,
-    kind: String,
-    site_id: Option<String>,
-    server_id: Option<String>,
-    status: String,
-    attempts: i32,
-    payload: Option<Value>,
-    log: String,
-    error: Option<String>,
-    worker: Option<String>,
-    created_at: DateTime<Utc>,
-    started_at: Option<DateTime<Utc>>,
-    finished_at: Option<DateTime<Utc>>,
-}
-
-impl JobRow {
-    fn into_job(self) -> Job {
-        Job {
-            id: self.id,
-            kind: self.kind,
-            site_id: self.site_id,
-            server_id: self.server_id,
-            status: self.status,
-            attempts: self.attempts,
-            payload: self.payload,
-            log: self.log,
-            error: self.error,
-            worker: self.worker,
-            created_at: self.created_at,
-            started_at: self.started_at,
-            finished_at: self.finished_at,
-        }
     }
 }

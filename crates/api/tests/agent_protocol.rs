@@ -107,8 +107,26 @@ async fn join_with_used_token_is_401() {
         .await
         .expect("first join sends");
     assert_eq!(first.status(), reqwest::StatusCode::OK);
+    let first: Value = first.json().await.expect("join body is json");
 
-    // The single-use token is spent: the retry is 401 with the envelope.
+    // Spec §5: a retry inside 60 s with the same nonce (empty until WS5
+    // adds `JoinRequest.nonce`, ledger R76) gets the same server token.
+    let retry = agent
+        .post(srv.url("/agent/v1/join"))
+        .json(&join_body())
+        .send()
+        .await
+        .expect("retry join sends");
+    assert_eq!(retry.status(), reqwest::StatusCode::OK);
+    let retry: Value = retry.json().await.expect("retry body is json");
+    assert_eq!(retry["server_token"], first["server_token"]);
+
+    // Past the window the single-use token is spent: 401 with the envelope.
+    sqlx::query("UPDATE servers SET joined_at = now() - interval '61 seconds' WHERE id = $1")
+        .bind(first["server_id"].as_str().expect("server id"))
+        .execute(srv.db.pool())
+        .await
+        .expect("age join");
     let second = agent
         .post(srv.url("/agent/v1/join"))
         .json(&join_body())
@@ -182,12 +200,14 @@ async fn commands_long_poll_returns_when_enqueued() {
     let start = Instant::now();
     let enqueued = srv
         .db
-        .agent_commands()
+        .commands()
         .enqueue(
             &server_id,
+            None,
             &setu_proto::Command::Status {
                 site_id: "site-1".to_string(),
             },
+            Duration::from_secs(120),
         )
         .await
         .expect("enqueue");
@@ -285,7 +305,6 @@ async fn heartbeat_marks_online_and_stores_metrics() {
         .await
         .expect("upsert app");
     let plan = srv.db.plans().seed_default().await.expect("seed plan");
-    let port = srv.db.sites().next_port(&server_id).await.expect("port");
     let site = srv
         .db
         .sites()
@@ -293,14 +312,12 @@ async fn heartbeat_marks_online_and_stores_metrics() {
             name: "hello-1".to_string(),
             app_id: "hello".to_string(),
             app_version: "0.1.0".to_string(),
-            server_id: server_id.clone(),
+            server_id: Some(server_id.clone()),
             plan_id: plan.id.clone(),
             domain: "hello-1.example.com".to_string(),
-            port,
-            data_dir: "/srv/setu/sites/hello-1/data".to_string(),
-            db_name: "site_hello1".to_string(),
-            env: json!({}),
             owner_email: "owner@example.com".to_string(),
+            env_sealed: json!([]),
+            plan_memory_mb: 64,
         })
         .await
         .expect("create site");
@@ -358,12 +375,14 @@ async fn redelivered_command_is_idempotent() {
 
     let enqueued = srv
         .db
-        .agent_commands()
+        .commands()
         .enqueue(
             &server_id,
+            None,
             &setu_proto::Command::Status {
                 site_id: "site-1".to_string(),
             },
+            Duration::from_secs(120),
         )
         .await
         .expect("enqueue");
@@ -379,7 +398,7 @@ async fn redelivered_command_is_idempotent() {
     let first_body: Value = first.json().await.expect("body is json");
     assert_eq!(first_body["id"].as_str().expect("id"), enqueued.id);
 
-    // Nothing left until the stale delivery times out.
+    // Nothing left until the agent restarts.
     let drained = agent
         .get(srv.url("/agent/v1/commands?wait=0"))
         .bearer_auth(&server_token)
@@ -388,21 +407,14 @@ async fn redelivered_command_is_idempotent() {
         .expect("drain poll sends");
     assert_eq!(drained.status(), reqwest::StatusCode::NO_CONTENT);
 
-    // Age the delivery past the cutoff and requeue: the same command id
-    // comes back with attempts = 2 (first delivery + redelivery).
-    sqlx::query(
-        "UPDATE agent_commands SET delivered_at = now() - INTERVAL '2 seconds' WHERE id = $1",
-    )
-    .bind(&enqueued.id)
-    .execute(srv.db.pool())
-    .await
-    .expect("age delivery");
+    // A new agent boot requeues delivered commands (spec §5): the same
+    // command id comes back with attempts = 2 (first delivery + redelivery).
     let requeued = srv
         .db
-        .agent_commands()
-        .requeue_stale(Duration::from_secs(1))
+        .commands()
+        .requeue_delivered(&server_id)
         .await
-        .expect("requeue stale");
+        .expect("requeue delivered");
     assert_eq!(requeued, 1);
 
     let second = agent
@@ -431,12 +443,14 @@ async fn result_is_scoped_to_authed_server() {
 
     let enqueued = srv
         .db
-        .agent_commands()
+        .commands()
         .enqueue(
             &server_b,
+            None,
             &setu_proto::Command::Status {
                 site_id: "site-1".to_string(),
             },
+            Duration::from_secs(120),
         )
         .await
         .expect("enqueue for B");
@@ -484,12 +498,14 @@ async fn result_repeat_post_is_idempotent_no_overwrite() {
 
     let enqueued = srv
         .db
-        .agent_commands()
+        .commands()
         .enqueue(
             &server_id,
+            None,
             &setu_proto::Command::Status {
                 site_id: "site-1".to_string(),
             },
+            Duration::from_secs(120),
         )
         .await
         .expect("enqueue");
@@ -545,22 +561,19 @@ async fn heartbeat_ignores_foreign_site_metrics() {
         .await
         .expect("upsert app");
     let plan = srv.db.plans().seed_default().await.expect("seed plan");
-    let mk_site = async |server_id: &str, name: &str, domain: &str, db_name: &str| {
-        let port = srv.db.sites().next_port(server_id).await.expect("port");
+    let mk_site = async |server_id: &str, name: &str, domain: &str, _db_name: &str| {
         srv.db
             .sites()
             .create(&setu_db::NewSite {
                 name: name.to_string(),
                 app_id: "hello".to_string(),
                 app_version: "0.1.0".to_string(),
-                server_id: server_id.to_string(),
+                server_id: Some(server_id.to_string()),
                 plan_id: plan.id.clone(),
                 domain: domain.to_string(),
-                port,
-                data_dir: format!("/srv/setu/sites/{name}/data"),
-                db_name: db_name.to_string(),
-                env: json!({}),
                 owner_email: "owner@example.com".to_string(),
+                env_sealed: json!([]),
+                plan_memory_mb: 64,
             })
             .await
             .expect("create site")

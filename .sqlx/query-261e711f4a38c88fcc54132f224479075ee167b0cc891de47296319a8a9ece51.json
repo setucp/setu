@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.id, s.memory_mb, s.is_control_plane,\n                            COALESCE((SELECT SUM(p.memory_mb) FROM sites x\n                                      JOIN plans p ON p.id = x.plan_id\n                                      WHERE x.server_id = s.id), 0)::BIGINT AS \"used!\"\n                     FROM servers s\n                     WHERE s.joined_at IS NOT NULL AND NOT s.cordoned\n                       AND s.last_seen_at > now() - make_interval(secs => $1)\n                     ORDER BY s.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "memory_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "memory_mb"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "is_control_plane",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "is_control_plane"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "used!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      null
+    ]
+  },
+  "hash": "261e711f4a38c88fcc54132f224479075ee167b0cc891de47296319a8a9ece51"
+}

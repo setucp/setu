@@ -14,8 +14,8 @@ export interface paths {
         /**
          * The next undelivered command for this server (200), or 204 when none
          *     arrives within the wait window. Delivery marks the command delivered
-         *     and counts the attempt; agents are idempotent, so the control plane
-         *     may redeliver after `requeue_stale`. Polled per server at 600/min
+         *     and counts the attempt; a new agent `boot_id` requeues delivered
+         *     commands (spec §5). Polled per server at 600/min
          *     (spec §7); past that the poll is 429.
          */
         get: operations["commands"];

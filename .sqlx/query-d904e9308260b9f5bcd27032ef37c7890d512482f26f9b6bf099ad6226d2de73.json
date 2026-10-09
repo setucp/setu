@@ -1,0 +1,112 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.id_hash, s.operator_id, s.created_at, s.expires_at,\n                    o.email, o.password_hash, o.role, o.created_at AS op_created_at\n             FROM sessions s JOIN operators o ON o.id = s.operator_id\n             WHERE s.id_hash = $1 AND s.expires_at > now()",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "id_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "operator_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "operator_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "email",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "operators",
+            "name": "email"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "password_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "operators",
+            "name": "password_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "role",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "operators",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "op_created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "operators",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d904e9308260b9f5bcd27032ef37c7890d512482f26f9b6bf099ad6226d2de73"
+}

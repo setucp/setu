@@ -16,7 +16,7 @@ use crate::{agent_step, build_spec, fail, load_manifest, log_step, JobCtx};
 pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), AppError> {
     let site = ctx.db.sites().get(site_id).await?;
     let backup = ctx.db.backups().get(backup_id).await?;
-    if backup.site_id != site.id {
+    if backup.site_id.as_deref() != Some(site.id.as_str()) {
         return Err(AppError::validation("backup does not belong to this site"));
     }
     let manifest = load_manifest(&ctx.db, &site.app_id, &site.app_version).await?;
@@ -65,7 +65,10 @@ pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), App
         Command::Restore {
             site: spec,
             db: site.db_name.clone(),
-            src: PathBuf::from(&backup.location),
+            src: PathBuf::from(crate::update::backup_dest(
+                &backup.site_short_id,
+                &backup.id,
+            )),
         },
     )
     .await?;

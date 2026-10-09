@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE agent_commands\n             SET status = $2, completed_at = now(), result = $3,\n                 command = setu_redact_command(command)\n             WHERE id = $1 AND ($4::text IS NULL OR server_id = $4)\n               AND status IN ('queued', 'delivered')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Jsonb",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5c497ca3cd3ce10db38e0edb52f394b0b8b94e7e1b1e849b300cfcbc248184bf"
+}

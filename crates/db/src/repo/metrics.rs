@@ -3,10 +3,20 @@
 
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 use crate::{map_db_error, AppError};
+
+/// The newest sample of a site.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LatestMetric {
+    pub site_id: String,
+    pub at: DateTime<Utc>,
+    pub cpu_seconds: f64,
+    pub memory_bytes: i64,
+    pub disk_bytes: i64,
+}
 
 /// Repository accessor; build via [`crate::Db::metrics`].
 pub struct Metrics<'a> {
@@ -22,6 +32,19 @@ impl<'a> Metrics<'a> {
     /// number of rows processed.
     pub async fn insert_batch(&self, metrics: &[setu_proto::SiteMetric]) -> Result<u64, AppError> {
         insert_metrics(self.pool, metrics).await
+    }
+
+    /// The site's newest sample, if any.
+    pub async fn latest_for_site(&self, site_id: &str) -> Result<Option<LatestMetric>, AppError> {
+        sqlx::query_as!(
+            LatestMetric,
+            "SELECT site_id, at, cpu_seconds, memory_bytes, disk_bytes
+             FROM site_metrics WHERE site_id = $1 ORDER BY at DESC LIMIT 1",
+            site_id,
+        )
+        .fetch_optional(self.pool)
+        .await
+        .map_err(map_db_error)
     }
 
     /// Delete samples older than `older_than`. Returns rows removed.

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use setu_common::{AppError, ErrorCode};
-use setu_db::Db;
+use setu_db::{Db, WaitError};
 use setu_proto::{Command, CommandResult};
 
 /// One typed agent call. Every command is idempotent, so callers may
@@ -79,9 +79,10 @@ pub fn command_kind(cmd: &Command) -> &'static str {
 }
 
 /// Production client: enqueue the command and wait for the agent's
-/// result (posted via the Task 8 HTTP endpoints). A wait timeout maps
-/// to [`AgentError::Timeout`] so the caller retries; `requeue_stale`
-/// redelivers the command to the agent.
+/// result (posted via the Task 8 HTTP endpoints). The command expires
+/// after the call's timeout; a wait timeout cancels it (so it is never
+/// delivered late, spec §5) and maps to [`AgentError::Timeout`] so the
+/// job's own retry issues a fresh command.
 pub struct DbAgentClient {
     db: Db,
     default_timeout: Duration,
@@ -104,26 +105,31 @@ impl AgentClient for DbAgentClient {
         cmd: Command,
         timeout: Duration,
     ) -> Result<CommandResult, AgentError> {
-        let envelope = self
-            .db
-            .agent_commands()
-            .enqueue(server_id, &cmd)
-            .await
-            .map_err(|e| AgentError::Unreachable(e.message))?;
         let effective = if timeout.is_zero() {
             self.default_timeout
         } else {
             timeout
         };
-        let result = self
+        // `site_short_id` arrives with proto's `site_short_id()` in WS5.
+        let envelope = self
             .db
-            .agent_commands()
-            .wait(&envelope.id, effective)
+            .commands()
+            .enqueue(server_id, None, &cmd, effective)
             .await
-            .map_err(|e| match e.code {
-                ErrorCode::AgentUnreachable => AgentError::Timeout,
-                _ => AgentError::Unreachable(e.message),
-            })?;
+            .map_err(|e| AgentError::Unreachable(e.message))?;
+        let result = match self.db.commands().wait(&envelope.id, effective).await {
+            Ok(result) => result,
+            Err(WaitError::Timeout) => {
+                if let Err(e) = self.db.commands().cancel(&envelope.id).await {
+                    tracing::warn!(error = %e, "cancel after timeout failed");
+                }
+                return Err(AgentError::Timeout);
+            }
+            Err(WaitError::Cancelled) | Err(WaitError::Expired) => {
+                return Err(AgentError::Timeout);
+            }
+            Err(WaitError::Db(e)) => return Err(AgentError::Unreachable(e.message)),
+        };
         if result.ok {
             Ok(result)
         } else {

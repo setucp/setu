@@ -167,7 +167,7 @@ pub async fn local_server(
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .unwrap_or_else(local_hostname);
-    let (server, join_token) = state.db.servers().create_pending(&name).await?;
+    let (server, join_token) = state.db.servers().create_pending(&name, true).await?;
     let command = install_command(&state.config.public_url, &join_token);
     audit(
         &state.db,

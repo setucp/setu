@@ -70,7 +70,6 @@ nix = { version = "0.31", default-features = false, features = ["fs", "dir", "us
 hostname = { version = "0.4" }
 url = { version = "2" }
 tower-sessions = { version = "0.15" }
-rmp-serde = { version = "1" }
 time = { version = "0.3" }
 regex = { version = "1" }
 idna = { version = "1" }

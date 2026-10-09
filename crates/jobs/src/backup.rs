@@ -22,8 +22,8 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
     let spec = build_spec(&plan, &site, &manifest)?;
     log_step(ctx, "validate", true, None).await;
 
-    let dest = backup_dest(&site.id, "manual");
-    let row = ctx.db.backups().create(&site.id, "manual", &dest).await?;
+    let row = ctx.db.backups().create(&site, "manual").await?;
+    let dest = backup_dest(&site.short_id, &row.id);
     match call_agent(
         ctx,
         &site.server_id,

@@ -190,7 +190,7 @@ pub async fn audit_list(
                 id: e.id,
                 operator_id: e.operator_id,
                 action: e.action,
-                target: e.target,
+                target: e.target_id,
                 ip: e.ip,
                 at: e.at,
             })

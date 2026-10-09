@@ -45,15 +45,9 @@ pub struct ServerOut {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Effective status from the stored row (shared with Task 8/9 later).
+/// Status computed on read (spec §3): `pending`, `online`, `offline`.
 pub fn effective_status(server: &setu_db::Server) -> String {
-    if server.status == "pending" {
-        return "pending".to_string();
-    }
-    match server.last_seen_at {
-        Some(seen) if (chrono::Utc::now() - seen).num_seconds() < 60 => "online".to_string(),
-        _ => "offline".to_string(),
-    }
+    server.status(chrono::Utc::now()).as_str().to_string()
 }
 
 impl ServerOut {
@@ -62,7 +56,7 @@ impl ServerOut {
         Self {
             id: s.id.clone(),
             name: s.name.clone(),
-            host: s.host.clone(),
+            host: s.hostname.clone(),
             status,
             last_seen_at: s.last_seen_at,
             agent_version: s.agent_version.clone(),
@@ -71,11 +65,13 @@ impl ServerOut {
             cpu_cores: s.cpu_cores,
             memory_mb: s.memory_mb,
             disk_mb: s.disk_mb,
-            load1: s.load1,
-            mem_free_mb: s.mem_free_mb,
-            disk_free_mb: s.disk_free_mb,
+            // Spec §3 stores no load figures; WS8 reshapes `ServerOut`
+            // (ledger R79).
+            load1: None,
+            mem_free_mb: None,
+            disk_free_mb: None,
             created_at: s.created_at,
-            updated_at: s.updated_at,
+            updated_at: s.last_seen_at.unwrap_or(s.created_at),
         }
     }
 }
@@ -146,7 +142,11 @@ pub async fn create(
     if body.name.trim().is_empty() {
         return Err(AppError::validation("server name must not be empty"));
     }
-    let (server, join_token) = state.db.servers().create_pending(body.name.trim()).await?;
+    let (server, join_token) = state
+        .db
+        .servers()
+        .create_pending(body.name.trim(), false)
+        .await?;
     let command = install_command(&state.config.public_url, &join_token);
     audit(
         &state.db,

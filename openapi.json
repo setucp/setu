@@ -15,7 +15,7 @@
         "tags": [
           "super::agent"
         ],
-        "summary": "The next undelivered command for this server (200), or 204 when none\narrives within the wait window. Delivery marks the command delivered\nand counts the attempt; agents are idempotent, so the control plane\nmay redeliver after `requeue_stale`. Polled per server at 600/min\n(spec §7); past that the poll is 429.",
+        "summary": "The next undelivered command for this server (200), or 204 when none\narrives within the wait window. Delivery marks the command delivered\nand counts the attempt; a new agent `boot_id` requeues delivered\ncommands (spec §5). Polled per server at 600/min\n(spec §7); past that the poll is 429.",
         "operationId": "commands",
         "parameters": [
           {

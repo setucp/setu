@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO plans (id, name, memory_mb, cpu_percent, disk_mb, allowed_app_ids)\n             VALUES ($1, 'Default', 512, 100, 5120, NULL)\n             ON CONFLICT (name) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0663363cbdd82cbb1a718767837018c475a676f53cd1f78cef1d5f55e547c26c"
+}

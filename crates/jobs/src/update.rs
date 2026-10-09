@@ -411,12 +411,8 @@ async fn pre_update_backup(
     manifest: &Manifest,
     spec: &setu_proto::SiteSpec,
 ) -> Result<(), AppError> {
-    let dest = backup_dest(&site.id, "pre-update");
-    let row = ctx
-        .db
-        .backups()
-        .create(&site.id, "pre_update", &dest)
-        .await?;
+    let row = ctx.db.backups().create(site, "pre_update").await?;
+    let dest = backup_dest(&site.short_id, &row.id);
     match call_agent(
         ctx,
         &site.server_id,
@@ -454,10 +450,8 @@ async fn pre_update_backup(
     }
 }
 
-pub(crate) fn backup_dest(site_id: &str, kind: &str) -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format!("/var/lib/setu/backups/{site_id}/{kind}-{secs}")
+/// `/var/lib/setu/backups/<short>/<backup_id>` (spec §3). The agent uses
+/// only the last component (ledger R65) until WS5 sends `backup_id`.
+pub(crate) fn backup_dest(short_id: &str, backup_id: &str) -> String {
+    format!("/var/lib/setu/backups/{short_id}/{backup_id}")
 }
