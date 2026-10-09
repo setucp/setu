@@ -47,18 +47,36 @@ fn corpus() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// `apps/hello/manifest.toml` is a template the e2e renders: rendered with
-/// placeholder values it must validate under the current schema.
+/// `apps/hello/manifest.tmpl.toml` is the template `scripts/e2e.sh`
+/// renders per version: each rendering must validate under the current
+/// schema.
 #[test]
 fn hello_template_renders_valid() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/hello/manifest.toml");
-    let src = fs::read_to_string(path)
-        .expect("read hello template")
-        .replace("__VERSION__", "0.1.0")
-        .replace("__HELLO_NAME__", "hello")
-        .replace("__EXTRA_ENV__", "HELLO_FAIL = { value = \"1\" }")
-        .replace("__SHA256__", &"a".repeat(64))
-        .replace("__URL__", "http://127.0.0.1:1/hello-0.1.0.tar.gz");
-    let manifest = setu_manifest::Manifest::parse(&src).expect("hello template validates");
-    assert!(manifest.env.contains_key("HELLO_BIND"));
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/hello/manifest.tmpl.toml");
+    let template = fs::read_to_string(path).expect("read hello template");
+    for (version, extra) in [
+        ("0.1.0", ""),
+        ("0.1.1", ""),
+        ("0.1.2", "HELLO_FAIL = { value = \"1\" }"),
+    ] {
+        let src = template
+            .replace("__VERSION__", version)
+            .replace("__EXTRA_ENV__", extra)
+            .replace("__SHA256__", &"a".repeat(64))
+            .replace("__URL__", "http://127.0.0.1:1/hello.tar.gz");
+        let manifest = setu_manifest::Manifest::parse(&src)
+            .unwrap_or_else(|e| panic!("hello {version} template validates: {e:?}"));
+        assert_eq!(manifest.app.version, version);
+        for var in [
+            "HELLO_BIND",
+            "DATABASE_URL",
+            "HELLO_VERSION",
+            "HELLO_UPLOADS_DIR",
+            "HELLO_STATE_DIR",
+        ] {
+            assert!(manifest.env.contains_key(var), "{version}: {var}");
+        }
+        assert_eq!(manifest.env.contains_key("HELLO_FAIL"), version == "0.1.2");
+    }
 }

@@ -97,7 +97,7 @@ fn plan_for(version: &str) -> MigrationPlan {
     MigrationPlan {
         create_v2: v >= (0, 1, 1),
         create_v3: v >= (0, 1, 2),
-        refuse_if_v3: v >= (0, 1, 1) && v < (0, 1, 2),
+        refuse_if_v3: ((0, 1, 1)..(0, 1, 2)).contains(&v),
     }
 }
 
