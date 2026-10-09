@@ -186,6 +186,32 @@ async fn route_matrix() {
     )
     .await;
 
+    // Setup: GET is public; POST is public-once (operators already
+    // exist in this context, so every role — anonymous included — gets
+    // 409, never 401); local-server needs operator+.
+    ctx.row("GET", "/api/v1/setup", None, 200, 200, 200, 200)
+        .await;
+    ctx.row(
+        "POST",
+        "/api/v1/setup",
+        Some(json!({"email": "late@example.com", "password": "correct-horse-1"})),
+        409,
+        409,
+        409,
+        409,
+    )
+    .await;
+    ctx.row(
+        "POST",
+        "/api/v1/setup/local-server",
+        Some(json!({})),
+        401,
+        403,
+        201,
+        201,
+    )
+    .await;
+
     // Servers: reads viewer+, writes operator+.
     ctx.row("GET", "/api/v1/servers", None, 401, 200, 200, 200)
         .await;

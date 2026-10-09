@@ -371,6 +371,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Setup status (public, no auth): whether the first owner still needs
+         *     creating, plus the public URL for the wizard to display.
+         */
+        get: operations["status"];
+        put?: never;
+        /**
+         * Create the owner operator. Public, exactly once: while at least one
+         *     operator exists this is 409 `conflict` regardless of authentication.
+         */
+        post: operations["create_owner"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/setup/local-server": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register the local server (operator and above): a pending server
+         *     named after the hostname plus the `setu agent install` command.
+         */
+        post: operations["local_server"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sites": {
         parameters: {
             query?: never;
@@ -963,6 +1007,17 @@ export interface components {
             /** Format: int32 */
             memory_mb: number;
         };
+        LocalServerRequest: {
+            /** @description Explicit server name; defaults to the machine's hostname. */
+            name?: string | null;
+        };
+        LocalServerResponse: {
+            /** @description One-line installer reusing the already installed `setu` binary. */
+            install_command: string;
+            /** @description Single-use join token (valid 1 hour); shown once. */
+            join_token: string;
+            server: components["schemas"]["ServerOut"];
+        };
         LoginRequest: {
             email: string;
             password: string;
@@ -1051,6 +1106,16 @@ export interface components {
             status: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        SetupRequest: {
+            email: string;
+            password: string;
+        };
+        SetupStatusOut: {
+            /** @description True while no operator exists (the wizard must run). */
+            needed: boolean;
+            /** @description The configured `SETU_PUBLIC_URL`, shown by the wizard. */
+            public_url: string;
         };
         SiteJobResponse: {
             job: components["schemas"]["JobOut"];
@@ -2128,6 +2193,103 @@ export interface operations {
                 };
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStatusOut"];
+                };
+            };
+        };
+    };
+    create_owner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorOut"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    local_server: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LocalServerRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalServerResponse"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

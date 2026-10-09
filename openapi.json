@@ -1274,6 +1274,127 @@
         }
       }
     },
+    "/api/v1/setup": {
+      "get": {
+        "tags": [
+          "super::setup"
+        ],
+        "summary": "Setup status (public, no auth): whether the first owner still needs\ncreating, plus the public URL for the wizard to display.",
+        "operationId": "status",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatusOut"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "super::setup"
+        ],
+        "summary": "Create the owner operator. Public, exactly once: while at least one\noperator exists this is 409 `conflict` regardless of authentication.",
+        "operationId": "create_owner",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/setup/local-server": {
+      "post": {
+        "tags": [
+          "super::setup"
+        ],
+        "summary": "Register the local server (operator and above): a pending server\nnamed after the hostname plus the `setu agent install` command.",
+        "operationId": "local_server",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalServerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalServerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sites": {
       "get": {
         "tags": [
@@ -3502,6 +3623,39 @@
           }
         }
       },
+      "LocalServerRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Explicit server name; defaults to the machine's hostname."
+          }
+        }
+      },
+      "LocalServerResponse": {
+        "type": "object",
+        "required": [
+          "server",
+          "join_token",
+          "install_command"
+        ],
+        "properties": {
+          "install_command": {
+            "type": "string",
+            "description": "One-line installer reusing the already installed `setu` binary."
+          },
+          "join_token": {
+            "type": "string",
+            "description": "Single-use join token (valid 1 hour); shown once."
+          },
+          "server": {
+            "$ref": "#/components/schemas/ServerOut"
+          }
+        }
+      },
       "LoginRequest": {
         "type": "object",
         "required": [
@@ -3808,6 +3962,38 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "SetupRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "SetupStatusOut": {
+        "type": "object",
+        "required": [
+          "needed",
+          "public_url"
+        ],
+        "properties": {
+          "needed": {
+            "type": "boolean",
+            "description": "True while no operator exists (the wizard must run)."
+          },
+          "public_url": {
+            "type": "string",
+            "description": "The configured `SETU_PUBLIC_URL`, shown by the wizard."
           }
         }
       },

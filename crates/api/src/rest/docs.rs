@@ -15,6 +15,7 @@ use super::jobs::{AuditEntryOut, AuditListOut, AuditQuery, JobListOut, JobsQuery
 use super::operators::{CreateOperatorRequest, OperatorListOut};
 use super::plans::{CreatePlanRequest, PlanLimitsIn, PlanListOut, PlanOut, UpdatePlanRequest};
 use super::servers::{CreateServerRequest, CreateServerResponse, ServerListOut, ServerOut};
+use super::setup::{LocalServerRequest, LocalServerResponse, SetupRequest, SetupStatusOut};
 use super::sites::{
     CreateSiteRequest, CreateSiteResponse, EnvEntryOut, EnvGetOut, EnvPutRequest, JobOut,
     SiteJobResponse, SiteListOut, SiteOut, UpdateSiteRequest,
@@ -36,6 +37,9 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::auth::me,
         super::operators::list,
         super::operators::create,
+        super::setup::status,
+        super::setup::create_owner,
+        super::setup::local_server,
         super::servers::list,
         super::servers::create,
         super::servers::get,
@@ -85,6 +89,10 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         ServerListOut,
         CreateServerRequest,
         CreateServerResponse,
+        SetupStatusOut,
+        SetupRequest,
+        LocalServerRequest,
+        LocalServerResponse,
         AppOut,
         AppListOut,
         AppVersionOut,

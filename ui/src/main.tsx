@@ -13,7 +13,7 @@ const queryClient = new QueryClient({
       // back to sign in once, with the way back.
       if (error instanceof ApiError && error.status === 401) {
         const back = window.location.pathname;
-        if (back !== "/login") {
+        if (back !== "/login" && back !== "/setup") {
           window.location.assign(`/login?redirect=${encodeURIComponent(back)}`);
         }
       }

@@ -141,7 +141,10 @@ async fn unknown_route_uses_the_not_found_envelope() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
 
-    for path in ["/nope", "/api/v1/nope"] {
+    // Unknown API paths always keep the envelope — including when the UI
+    // is embedded (plain `/nope` serves the SPA shell then; see the
+    // `fallback` unit tests in `embed.rs` for both build modes).
+    for path in ["/api/v1/nope", "/agent/v1/nope"] {
         let resp = srv
             .client
             .get(srv.url(path))

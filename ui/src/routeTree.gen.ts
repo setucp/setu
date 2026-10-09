@@ -16,6 +16,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as PlansRouteImport } from './routes/plans'
 import { Route as ServersRouteImport } from './routes/servers'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as SetupRouteImport } from './routes/setup'
 import { Route as SitesRouteImport } from './routes/sites'
 import { Route as AppsIndexRouteImport } from './routes/apps.index'
 import { Route as JobsIndexRouteImport } from './routes/jobs.index'
@@ -67,6 +68,11 @@ const ServersRoute = ServersRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SetupRoute = SetupRouteImport.update({
+  id: '/setup',
+  path: '/setup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SitesRoute = SitesRouteImport.update({
@@ -163,6 +169,7 @@ export interface FileRoutesByFullPath {
   '/plans': typeof PlansRouteWithChildren
   '/servers': typeof ServersRouteWithChildren
   '/settings': typeof SettingsRoute
+  '/setup': typeof SetupRoute
   '/sites': typeof SitesRouteWithChildren
   '/jobs/$id': typeof JobsIdRoute
   '/servers/$id': typeof ServersIdRoute
@@ -185,6 +192,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/settings': typeof SettingsRoute
+  '/setup': typeof SetupRoute
   '/jobs/$id': typeof JobsIdRoute
   '/servers/$id': typeof ServersIdRoute
   '/sites/new': typeof SitesNewRoute
@@ -210,6 +218,7 @@ export interface FileRoutesById {
   '/plans': typeof PlansRouteWithChildren
   '/servers': typeof ServersRouteWithChildren
   '/settings': typeof SettingsRoute
+  '/setup': typeof SetupRoute
   '/sites': typeof SitesRouteWithChildren
   '/jobs/$id': typeof JobsIdRoute
   '/servers/$id': typeof ServersIdRoute
@@ -238,6 +247,7 @@ export interface FileRouteTypes {
     | '/plans'
     | '/servers'
     | '/settings'
+    | '/setup'
     | '/sites'
     | '/jobs/$id'
     | '/servers/$id'
@@ -260,6 +270,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/settings'
+    | '/setup'
     | '/jobs/$id'
     | '/servers/$id'
     | '/sites/new'
@@ -284,6 +295,7 @@ export interface FileRouteTypes {
     | '/plans'
     | '/servers'
     | '/settings'
+    | '/setup'
     | '/sites'
     | '/jobs/$id'
     | '/servers/$id'
@@ -311,6 +323,7 @@ export interface RootRouteChildren {
   PlansRoute: typeof PlansRouteWithChildren
   ServersRoute: typeof ServersRouteWithChildren
   SettingsRoute: typeof SettingsRoute
+  SetupRoute: typeof SetupRoute
   SitesRoute: typeof SitesRouteWithChildren
 }
 
@@ -363,6 +376,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/setup': {
+      id: '/setup'
+      path: '/setup'
+      fullPath: '/setup'
+      preLoaderRoute: typeof SetupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sites': {
@@ -577,6 +597,7 @@ const rootRouteChildren: RootRouteChildren = {
   PlansRoute: PlansRouteWithChildren,
   ServersRoute: ServersRouteWithChildren,
   SettingsRoute: SettingsRoute,
+  SetupRoute: SetupRoute,
   SitesRoute: SitesRouteWithChildren,
 }
 export const routeTree = rootRouteImport

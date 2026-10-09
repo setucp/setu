@@ -9,6 +9,7 @@ pub mod jobs;
 pub mod operators;
 pub mod plans;
 pub mod servers;
+pub mod setup;
 pub mod sites;
 
 use axum::{
@@ -79,6 +80,8 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(auth::me))
         .route("/operators", get(operators::list).post(operators::create))
+        .route("/setup", get(setup::status).post(setup::create_owner))
+        .route("/setup/local-server", post(setup::local_server))
         .route("/servers", get(servers::list).post(servers::create))
         .route("/servers/{id}", get(servers::get).delete(servers::delete))
         .route("/apps", get(apps::list).post(apps::publish))

@@ -6,6 +6,11 @@ use sqlx::PgPool;
 
 use crate::{map_db_error, AppError};
 
+/// 64-bit advisory-lock key for first-owner setup: first 8 bytes of
+/// `sha256("setu-setup")` as big-endian i64. Serialises the check+insert
+/// in `create_first_owner` across concurrently booting control planes.
+const SETUP_LOCK_KEY: i64 = -8640242326146119732;
+
 /// One panel user. Holds credential material: `Debug` redacts it.
 pub struct Operator {
     pub id: String,
@@ -63,6 +68,55 @@ impl<'a> Operators<'a> {
         .await
         .map_err(map_db_error)
         .map(|r| r.into_operator())
+    }
+
+    /// Create the first operator atomically: the check and the insert
+    /// run under a transaction-scoped advisory lock, so two concurrent
+    /// `POST /setup` calls cannot both succeed (the loser gets 409
+    /// `conflict`, whatever email it used). `UNIQUE(email)` alone only
+    /// stops identical emails.
+    pub async fn create_first_owner(
+        &self,
+        email: &str,
+        password_hash: &str,
+    ) -> Result<Operator, AppError> {
+        let mut tx = self.pool.begin().await.map_err(|e| {
+            tracing::error!(error = %e, "setup transaction failed");
+            AppError::internal()
+        })?;
+        sqlx::query!("SELECT pg_advisory_xact_lock($1)", SETUP_LOCK_KEY)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "setup lock failed");
+                AppError::internal()
+            })?;
+        let n: Option<i64> = sqlx::query_scalar!("SELECT COUNT(*) FROM operators")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_db_error)?;
+        if n.unwrap_or(0) != 0 {
+            return Err(AppError::conflict("setup already complete"));
+        }
+        let id = setu_common::new_id();
+        let op = sqlx::query_as!(
+            OperatorRow,
+            "INSERT INTO operators (id, email, password_hash, role)
+             VALUES ($1, $2, $3, 'owner')
+             RETURNING id, email, password_hash, totp_secret, role, created_at",
+            id,
+            email,
+            password_hash,
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_db_error)
+        .map(|r| r.into_operator())?;
+        tx.commit().await.map_err(|e| {
+            tracing::error!(error = %e, "setup commit failed");
+            AppError::internal()
+        })?;
+        Ok(op)
     }
 
     pub async fn by_email(&self, email: &str) -> Result<Option<Operator>, AppError> {

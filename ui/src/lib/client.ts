@@ -13,6 +13,8 @@ export type ManifestError = components["schemas"]["ManifestErrorOut"];
 export type ValidateResponse = components["schemas"]["ValidateResponse"];
 export type CreateServerResponse = components["schemas"]["CreateServerResponse"];
 export type SiteJobResponse = components["schemas"]["SiteJobResponse"];
+export type SetupStatus = components["schemas"]["SetupStatusOut"];
+export type LocalServerResponse = components["schemas"]["LocalServerResponse"];
 
 export interface PlanLimits {
   memory_mb?: number;
@@ -289,5 +291,23 @@ export const api = {
   async listAudit(): Promise<AuditEntry[]> {
     const body = await request<{ audit: AuditEntry[] }>("/api/v1/audit?limit=100");
     return body.audit;
+  },
+
+  setupStatus(): Promise<SetupStatus> {
+    return request("/api/v1/setup");
+  },
+
+  setupOwner(email: string, password: string): Promise<Operator> {
+    return request("/api/v1/setup", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+  },
+
+  setupLocalServer(name?: string): Promise<LocalServerResponse> {
+    return request("/api/v1/setup/local-server", {
+      method: "POST",
+      body: JSON.stringify(name === undefined ? {} : { name }),
+    });
   },
 };

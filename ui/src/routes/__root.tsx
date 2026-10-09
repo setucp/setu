@@ -10,9 +10,11 @@ export const Route = createRootRouteWithContext<RouterContextValue>()({
 
 function Root() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // `/login` and `/setup` are public: setup must work before any
+  // operator (and therefore any session) exists.
   return (
     <>
-      {pathname === "/login" ? <Outlet /> : <RequireAuth />}
+      {pathname === "/login" || pathname === "/setup" ? <Outlet /> : <RequireAuth />}
       <Toaster richColors closeButton />
     </>
   );
