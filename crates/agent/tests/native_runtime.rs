@@ -11,7 +11,7 @@ use serde_json::json;
 use setu_agent::helper::{Ctx, Verb};
 use setu_agent::{
     AgentConfig, FakeCaddy, FakeHelper, FakePostgres, LocalHelper, NativeRuntime, Paths, Runtime,
-    StateFile,
+    State,
 };
 use setu_proto::{BinaryRef, Limits, SiteSpec, Workdir};
 
@@ -192,7 +192,7 @@ async fn site_create_sends_the_spec_dirs_and_records_the_port() {
     let call = &helper.calls_for(Verb::SiteCreate)[0];
     assert_eq!(call.short, SHORT);
     assert_eq!(call.input, json!({"dirs": ["media"]}));
-    let state = StateFile::load(&dir.path().join("var/lib/setu/state.json")).expect("state");
+    let state = State::load(&dir.path().join("var/lib/setu/state.json")).expect("state");
     assert_eq!(state.sites[SHORT].port, 20009);
 }
 
@@ -264,7 +264,7 @@ async fn install_beside_old_keeps_recorded_version_until_switch() {
         PathBuf::from("0.1.0")
     );
     assert_eq!(
-        StateFile::load(&state_path).expect("state").sites[SHORT].version,
+        State::load(&state_path).expect("state").sites[SHORT].version,
         "0.1.0"
     );
 
@@ -277,7 +277,7 @@ async fn install_beside_old_keeps_recorded_version_until_switch() {
         PathBuf::from("0.1.0")
     );
     assert_eq!(
-        StateFile::load(&state_path).expect("state").sites[SHORT].version,
+        State::load(&state_path).expect("state").sites[SHORT].version,
         "0.1.0"
     );
 
@@ -290,7 +290,7 @@ async fn install_beside_old_keeps_recorded_version_until_switch() {
         PathBuf::from("0.1.1")
     );
     assert_eq!(
-        StateFile::load(&state_path).expect("state").sites[SHORT].version,
+        State::load(&state_path).expect("state").sites[SHORT].version,
         "0.1.1"
     );
 }
@@ -328,7 +328,7 @@ async fn remove_runs_site_remove_and_forgets_state() {
         .path()
         .join("etc/systemd/system/setu-site@00000001.service.d")
         .exists());
-    assert!(StateFile::load(&dir.path().join("var/lib/setu/state.json"))
+    assert!(State::load(&dir.path().join("var/lib/setu/state.json"))
         .expect("state")
         .sites
         .is_empty());

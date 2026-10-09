@@ -56,9 +56,15 @@ pub fn parse_journal_json(text: &str) -> LogStream {
 }
 
 /// Read up to `lines` entries after `cursor`.
-pub async fn read(short: &str, cursor: Option<&str>, lines: u32) -> anyhow::Result<LogStream> {
+/// `program` is `journalctl` in production (a fake script in tests).
+pub async fn read(
+    program: &std::path::Path,
+    short: &str,
+    cursor: Option<&str>,
+    lines: u32,
+) -> anyhow::Result<LogStream> {
     let args = journal_args(short, cursor, lines)?;
-    let out = tokio::process::Command::new("journalctl")
+    let out = tokio::process::Command::new(program)
         .args(&args)
         .output()
         .await

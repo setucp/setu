@@ -36,8 +36,9 @@ pub fn read_memory_bytes(cgroup: &Path) -> Option<u64> {
         .ok()
 }
 
-/// One site's metric: cgroup files first, `systemctl show` values
-/// (`CPUUsageNSec`, `MemoryCurrent`) as the fallback.
+/// One site's metric: the helper's `unit show` values (`CPUUsageNSec`,
+/// `MemoryCurrent`, `data_bytes`) first, the unit's cgroup files (read
+/// as the agent, never `du`) when systemd does not track a value.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SiteMetric {
     pub cpu_seconds: f64,
@@ -47,15 +48,14 @@ pub struct SiteMetric {
 
 pub fn read_site_metric(status: &crate::runtime::RuntimeStatus) -> SiteMetric {
     let cg = status.control_group.as_deref().and_then(cgroup_path);
-    let cpu = cg
-        .as_deref()
-        .and_then(read_cpu_seconds)
-        .or_else(|| status.cpu_nsec.map(|n| n as f64 / 1e9))
+    let cpu = status
+        .cpu_nsec
+        .map(|n| n as f64 / 1e9)
+        .or_else(|| cg.as_deref().and_then(read_cpu_seconds))
         .unwrap_or(0.0);
-    let mem = cg
-        .as_deref()
-        .and_then(read_memory_bytes)
-        .or(status.memory_bytes)
+    let mem = status
+        .memory_bytes
+        .or_else(|| cg.as_deref().and_then(read_memory_bytes))
         .unwrap_or(0);
     SiteMetric {
         cpu_seconds: cpu,
@@ -85,7 +85,7 @@ mod tests {
     }
 
     #[test]
-    fn cgroup_files_parse_with_show_fallback() {
+    fn show_values_win_with_cgroup_fallback() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("cpu.stat"), "usage_usec 2500000\n").expect("write");
         std::fs::write(dir.path().join("memory.current"), "134217728\n").expect("write");
@@ -100,5 +100,14 @@ mod tests {
         };
         let m = read_site_metric(&st);
         assert_eq!((m.cpu_seconds, m.memory_bytes, m.disk_bytes), (3.0, 42, 7));
+        let st = crate::runtime::RuntimeStatus {
+            control_group: Some("/x.service".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            read_site_metric(&st).memory_bytes,
+            0,
+            "no show value, no cgroup"
+        );
     }
 }

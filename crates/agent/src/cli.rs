@@ -23,13 +23,19 @@ pub enum AgentCmd {
         config: Option<PathBuf>,
     },
     /// Install the agent on this server (root, idempotent), then join.
+    /// The one-time join token is read from `SETU_JOIN_TOKEN` or stdin,
+    /// never from argv.
     Install {
-        /// Control-plane base URL.
+        /// Control-plane base URL (`http://` only for 127.0.0.1/localhost
+        /// unless `--insecure`).
         #[arg(long)]
         control_plane: String,
-        /// One-time join token from `POST /servers`.
+        /// Allow plain http to a non-loopback control plane.
         #[arg(long)]
-        join_token: String,
+        insecure: bool,
+        /// Extra root certificate (PEM) to trust for the control plane.
+        #[arg(long)]
+        ca: Option<PathBuf>,
         /// Where to write the agent config (default `/etc/setu/agent.toml`).
         #[arg(long)]
         config: Option<PathBuf>,
@@ -56,12 +62,15 @@ pub enum AgentCmd {
         #[arg(long, default_value = crate::caddy::DEFAULT_PANEL_UPSTREAM)]
         upstream: String,
     },
-    /// Join the control plane with a one-time token (no system setup).
+    /// Join the control plane (no system setup); token from
+    /// `SETU_JOIN_TOKEN` or stdin.
     Join {
         #[arg(long)]
         control_plane: String,
         #[arg(long)]
-        join_token: String,
+        insecure: bool,
+        #[arg(long)]
+        ca: Option<PathBuf>,
         #[arg(long)]
         config: Option<PathBuf>,
     },
@@ -86,15 +95,18 @@ pub async fn run_agent(cmd: AgentCmd) -> anyhow::Result<()> {
         }
         AgentCmd::Install {
             control_plane,
-            join_token,
+            insecure,
+            ca,
             config,
             tls,
             panel_host,
             upstream,
         } => crate::install::install(&crate::install::InstallOpts {
             control_plane,
-            join_token,
+            join_token: crate::install::read_join_token().map_err(|e| anyhow::anyhow!("{e}"))?,
             config_path: config,
+            insecure,
+            ca,
             tls_internal: tls == Some(TlsMode::Internal),
             panel: panel_route(panel_host, upstream),
         })
@@ -115,18 +127,21 @@ pub async fn run_agent(cmd: AgentCmd) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("{e}")),
         AgentCmd::Join {
             control_plane,
-            join_token,
+            insecure,
+            ca,
             config,
         } => crate::install::join(&crate::install::InstallOpts {
             control_plane,
-            join_token,
+            join_token: crate::install::read_join_token().map_err(|e| anyhow::anyhow!("{e}"))?,
             config_path: config,
+            insecure,
+            ca,
             tls_internal: false,
             panel: None,
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}")),
-        AgentCmd::Doctor { config } => crate::install::doctor(config.as_deref())
+        AgentCmd::Doctor { config } => crate::doctor::doctor(config.as_deref())
             .await
             .map_err(|e| anyhow::anyhow!("{e}")),
     }

@@ -302,14 +302,16 @@ CREATE_RESP=$(curl -s -b "$JAR" -X POST "$API/servers" \
 SERVER_ID=$(echo "$CREATE_RESP" | jq -r '.server.id // empty')
 JOIN_TOKEN=$(echo "$CREATE_RESP" | jq -r '.join_token // empty')
 [ -n "$SERVER_ID" ] && [ -n "$JOIN_TOKEN" ] || fail "POST /servers" "$CREATE_RESP"
-echo "$CREATE_RESP" | jq -r '.install_command // empty' | grep -q "join-token" \
+echo "$CREATE_RESP" | jq -r '.install_command // empty' | grep -q "SETU_JOIN_TOKEN=" \
   || fail "install_command" "no join token in install command"
 pass "server row created ($SERVER_ID)"
 
 # `--tls internal`: hello.test has no public DNS, so ACME would fail;
 # Caddy issues from its internal CA and the checks use `curl -k`.
-cexec /opt/setu/setu agent install \
-  --control-plane "http://${GW}:${SERVE_PORT}" --join-token "$JOIN_TOKEN" \
+# The token goes in the environment (never argv); the control plane is
+# plain http on the docker gateway, hence `--insecure`.
+docker exec -e SETU_JOIN_TOKEN="$JOIN_TOKEN" "$CTN" /opt/setu/setu agent install \
+  --control-plane "http://${GW}:${SERVE_PORT}" --insecure \
   --tls internal \
   >"$E2E_DIR/install.log" 2>&1 \
   || fail "agent install" "$(tail -15 "$E2E_DIR/install.log")"

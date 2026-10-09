@@ -1,6 +1,8 @@
-//! Command dispatch: every `Command` variant handled against a
+//! The per-variant executor: every `Command` variant run against a
 //! `NativeRuntime`. Handlers are idempotent (check state, then act) so the
-//! control plane may redeliver freely after timeouts.
+//! control plane may redeliver freely after timeouts. Expiry, dedupe,
+//! per-site ordering, redaction and persistence live in
+//! [`crate::commands::handle`], which calls [`execute`].
 //!
 //! Result logs never carry env values or passwords.
 
@@ -34,9 +36,9 @@ fn err(id: &str, log: &str, e: impl std::fmt::Display) -> CommandResult {
     }
 }
 
-/// Handle one command to a result. Covers every `Command` variant; there
+/// Execute one command to a result. Covers every `Command` variant; there
 /// is no fallthrough arm, so adding a variant breaks compilation here.
-pub async fn handle<H, P, C>(
+pub async fn execute<H, P, C>(
     cmd_id: &str,
     cmd: &Command,
     rt: &NativeRuntime<H, P, C>,
@@ -53,12 +55,18 @@ where
         },
         Command::CreateDatabase { db, role, password } => {
             match rt.postgres().create_or_alter(db, role, password).await {
-                Ok(()) => ok(cmd_id, serde_json::json!({"db": db}), "create_database ok"),
+                Ok(()) => {
+                    record_db(rt, db, Some(db.clone()));
+                    ok(cmd_id, serde_json::json!({"db": db}), "create_database ok")
+                }
                 Err(e) => err(cmd_id, "create_database failed", e),
             }
         }
         Command::DropDatabase { db, role } => match rt.postgres().drop(db, role).await {
-            Ok(()) => ok(cmd_id, serde_json::json!({"db": db}), "drop_database ok"),
+            Ok(()) => {
+                record_db(rt, db, None);
+                ok(cmd_id, serde_json::json!({"db": db}), "drop_database ok")
+            }
             Err(e) => err(cmd_id, "drop_database failed", e),
         },
         Command::Install { site, binary } => match rt.install_version(site, binary).await {
@@ -135,6 +143,14 @@ where
                 Err(e) => return err(cmd_id, "set_route failed", e),
             };
             let upstream = crate::caddy::site_upstream(*port);
+            let _routes = rt.route_lock().lock().await;
+            // Recorded first: reconcile rebuilds the route from state.
+            if let Err(e) = rt.update_state(site_short_id, |r| {
+                r.domain = Some(domain.clone());
+                r.port = *port;
+            }) {
+                return err(cmd_id, "set_route failed", e);
+            }
             match rt.caddy().upsert_route(&id, domain, &upstream).await {
                 Ok(()) => ok(
                     cmd_id,
@@ -152,6 +168,13 @@ where
                 Ok(id) => id,
                 Err(e) => return err(cmd_id, "remove_route failed", e),
             };
+            let _routes = rt.route_lock().lock().await;
+            let known = rt.state().read(|st| st.sites.contains_key(site_short_id));
+            if known {
+                if let Err(e) = rt.update_state(site_short_id, |r| r.domain = None) {
+                    return err(cmd_id, "remove_route failed", e);
+                }
+            }
             match rt.caddy().remove_route(&id).await {
                 Ok(()) => ok(
                     cmd_id,
@@ -240,7 +263,7 @@ where
     P: PostgresAdmin + Send + Sync,
     C: CaddyAdmin,
 {
-    let state = crate::state::StateFile::load(&rt.config().state_path)?;
+    let state = rt.state().snapshot();
     let mut units = Vec::new();
     for short in state.sites.keys() {
         units.push(unit_state(rt, short).await);
@@ -272,6 +295,22 @@ where
         sub: status.sub,
         pid: status.pid,
         restarts: status.n_restarts,
+    }
+}
+
+/// `site_<short>` databases are recorded on their site (state `db`).
+fn record_db<H, P, C>(rt: &NativeRuntime<H, P, C>, db: &str, value: Option<String>) {
+    let Some(short) = db
+        .strip_prefix("site_")
+        .filter(|s| setu_common::is_short_id(s))
+    else {
+        return;
+    };
+    let known = rt.state().read(|st| st.sites.contains_key(short));
+    if known {
+        if let Err(e) = rt.state().update_site(short, |r| r.db = value) {
+            tracing::warn!(error = %e, "cannot record database in state");
+        }
     }
 }
 

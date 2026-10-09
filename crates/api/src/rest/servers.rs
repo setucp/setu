@@ -2,7 +2,7 @@
 //!
 //! `POST` returns the one-time join token plus the one-line install command
 //! for the single `setu` binary:
-//! `setu agent install --control-plane <PUBLIC_URL> --join-token <tok>`.
+//! `SETU_JOIN_TOKEN=<tok> setu agent install --control-plane <PUBLIC_URL>`.
 
 use std::net::SocketAddr;
 
@@ -95,9 +95,11 @@ pub struct CreateServerResponse {
     pub install_command: String,
 }
 
-/// Build the installer command for the single `setu` binary.
+/// Build the installer command for the single `setu` binary. The token
+/// travels in `SETU_JOIN_TOKEN`, never on the agent's argv (the agent
+/// has no `--join-token` flag).
 pub fn install_command(public_url: &url::Url, join_token: &str) -> String {
-    format!("setu agent install --control-plane {public_url} --join-token {join_token}")
+    format!("SETU_JOIN_TOKEN={join_token} setu agent install --control-plane {public_url}")
 }
 
 /// List servers (viewer and above).

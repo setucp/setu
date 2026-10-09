@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use setu_proto::{JoinRequest, JoinResponse};
 
-use crate::caddy::{CaddyAdmin, CaddySocket, PanelRoute};
+use crate::caddy::PanelRoute;
 use crate::config::AgentConfig;
 use crate::install_system::{InstallSystemOpts, RealCommands, SystemCommands};
 
@@ -26,16 +26,71 @@ pub const SITE_TEMPLATE_ASSET: &str = include_str!("../assets/setu-site@.service
 /// Agent's own unit.
 pub const AGENT_UNIT_ASSET: &str = include_str!("../assets/setu-agent.service");
 
-/// Options for `install` / `join`.
-#[derive(Debug, Clone)]
+/// Options for `install` / `join`. `join_token` comes from
+/// `SETU_JOIN_TOKEN` or stdin, never argv (finding 5): see
+/// [`read_join_token`].
+#[derive(Clone)]
 pub struct InstallOpts {
     pub control_plane: String,
     pub join_token: String,
     pub config_path: Option<PathBuf>,
+    /// `--insecure`: plain http to a non-loopback control plane.
+    pub insecure: bool,
+    /// `--ca <file>`: extra root certificate (PEM) for the control plane.
+    pub ca: Option<PathBuf>,
     /// `--tls internal`: Caddy issues from its internal CA.
     pub tls_internal: bool,
     /// `--panel-host` (+ `--upstream`): the `setu-panel` route.
     pub panel: Option<PanelRoute>,
+}
+
+impl std::fmt::Debug for InstallOpts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InstallOpts")
+            .field("control_plane", &self.control_plane)
+            .field("join_token", &"[redacted]")
+            .field("config_path", &self.config_path)
+            .field("insecure", &self.insecure)
+            .field("ca", &self.ca)
+            .field("tls_internal", &self.tls_internal)
+            .field("panel", &self.panel)
+            .finish()
+    }
+}
+
+/// The join token: `SETU_JOIN_TOKEN`, else the first line of stdin
+/// (never argv, where `ps` and shell history would show it).
+pub fn read_join_token() -> Result<String, InstallError> {
+    if let Ok(t) = std::env::var("SETU_JOIN_TOKEN") {
+        if !t.trim().is_empty() {
+            return Ok(t.trim().to_string());
+        }
+    }
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| InstallError::Step("join token", e.to_string()))?;
+    join_token_from(&line)
+}
+
+/// A token line from stdin: trimmed, non-empty.
+pub fn join_token_from(line: &str) -> Result<String, InstallError> {
+    let t = line.trim();
+    if t.is_empty() {
+        return Err(InstallError::Step(
+            "join token",
+            "set SETU_JOIN_TOKEN or pipe the token on stdin".to_string(),
+        ));
+    }
+    Ok(t.to_string())
+}
+
+/// `https://` always; `http://` only to `127.0.0.1`/`localhost` (any
+/// loopback) unless `--insecure` (spec §5).
+pub fn check_control_plane(url: &str, insecure: bool) -> Result<String, InstallError> {
+    crate::download::check_url(url, &crate::download::DownloadPolicy { insecure })
+        .map_err(|e| InstallError::Step("control plane", e.to_string()))?;
+    Ok(url.trim_end_matches('/').to_string())
 }
 
 /// Errors from install/join/doctor.
@@ -56,6 +111,9 @@ fn step(name: &'static str) -> impl FnOnce(anyhow::Error) -> InstallError {
 /// first start — no crash-loop).
 pub async fn install(opts: &InstallOpts) -> Result<(), InstallError> {
     require_root()?;
+    // Before any system change: a bad URL or CA fails fast.
+    check_control_plane(&opts.control_plane, opts.insecure)?;
+    crate::config::http_client(opts.ca.as_deref()).map_err(step("ca"))?;
     let sys = RealCommands;
     ensure_packages(&sys).await?;
     ensure_user(&sys).await?;
@@ -200,8 +258,12 @@ async fn ensure_dirs(sys: &dyn SystemCommands) -> Result<(), InstallError> {
     Ok(())
 }
 
-/// SQL piped to `psql` as `postgres` on a fresh box (spec §4 Postgres).
-pub const REVOKE_SQL: &str = "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;\n";
+/// SQL piped to `psql` as `postgres` on a fresh box (spec §4 Postgres):
+/// the `postgres` database always, the control plane's `setu` database
+/// when it exists (single-node install).
+pub const REVOKE_SQL: &str = "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;\n\
+SELECT 'REVOKE CONNECT ON DATABASE setu FROM PUBLIC' \
+WHERE EXISTS (SELECT 1 FROM pg_database WHERE datname = 'setu')\\gexec\n";
 
 async fn ensure_postgres() -> Result<(), InstallError> {
     use tokio::io::AsyncWriteExt as _;
@@ -241,130 +303,6 @@ async fn ensure_postgres() -> Result<(), InstallError> {
     Ok(())
 }
 
-/// One `doctor` row.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DoctorRow {
-    pub name: &'static str,
-    pub ok: bool,
-    pub detail: String,
-}
-
-/// Every local check (control-plane reachability excluded).
-pub async fn doctor_rows(
-    config: &AgentConfig,
-    sys: &dyn SystemCommands,
-    caddy: &dyn CaddyAdmin,
-) -> Vec<DoctorRow> {
-    let mut rows = Vec::new();
-    let mut row = |name: &'static str, ok: bool, detail: &str| {
-        rows.push(DoctorRow {
-            name,
-            ok,
-            detail: detail.to_string(),
-        });
-    };
-    row(
-        "systemd",
-        sys.run("systemctl", &["--version"]).await.is_ok(),
-        "systemctl --version",
-    );
-    row(
-        "postgres",
-        sys.run(
-            "sudo",
-            &["-n", "-u", "postgres", "psql", "-X", "-q", "-c", "SELECT 1"],
-        )
-        .await
-        .is_ok(),
-        "sudo -n -u postgres psql",
-    );
-    row(
-        "caddy-socket",
-        caddy.routes().await.is_ok(),
-        &format!(
-            "caddy admin socket reachable ({})",
-            config.caddy_socket.display()
-        ),
-    );
-    row(
-        "caddy-tcp-2019",
-        !caddy.tcp_admin_open().await,
-        "TCP 2019 closed",
-    );
-    row(
-        "nftables",
-        sys.run("nft", &["list", "table", "inet", "setu"])
-            .await
-            .is_ok(),
-        "nft table inet setu present",
-    );
-    row(
-        "state-file",
-        crate::state::StateFile::load(&config.state_path).is_ok(),
-        &config.state_path.display().to_string(),
-    );
-    row(
-        "site-template",
-        Path::new("/etc/systemd/system/setu-site@.service").is_file(),
-        "setu-site@.service installed",
-    );
-    row(
-        "server-token",
-        !config.server_token.is_empty(),
-        if config.server_token.is_empty() {
-            "missing: run `setu agent join`"
-        } else {
-            "present"
-        },
-    );
-    rows
-}
-
-/// Print a dependency table; `Err` when anything fails.
-pub async fn doctor(config_path: Option<&Path>) -> Result<(), InstallError> {
-    let config =
-        AgentConfig::load(config_path).map_err(|e| InstallError::Step("config", e.to_string()))?;
-    let mut rows = doctor_rows(
-        &config,
-        &RealCommands,
-        &CaddySocket::new(&config.caddy_socket),
-    )
-    .await;
-    let cp_ok = reqwest::Client::new()
-        .get(format!(
-            "{}/healthz",
-            config.control_plane_url.trim_end_matches('/')
-        ))
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await
-        .is_ok_and(|r| r.status().is_success());
-    rows.push(DoctorRow {
-        name: "control-plane",
-        ok: cp_ok,
-        detail: config.control_plane_url.clone(),
-    });
-    let mut failures = 0;
-    for r in &rows {
-        println!(
-            "{:<16} {:<4} {}",
-            r.name,
-            if r.ok { "ok" } else { "FAIL" },
-            r.detail
-        );
-        if !r.ok {
-            failures += 1;
-        }
-    }
-    if failures > 0 {
-        return Err(InstallError::Step(
-            "doctor",
-            format!("{failures} checks failed"),
-        ));
-    }
-    Ok(())
-}
-
 fn require_root() -> Result<(), InstallError> {
     if nix::unistd::Uid::effective().is_root() {
         Ok(())
@@ -390,30 +328,33 @@ fn cpu_cores() -> u32 {
 }
 
 fn memory_mb() -> u64 {
-    crate::run_loop::read_mem_total_mb().max(1)
+    crate::heartbeat::read_mem_total_mb().max(1)
 }
 
-async fn join_control_plane(opts: &InstallOpts) -> Result<(), InstallError> {
-    let base = opts.control_plane.trim_end_matches('/').to_string();
-    let request = JoinRequest {
-        // The token itself is never logged (proto Debug redacts).
-        join_token: opts.join_token.clone(),
-        // Fresh per attempt until WS7 keeps one nonce across retries.
-        nonce: setu_common::random_hex(16),
-        hostname: hostname(),
-        arch: std::env::consts::ARCH.to_string(),
-        os: std::env::consts::OS.to_string(),
-        cpu_cores: cpu_cores(),
-        memory_mb: memory_mb(),
-        disk_mb: crate::run_loop::disk_free_mb(Path::new("/")).await,
+/// POST the join once; on a network error (no HTTP answer) retry once
+/// with the **same** request, so the same nonce (spec §5: a lost
+/// response is recoverable within 60 s, a different nonce is refused).
+pub async fn join_request(
+    client: &reqwest::Client,
+    base: &str,
+    request: &JoinRequest,
+) -> Result<JoinResponse, InstallError> {
+    let send = || {
+        client
+            .post(format!("{base}/agent/v1/join"))
+            .json(request)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
     };
-    let resp = reqwest::Client::new()
-        .post(format!("{base}/agent/v1/join"))
-        .json(&request)
-        .timeout(std::time::Duration::from_secs(15))
-        .send()
-        .await
-        .map_err(|e| InstallError::Step("join", e.to_string()))?;
+    let resp = match send().await {
+        Ok(r) => r,
+        Err(first) => {
+            tracing::warn!(error = %first, "join: network error, retrying with the same nonce");
+            send()
+                .await
+                .map_err(|e| InstallError::Step("join", e.to_string()))?
+        }
+    };
     if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
         return Err(InstallError::Step(
             "join",
@@ -426,28 +367,62 @@ async fn join_control_plane(opts: &InstallOpts) -> Result<(), InstallError> {
             format!("HTTP {}", resp.status()),
         ));
     }
-    let joined: JoinResponse = resp
-        .json()
+    resp.json()
         .await
-        .map_err(|e| InstallError::Step("join", e.to_string()))?;
+        .map_err(|e| InstallError::Step("join", e.to_string()))
+}
+
+/// Copy `--ca` next to the config (`ca.pem`, 0644: a public cert the
+/// agent must read as `setu`) and return the copy's path.
+fn install_ca(src: &Path, config_path: &Path) -> Result<PathBuf, InstallError> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let err = |e: std::io::Error| InstallError::Step("ca", e.to_string());
+    let pem = std::fs::read(src).map_err(err)?;
+    reqwest::Certificate::from_pem(&pem).map_err(|e| InstallError::Step("ca", e.to_string()))?;
+    let dest = config_path
+        .parent()
+        .unwrap_or_else(|| Path::new("/etc/setu"))
+        .join("ca.pem");
+    crate::config::atomic_write(&dest, &pem).map_err(err)?;
+    std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o644)).map_err(err)?;
+    Ok(dest)
+}
+
+async fn join_control_plane(opts: &InstallOpts) -> Result<(), InstallError> {
+    let base = check_control_plane(&opts.control_plane, opts.insecure)?;
+    let client = crate::config::http_client(opts.ca.as_deref()).map_err(step("ca"))?;
+    let request = JoinRequest {
+        // The token itself is never logged (proto Debug redacts).
+        join_token: opts.join_token.clone(),
+        // One nonce per install, reused by the retry.
+        nonce: setu_common::random_hex(16),
+        hostname: hostname(),
+        arch: std::env::consts::ARCH.to_string(),
+        os: std::env::consts::OS.to_string(),
+        cpu_cores: cpu_cores(),
+        memory_mb: memory_mb(),
+        disk_mb: crate::heartbeat::disk_free_mb(Path::new("/")).await,
+    };
+    let joined = join_request(&client, &base, &request).await?;
     let path = opts
         .config_path
         .clone()
         .unwrap_or_else(AgentConfig::default_path);
     let mut config =
         AgentConfig::load(Some(&path)).map_err(|e| InstallError::Step("config", e.to_string()))?;
-    config.control_plane_url = base;
+    config.control_plane = base;
     config.server_id = joined.server_id;
     config.server_token = joined.server_token;
+    config.insecure = opts.insecure;
+    if let Some(ca) = &opts.ca {
+        config.ca = Some(install_ca(ca, &path)?);
+    }
     if opts.panel.is_some() {
         config.panel = opts.panel.clone();
     }
+    // Created 0600 from the start (temp + rename), then handed to `setu`.
     config
         .save(&path)
-        .map_err(|e| InstallError::Step("config", e.to_string()))?;
-    // Token file must not be world-readable.
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
         .map_err(|e| InstallError::Step("config", e.to_string()))?;
     // Join runs as root but the agent runs as `setu`: it must read its
     // own token (the e2e once found a crash-loop on `Permission denied`).
@@ -465,8 +440,6 @@ async fn join_control_plane(opts: &InstallOpts) -> Result<(), InstallError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::caddy::FakeCaddy;
-    use crate::install_system::RecordingCommands;
 
     #[test]
     fn site_template_uses_instance_specifiers() {
@@ -515,11 +488,52 @@ mod tests {
     }
 
     #[test]
-    fn revoke_sql_targets_the_postgres_database() {
+    fn revoke_sql_targets_the_postgres_and_setu_databases() {
+        assert!(REVOKE_SQL.starts_with("REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;\n"));
+        assert!(REVOKE_SQL.contains("'REVOKE CONNECT ON DATABASE setu FROM PUBLIC'"));
+        assert!(REVOKE_SQL.contains("datname = 'setu'"));
+        assert!(REVOKE_SQL.trim_end().ends_with("\\gexec"));
+    }
+
+    #[test]
+    fn install_accepts_loopback_http_without_insecure() {
+        for ok in [
+            "http://127.0.0.1:7000",
+            "http://localhost:7000/",
+            "http://[::1]:7000",
+            "https://panel.example.com",
+        ] {
+            check_control_plane(ok, false).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
         assert_eq!(
-            REVOKE_SQL,
-            "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;\n"
+            check_control_plane("http://127.0.0.1:7000/", false).expect("ok"),
+            "http://127.0.0.1:7000"
         );
+        for bad in [
+            "http://10.0.0.5:7000",
+            "http://panel.example.com",
+            "ftp://x",
+            "nope",
+        ] {
+            assert!(check_control_plane(bad, false).is_err(), "{bad}");
+        }
+        check_control_plane("http://10.0.0.5:7000", true).expect("--insecure");
+    }
+
+    #[test]
+    fn join_token_line_is_trimmed_and_required() {
+        assert_eq!(join_token_from("setu_join_x\n").expect("ok"), "setu_join_x");
+        assert!(join_token_from("  \n").is_err());
+        let opts = InstallOpts {
+            control_plane: "https://x".into(),
+            join_token: "setu_join_SECRET".into(),
+            config_path: None,
+            insecure: false,
+            ca: None,
+            tls_internal: false,
+            panel: None,
+        };
+        assert!(!format!("{opts:?}").contains("SECRET"));
     }
 
     #[test]
@@ -528,31 +542,5 @@ mod tests {
         assert!(DIRS.contains(&("/srv/setu/sites", "root", "root", "0755")));
         assert!(DIRS.contains(&("/etc/setu", "root", "root", "0755")));
         assert!(DIRS.contains(&("/var/lib/setu/backups", "setu", "setu", "0750")));
-    }
-
-    #[tokio::test]
-    async fn doctor_checks_caddy_socket_tcp_admin_and_nft_table() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let config = AgentConfig {
-            state_path: dir.path().join("state.json"),
-            ..AgentConfig::default()
-        };
-        let sys = RecordingCommands::new();
-        let caddy = FakeCaddy::new();
-        let rows = doctor_rows(&config, &sys, &caddy).await;
-        let get = |name: &str| rows.iter().find(|r| r.name == name).expect(name).ok;
-        assert!(get("caddy-socket"));
-        assert!(get("caddy-tcp-2019"));
-        assert!(get("nftables"));
-        assert!(sys
-            .calls()
-            .contains(&"nft list table inet setu".to_string()));
-
-        caddy.admin().set_up(false);
-        caddy.admin().set_tcp_admin_open(true);
-        let rows = doctor_rows(&config, &sys, &caddy).await;
-        let get = |name: &str| rows.iter().find(|r| r.name == name).expect(name).ok;
-        assert!(!get("caddy-socket"));
-        assert!(!get("caddy-tcp-2019"));
     }
 }

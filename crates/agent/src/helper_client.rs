@@ -188,6 +188,7 @@ impl std::fmt::Debug for HelperCall {
 struct FakeInner {
     calls: Vec<HelperCall>,
     scripted: HashMap<Verb, VecDeque<Result<HelperOutput, String>>>,
+    delays: HashMap<Verb, std::time::Duration>,
 }
 
 /// Test double: records calls; returns scripted outputs per verb, else
@@ -237,6 +238,11 @@ impl FakeHelper {
             .push_back(Err(msg.to_string()));
     }
 
+    /// Every later `verb` call sleeps `delay` (after being recorded).
+    pub fn set_delay(&self, verb: Verb, delay: std::time::Duration) {
+        self.lock().delays.insert(verb, delay);
+    }
+
     pub fn calls(&self) -> Vec<HelperCall> {
         self.lock().calls.clone()
     }
@@ -280,14 +286,23 @@ impl Helper for FakeHelper {
         input: serde_json::Value,
         stdin: Option<Vec<u8>>,
     ) -> anyhow::Result<HelperOutput> {
-        let mut inner = self.lock();
-        inner.calls.push(HelperCall {
-            verb,
-            short: short.to_string(),
-            input: input.clone(),
-            stdin,
-        });
-        match inner.scripted.get_mut(&verb).and_then(VecDeque::pop_front) {
+        let (scripted, delay) = {
+            let mut inner = self.lock();
+            inner.calls.push(HelperCall {
+                verb,
+                short: short.to_string(),
+                input: input.clone(),
+                stdin,
+            });
+            (
+                inner.scripted.get_mut(&verb).and_then(VecDeque::pop_front),
+                inner.delays.get(&verb).copied(),
+            )
+        };
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
+        match scripted {
             Some(Ok(out)) => Ok(out),
             Some(Err(msg)) => Err(anyhow::anyhow!("helper {verb} failed: {msg}")),
             None => {

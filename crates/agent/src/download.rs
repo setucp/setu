@@ -87,7 +87,9 @@ pub async fn fetch_verified(
     if dest.is_file() && sha_of_file(&dest).as_deref() == Some(sha.as_str()) {
         return Ok(dest);
     }
-    let part = downloads_dir.join(format!("{sha}.part"));
+    // One part file per attempt: two sites installing the same release
+    // concurrently (one task per command) must not share it.
+    let part = downloads_dir.join(format!("{sha}.{}.part", setu_common::random_hex(6)));
     let result = stream_to(url, &sha, &part).await;
     if let Err(e) = result {
         let _ = std::fs::remove_file(&part);
@@ -186,7 +188,12 @@ mod tests {
         .expect("ok");
         assert_eq!(path, dir.path().join(format!("{right}.tar.gz")));
         assert_eq!(std::fs::read(&path).expect("read"), b"archive bytes");
-        assert!(!dir.path().join(format!("{right}.part")).exists());
+        let parts: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("ls")
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".part"))
+            .collect();
+        assert!(parts.is_empty(), "no part file left: {parts:?}");
     }
 
     #[tokio::test]

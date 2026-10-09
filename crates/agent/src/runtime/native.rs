@@ -7,6 +7,9 @@
 //! The agent itself writes only under `/var/lib/setu` (state, downloads,
 //! backups) and reads logs with `journalctl` as its own user.
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use serde_json::json;
 use setu_proto::{BinaryRef, EnvVar, SiteSpec};
 
@@ -18,7 +21,7 @@ use crate::helper_client::Helper;
 use crate::paths::check_short;
 use crate::postgres::PostgresAdmin;
 use crate::runtime::{Cursor, LogStream, Runtime, RuntimeStatus, SiteId};
-use crate::state::{SiteEntry, StateFile};
+use crate::state::{SiteRecord, StateStore};
 
 /// Phase-1 runtime: app binaries supervised as systemd template units.
 /// Every site is addressed by its 8-char short id (spec §4).
@@ -28,16 +31,41 @@ pub struct NativeRuntime<H, P, C> {
     postgres: P,
     caddy: C,
     config: AgentConfig,
+    state: Arc<StateStore>,
+    /// Serialises route writes (`SetRoute`/`RemoveRoute`) against a
+    /// reconcile pass, so a reconcile never resurrects a removed route.
+    routes: Arc<tokio::sync::Mutex<()>>,
+    journalctl: PathBuf,
 }
 
 impl<H, P, C> NativeRuntime<H, P, C> {
+    /// Opens `config.state_path` as the one in-process state owner.
     pub fn new(helper: H, postgres: P, caddy: C, config: AgentConfig) -> Self {
         Self {
             helper,
             postgres,
             caddy,
+            state: Arc::new(StateStore::open(&config.state_path)),
             config,
+            routes: Arc::new(tokio::sync::Mutex::new(())),
+            journalctl: PathBuf::from("journalctl"),
         }
+    }
+
+    /// Run `program` instead of `journalctl` (tests).
+    pub fn with_journalctl(mut self, program: PathBuf) -> Self {
+        self.journalctl = program;
+        self
+    }
+
+    /// The shared state (`state.json`).
+    pub fn state(&self) -> &StateStore {
+        &self.state
+    }
+
+    /// The route-write lock (see the field).
+    pub fn route_lock(&self) -> &tokio::sync::Mutex<()> {
+        &self.routes
     }
 
     pub fn helper(&self) -> &H {
@@ -62,37 +90,17 @@ impl<H, P, C> NativeRuntime<H, P, C> {
         }
     }
 
-    fn load_state(&self) -> anyhow::Result<StateFile> {
-        StateFile::load(&self.config.state_path).map_err(|e| anyhow::anyhow!("{e}"))
-    }
-
-    /// Update one site's state entry via `f` (created when absent).
-    fn update_state(&self, short: &str, f: impl FnOnce(&mut SiteEntry)) -> anyhow::Result<()> {
-        let mut state = self.load_state()?;
-        let mut entry = state.sites.get(short).cloned().unwrap_or(SiteEntry {
-            port: 0,
-            db: None,
-            version: String::new(),
-        });
-        f(&mut entry);
-        state
-            .upsert(short, entry, &self.config.state_path)
+    /// Update one site's state record via `f` (created when absent).
+    pub fn update_state(&self, short: &str, f: impl FnOnce(&mut SiteRecord)) -> anyhow::Result<()> {
+        check_short(short)?;
+        self.state
+            .update_site(short, f)
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     /// Short ids with a tree under the sites root.
     pub fn sites_on_disk(&self) -> Vec<String> {
-        let mut out: Vec<String> = std::fs::read_dir(&self.config.sites_root)
-            .map(|rd| {
-                rd.filter_map(Result::ok)
-                    .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-                    .filter_map(|e| e.file_name().into_string().ok())
-                    .filter(|n| setu_common::is_short_id(n))
-                    .collect()
-            })
-            .unwrap_or_default();
-        out.sort();
-        out
+        crate::reconcile::sites_on_disk(&self.config.sites_root)
     }
 }
 
@@ -204,16 +212,15 @@ impl<H: Helper, P, C> NativeRuntime<H, P, C> {
         cursor: Option<&str>,
         lines: u32,
     ) -> anyhow::Result<LogStream> {
-        crate::journal::read(short, cursor, lines).await
+        crate::journal::read(&self.journalctl, short, cursor, lines).await
     }
 
     /// Helper `site-remove` (stop, drop-in, user, tree), then forget the
     /// site. The database goes with the separate `DropDatabase` command.
     pub async fn remove_inner(&self, short: &str) -> anyhow::Result<()> {
         self.call(Verb::SiteRemove, short, json!({})).await?;
-        let mut state = self.load_state()?;
-        state
-            .remove(short, &self.config.state_path)
+        self.state
+            .remove_site(short)
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 

@@ -17,6 +17,8 @@ path = "src/main.rs"
 [features]
 # Forwarded: `setu helper --root` for tests (never in release builds).
 test-root = ["setu-agent/test-root"]
+# Forwarded: the agent's e2e exit hook (never in release builds).
+e2e-hooks = ["setu-agent/e2e-hooks"]
 
 [lints]
 workspace = true

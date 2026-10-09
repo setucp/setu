@@ -15,3 +15,12 @@ updates with rollback, job runner, audit log, end-to-end test.
 Caddy is driven only through its admin unix socket (TCP admin off,
 `caddy-api.service` with `/etc/caddy/setu.json`), and the `inet setu`
 nftables table keeps site ports 20000–29999 off the network.
+The agent runs commands concurrently (per-site FIFO, read-only
+commands unslotted), rejects expired ones, dedupes by id and persists
+each result before posting it; it reconciles Caddy routes (sites and
+panel) from its state every 5 minutes. `setu agent install` reads the
+join token from `SETU_JOIN_TOKEN` or stdin (never argv), keeps one join
+nonce across retries, accepts `--insecure`/`--ca`, and creates
+`agent.toml` 0600 from the start; `setu agent doctor` checks the
+helper, sudoers, units, Caddy, firewall, Postgres and the control
+plane.

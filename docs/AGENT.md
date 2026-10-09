@@ -15,15 +15,27 @@ On the server, as root, with the one-time join token from
 **Servers → Add server** (or the setup wizard's last step):
 
 ```sh
-setu agent install --control-plane https://setu.example.com --join-token setu_join_… \
-  [--tls internal] [--panel-host setu.example.com [--upstream unix//run/setu/http.sock]]
+SETU_JOIN_TOKEN=setu_join_… setu agent install --control-plane https://setu.example.com \
+  [--tls internal] [--insecure] [--ca /path/ca.pem] \
+  [--panel-host setu.example.com [--upstream unix//run/setu/http.sock]]
 ```
+
+The join token is read from `SETU_JOIN_TOKEN` or, when unset, the first
+line of stdin; it is never accepted on the command line (`ps` and shell
+history would show it). `http://` control planes are accepted only for
+`127.0.0.1`/`localhost` unless `--insecure`; `--ca` adds a root
+certificate (PEM) for the control plane, copied to `/etc/setu/ca.pem`
+and recorded in `agent.toml` as `ca`. The agent draws one random join
+nonce per install and retries once with the same nonce after a network
+error, so a lost response is recoverable (the control plane returns the
+same server token for the same nonce within 60 s).
 
 Idempotent: adds Caddy's official apt repository and installs `sudo
 gnupg postgresql-16 caddy nftables zstd`; creates user `setu` and
 `/var/lib/setu` (0750), `/var/lib/setu/{downloads,backups}`,
 `/srv/setu/sites` (root 0755); runs `REVOKE CONNECT ON DATABASE postgres
-FROM PUBLIC`; then `install-system`:
+FROM PUBLIC` (and on the control plane's `setu` database when present);
+then `install-system`:
 
 - the site template unit, `setu-agent.service` and
   `/etc/sudoers.d/setu` (0440, checked with `visudo -cf`);
@@ -41,7 +53,11 @@ FROM PUBLIC`; then `install-system`:
   with the running routes), so site routes survive.
 
 It then joins the control plane, writes `/etc/setu/agent.toml` (server
-token, mode 0600, owner `setu`) and starts `setu-agent.service`.
+token; created 0600 from the start — temp file + rename — then owned by
+`setu`) and starts `setu-agent.service`. `agent.toml` holds
+`control_plane`, `server_token`, `server_id`, `insecure`, `ca`, `panel`,
+`caddy_socket` and `reconcile_secs` (default 300;
+`SETU_AGENT_RECONCILE_SECS` overrides).
 `setu agent install-system [--caddy-only] [--tls internal] [--panel-host
 H --upstream U]` runs the system part alone (root; it is not a helper
 verb, so sudo cannot reach it).
@@ -53,16 +69,31 @@ Routes are Caddy objects with `@id` `setu-site-<short>` (upstream
 
 ## Commands
 
-- `setu agent run` — long-poll `GET /agent/v1/commands?wait=30`,
-  handle, post the result; heartbeat every 15 s (load, free memory
-  and disk, unit states, 1-minute metrics batch). Reconnects with
-  1 s → 30 s backoff.
-- `setu agent join --control-plane URL --join-token T` — redeem a
-  join token without reinstalling.
-- `setu agent doctor` — checks each dependency (systemd, Postgres,
-  Caddy admin socket reachable, TCP 2019 closed, `nft list table inet
-  setu`, state file, template unit, token, control plane), prints a
-  table, exits 1 on failure.
+- `setu agent run` — long-poll `GET /agent/v1/commands?wait=30`; each
+  command runs in its own task after taking its site's FIFO slot
+  (`status`, `fetch_logs`, `inventory` take none), so one site's
+  15-minute install never blocks another site. Each command is
+  rejected with `expired` once its `expires_at` has passed, deduped by
+  id against the last 1000 results in `/var/lib/setu/state.json`, and
+  its result is written there **before** it is posted; results never
+  acknowledged are re-posted on start and after a failed post. Secret
+  values a command carried (`create_database` password, `write_env`
+  values) are replaced by `***` in its log and error. Heartbeat every
+  15 s (`boot_id`, load, free memory and disk, unit states, per-site
+  memory, CPU and data size from the helper's `unit show`). Reconcile
+  on start and every `reconcile_secs`: every site route from
+  `state.json` and the panel route from `agent.toml` are upserted,
+  `setu-site-*` routes not in state removed, unknown site trees and
+  `site_*` databases logged (never deleted). Poll errors back off
+  1 s → 30 s.
+- `setu agent join --control-plane URL [--insecure] [--ca F]` — redeem
+  a join token (`SETU_JOIN_TOKEN` or stdin) without reinstalling.
+- `setu agent doctor` — checks the helper (`/opt/setu/setu` root:root
+  0755 in a root-owned directory), `visudo -cf /etc/sudoers.d/setu`,
+  the template unit, `caddy-api` active, its admin socket reachable,
+  TCP 2019 closed, `nft list table inet setu`, Postgres peer auth, the
+  state file, the token and the control plane's `/healthz`; prints a
+  table, exits 1 on any failure.
 
 ## Protocol (`/agent/v1`)
 

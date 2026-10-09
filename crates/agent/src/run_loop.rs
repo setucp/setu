@@ -1,23 +1,28 @@
-//! Agent command loop: long-poll the control plane, handle commands,
-//! post results, heartbeat every 15 s.
+//! The agent loop (spec §5; the plan's `loop::run`, named `run_loop`
+//! because `loop` is a keyword).
 //!
-//! Metrics sources: `/proc/loadavg` (load1), `/proc/meminfo`
-//! (`MemAvailable`, fallback `MemFree`), per-site unit state, cgroup
-//! (from `ControlGroup`) and `data_bytes` through the helper's
-//! `unit show` (see `metrics`). Host disk-free comes from `df -m`.
+//! One task long-polls `GET /agent/v1/commands?wait=30`. Each envelope
+//! takes its place in its site's FIFO queue at once, then runs in its
+//! own task together with its result post, so polling continues while a
+//! 15-minute install runs; same-site order is the queue's. Results are
+//! persisted before posting ([`crate::commands::handle`]); on start and
+//! after any failed post, every persisted result the control plane never
+//! acknowledged is posted again. Poll errors back off 1 s → 30 s.
+//! Heartbeat ([`crate::heartbeat::run`]) and reconcile
+//! ([`crate::reconcile`]) run as their own tasks.
 
-use std::path::Path;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
-use setu_proto::{CommandEnvelope, CommandResult, Heartbeat, SiteMetric};
+use setu_proto::{CommandEnvelope, CommandResult, Heartbeat};
 
-use crate::caddy::CaddySocket;
+use crate::caddy::{CaddyAdmin, CaddySocket};
+use crate::commands::Agent;
 use crate::config::AgentConfig;
-use crate::dispatch::handle;
 use crate::helper_client::{Helper, SudoHelper};
-use crate::postgres::PsqlSudo;
+use crate::postgres::{PostgresAdmin, PsqlSudo};
 use crate::runtime::NativeRuntime;
-use crate::state::StateFile;
 
 /// Production runtime wiring.
 pub type ProdRuntime = NativeRuntime<SudoHelper, PsqlSudo, CaddySocket>;
@@ -32,298 +37,234 @@ pub fn prod_runtime(config: &AgentConfig) -> ProdRuntime {
     )
 }
 
-/// Read the 1-minute load average from `/proc/loadavg`.
-pub fn read_load1() -> f64 {
-    read_load1_from(Path::new("/proc/loadavg")).unwrap_or(0.0)
+/// The control plane's agent API, authenticated by the server token.
+pub struct ControlPlane {
+    client: reqwest::Client,
+    base: String,
+    token: String,
+    wait_secs: u64,
 }
 
-fn read_load1_from(path: &Path) -> Option<f64> {
-    std::fs::read_to_string(path)
-        .ok()?
-        .split_whitespace()
-        .next()?
-        .parse::<f64>()
-        .ok()
+impl std::fmt::Debug for ControlPlane {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlPlane")
+            .field("base", &self.base)
+            .field("token", &"[redacted]")
+            .field("wait_secs", &self.wait_secs)
+            .finish()
+    }
 }
 
-/// Free memory (MiB) from `/proc/meminfo`: `MemAvailable`, else `MemFree`.
-pub fn read_mem_free_mb() -> u64 {
-    read_mem_from(Path::new("/proc/meminfo")).unwrap_or(0)
-}
-
-/// Total memory (MiB) from `/proc/meminfo` (`MemTotal`), for join reports.
-pub fn read_mem_total_mb() -> u64 {
-    std::fs::read_to_string(Path::new("/proc/meminfo"))
-        .ok()
-        .and_then(|text| {
-            text.lines().find_map(|line| {
-                line.strip_prefix("MemTotal:")
-                    .and_then(first_kb)
-                    .map(|kb| kb / 1024)
-            })
+impl ControlPlane {
+    pub fn new(config: &AgentConfig) -> anyhow::Result<Self> {
+        Ok(Self {
+            client: config.http_client()?,
+            base: config.base_url(),
+            token: config.server_token.clone(),
+            wait_secs: config.poll_wait_secs,
         })
-        .unwrap_or(0)
+    }
+
+    /// `GET /agent/v1/commands?wait=<n>`: the next command or `None`.
+    pub async fn poll(&self) -> anyhow::Result<Option<CommandEnvelope>> {
+        let resp = self
+            .client
+            .get(format!("{}/agent/v1/commands", self.base))
+            .query(&[("wait", self.wait_secs)])
+            .bearer_auth(&self.token)
+            .timeout(Duration::from_secs(self.wait_secs + 30))
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("poll: {e}"))?;
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            anyhow::bail!("poll: HTTP {}", resp.status());
+        }
+        let envelope: CommandEnvelope = resp
+            .json()
+            .await
+            .map_err(|e| anyhow::anyhow!("poll decode: {e}"))?;
+        Ok(Some(envelope))
+    }
+
+    /// `POST /agent/v1/commands/{id}/result`. A 404 (the command is
+    /// gone: pruned, or not this server's) counts as acknowledged, so it
+    /// is never retried forever.
+    pub async fn post_result(&self, result: &CommandResult) -> anyhow::Result<()> {
+        let resp = self
+            .client
+            .post(format!(
+                "{}/agent/v1/commands/{}/result",
+                self.base, result.id
+            ))
+            .bearer_auth(&self.token)
+            .json(result)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("result post: {e}"))?;
+        if resp.status().is_success() || resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(());
+        }
+        anyhow::bail!("result post: HTTP {}", resp.status())
+    }
+
+    /// `POST /agent/v1/heartbeat`.
+    pub async fn heartbeat(&self, hb: &Heartbeat) -> anyhow::Result<()> {
+        let resp = self
+            .client
+            .post(format!("{}/agent/v1/heartbeat", self.base))
+            .bearer_auth(&self.token)
+            .json(hb)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("heartbeat: {e}"))?;
+        if !resp.status().is_success() {
+            anyhow::bail!("heartbeat: HTTP {}", resp.status());
+        }
+        Ok(())
+    }
 }
 
-fn read_mem_from(path: &Path) -> Option<u64> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let mut available = None;
-    let mut free = None;
-    for line in text.lines() {
-        if let Some(v) = line.strip_prefix("MemAvailable:") {
-            available = first_kb(v);
-        } else if let Some(v) = line.strip_prefix("MemFree:") {
-            free = first_kb(v);
+/// Backoff bounds for poll errors.
+#[derive(Debug, Clone, Copy)]
+pub struct Backoff {
+    pub min: Duration,
+    pub max: Duration,
+}
+
+impl Default for Backoff {
+    fn default() -> Self {
+        Self {
+            min: Duration::from_secs(1),
+            max: Duration::from_secs(30),
         }
     }
-    available.or(free).map(|kb| kb / 1024)
 }
 
-fn first_kb(s: &str) -> Option<u64> {
-    s.split_whitespace().next()?.parse::<u64>().ok()
-}
-
-/// Free disk (MiB) on the filesystem holding `path`, via `df -m`.
-/// Decision: subprocess instead of a `statvfs` binding (no `libc`/`nix`
-/// dep for one syscall); returns 0 when `df` is unavailable.
-pub async fn disk_free_mb(path: &Path) -> u64 {
-    let out = tokio::process::Command::new("df")
-        .arg("-m")
-        .arg("--output=avail")
-        .arg(path)
-        .output()
-        .await;
-    match out {
-        Ok(o) if o.status.success() => parse_df_avail(&String::from_utf8_lossy(&o.stdout)),
-        _ => 0,
-    }
-}
-
-fn parse_df_avail(text: &str) -> u64 {
-    text.lines()
-        .rev()
-        .find_map(|l| l.trim().parse::<u64>().ok())
-        .unwrap_or(0)
-}
-
-/// This agent process's boot id: the kernel's
-/// `/proc/sys/kernel/random/boot_id` plus a nonce drawn once per process,
-/// so both a host reboot and an agent restart change it (spec §5: the
-/// control plane then requeues the server's delivered commands).
-pub fn boot_id() -> String {
-    static NONCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    let nonce = NONCE.get_or_init(setu_common::new_id);
-    boot_id_from(Path::new("/proc/sys/kernel/random/boot_id"), nonce)
-}
-
-fn boot_id_from(kernel: &Path, nonce: &str) -> String {
-    let kernel = std::fs::read_to_string(kernel)
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
-    if kernel.is_empty() {
-        nonce.to_string()
-    } else {
-        format!("{kernel}-{nonce}")
-    }
-}
-
-/// Collect one heartbeat for `rt`: unit state and metrics per site from
-/// the helper's `unit show` plus the unit's cgroup files.
-pub async fn collect_heartbeat<H, P, C>(rt: &NativeRuntime<H, P, C>) -> Heartbeat
-where
-    H: Helper,
-    P: crate::postgres::PostgresAdmin + Send + Sync,
-    C: crate::caddy::CaddyAdmin,
-{
-    let state = StateFile::load(&rt.config().state_path).unwrap_or_default();
-    let mut units = Vec::new();
-    let mut metrics = Vec::new();
-    for short in state.sites.keys() {
-        let status = match rt.status_inner(short).await {
-            Ok(st) => st,
-            Err(_) => crate::runtime::RuntimeStatus {
-                sub: "unknown".to_string(),
-                ..Default::default()
-            },
-        };
-        let m = crate::metrics::read_site_metric(&status);
-        units.push(setu_proto::UnitState {
-            short_id: short.clone(),
-            active: status.active,
-            sub: status.sub,
-            pid: status.pid,
-            restarts: status.n_restarts,
-        });
-        metrics.push(SiteMetric {
-            short_id: short.clone(),
-            at: chrono::Utc::now(),
-            cpu_seconds: m.cpu_seconds,
-            memory_bytes: m.memory_bytes,
-            disk_bytes: m.disk_bytes,
-        });
-    }
-    Heartbeat {
-        agent_version: env!("CARGO_PKG_VERSION").to_string(),
-        boot_id: boot_id(),
-        load1: read_load1(),
-        mem_free_mb: read_mem_free_mb(),
-        disk_free_mb: disk_free_mb(&rt.config().sites_root).await,
-        units,
-        metrics,
-    }
-}
-
-/// Run the agent: reconcile once, then long-poll + heartbeat until the
-/// process is stopped. Reconnects with backoff 1 s → 30 s.
-pub async fn run_forever(config: AgentConfig) -> anyhow::Result<()> {
-    let rt = prod_runtime(&config);
-    // Reconcile: report what we know; the control plane replays from there.
-    let hb = collect_heartbeat(&rt).await;
-    tracing::info!(
-        units = hb.units.len(),
-        load1 = hb.load1,
-        "agent reconciled state"
-    );
-
-    let client = reqwest::Client::new();
-    let base = config.control_plane_url.trim_end_matches('/').to_string();
-    let mut backoff = Duration::from_secs(config.backoff_min_secs.max(1));
-    let max_backoff = Duration::from_secs(config.backoff_max_secs.max(1));
-    let mut last_heartbeat = Instant::now() - Duration::from_secs(3600);
-
-    loop {
-        // Heartbeat every `heartbeat_secs`, piggybacked on the loop.
-        if last_heartbeat.elapsed() >= Duration::from_secs(config.heartbeat_secs.max(5)) {
-            let hb = collect_heartbeat(&rt).await;
-            if let Err(e) = post_heartbeat(&client, &base, &config, &hb).await {
-                tracing::warn!(error = %e, "heartbeat failed");
-            } else {
-                last_heartbeat = Instant::now();
+/// Post `result`; mark it acknowledged in state, or flag a re-post.
+async fn post_and_mark<H, P, C>(
+    agent: &Agent<H, P, C>,
+    cp: &ControlPlane,
+    result: &CommandResult,
+    repost: &AtomicBool,
+) -> bool {
+    match cp.post_result(result).await {
+        Ok(()) => {
+            if let Err(e) = agent.runtime().state().mark_posted(&result.id) {
+                tracing::warn!(cmd = %result.id, error = %e, "cannot mark result posted");
             }
+            true
         }
+        Err(e) => {
+            tracing::warn!(cmd = %result.id, error = %e, "result post failed; will re-post");
+            repost.store(true, Ordering::SeqCst);
+            false
+        }
+    }
+}
 
-        match poll_command(&client, &base, &config).await {
+/// Post every persisted result the control plane never acknowledged,
+/// oldest first; stops (and re-flags) at the first failure.
+pub async fn repost_unposted<H, P, C>(
+    agent: &Agent<H, P, C>,
+    cp: &ControlPlane,
+    repost: &AtomicBool,
+) {
+    for result in agent.runtime().state().unposted() {
+        if !post_and_mark(agent, cp, &result, repost).await {
+            break;
+        }
+    }
+}
+
+/// The long-poll loop. Never returns; drop/abort the task to stop it.
+pub async fn run<H, P, C>(agent: Arc<Agent<H, P, C>>, cp: Arc<ControlPlane>, backoff: Backoff)
+where
+    H: Helper + 'static,
+    P: PostgresAdmin + Send + Sync + 'static,
+    C: CaddyAdmin + 'static,
+{
+    // Start by re-posting whatever a previous process left unposted.
+    let repost = Arc::new(AtomicBool::new(true));
+    let mut delay = backoff.min;
+    loop {
+        if repost.swap(false, Ordering::SeqCst) {
+            repost_unposted(&agent, &cp, &repost).await;
+        }
+        match cp.poll().await {
             Ok(Some(envelope)) => {
-                backoff = Duration::from_secs(config.backoff_min_secs.max(1));
-                let result = handle(&envelope.id, &envelope.command, &rt).await;
-                tracing::info!(cmd = %envelope.id, ok = result.ok, "handled command");
-                if let Err(e) = post_result(&client, &base, &config, &result).await {
-                    tracing::warn!(error = %e, cmd = %envelope.id, "result post failed");
-                }
+                delay = backoff.min;
+                let id = envelope.id.clone();
+                let kind = envelope.command.kind();
+                tracing::info!(cmd = %id, kind, "command received");
+                // Takes the site slot now, in delivery order.
+                let task = agent.spawn(envelope);
+                let (agent, cp, repost) = (agent.clone(), cp.clone(), repost.clone());
+                tokio::spawn(async move {
+                    match task.await {
+                        Ok(result) => {
+                            tracing::info!(cmd = %id, kind, ok = result.ok, "command handled");
+                            post_and_mark(&agent, &cp, &result, &repost).await;
+                        }
+                        Err(e) => tracing::error!(cmd = %id, error = %e, "command task failed"),
+                    }
+                });
             }
             Ok(None) => {}
             Err(e) => {
-                tracing::warn!(error = %e, backoff_s = backoff.as_secs(), "poll failed");
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(max_backoff);
+                tracing::warn!(error = %e, backoff_s = delay.as_secs(), "poll failed");
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(backoff.max);
             }
         }
     }
 }
 
-async fn poll_command(
-    client: &reqwest::Client,
-    base: &str,
-    config: &AgentConfig,
-) -> anyhow::Result<Option<CommandEnvelope>> {
-    let resp = client
-        .get(format!("{base}/agent/v1/commands"))
-        .query(&[("wait", config.poll_wait_secs)])
-        .bearer_auth(&config.server_token)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("poll: {e}"))?;
-    if resp.status() == reqwest::StatusCode::NO_CONTENT {
-        return Ok(None);
+/// Reconcile now and then every `every`.
+pub async fn reconcile_forever<H, P, C>(agent: Arc<Agent<H, P, C>>, every: Duration)
+where
+    H: Helper,
+    P: PostgresAdmin + Send + Sync,
+    C: CaddyAdmin,
+{
+    loop {
+        match crate::reconcile::run_runtime(agent.runtime()).await {
+            Ok(inv) => tracing::info!(
+                units = inv.units.len(),
+                routes = inv.routes.len(),
+                "reconciled"
+            ),
+            Err(e) => tracing::warn!(error = %e, "reconcile failed"),
+        }
+        tokio::time::sleep(every).await;
     }
-    if !resp.status().is_success() {
-        anyhow::bail!("poll: HTTP {}", resp.status());
-    }
-    let envelope: CommandEnvelope = resp
-        .json()
-        .await
-        .map_err(|e| anyhow::anyhow!("poll decode: {e}"))?;
-    Ok(Some(envelope))
 }
 
-async fn post_result(
-    client: &reqwest::Client,
-    base: &str,
-    config: &AgentConfig,
-    result: &CommandResult,
-) -> anyhow::Result<()> {
-    let resp = client
-        .post(format!("{base}/agent/v1/commands/{}/result", result.id))
-        .bearer_auth(&config.server_token)
-        .json(result)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("result post: {e}"))?;
-    if !resp.status().is_success() {
-        anyhow::bail!("result post: HTTP {}", resp.status());
-    }
+/// `setu agent run`: reconcile + heartbeat tasks, then the loop.
+pub async fn run_forever(config: AgentConfig) -> anyhow::Result<()> {
+    let cp = Arc::new(ControlPlane::new(&config)?);
+    let agent = Agent::new(prod_runtime(&config));
+    tokio::spawn(reconcile_forever(
+        agent.clone(),
+        Duration::from_secs(config.reconcile_secs.max(1)),
+    ));
+    tokio::spawn(crate::heartbeat::run(
+        agent.clone(),
+        cp.clone(),
+        Duration::from_secs(config.heartbeat_secs.max(5)),
+    ));
+    run(
+        agent,
+        cp,
+        Backoff {
+            min: Duration::from_secs(config.backoff_min_secs.max(1)),
+            max: Duration::from_secs(config.backoff_max_secs.max(1)),
+        },
+    )
+    .await;
     Ok(())
-}
-
-async fn post_heartbeat(
-    client: &reqwest::Client,
-    base: &str,
-    config: &AgentConfig,
-    hb: &Heartbeat,
-) -> anyhow::Result<()> {
-    let resp = client
-        .post(format!("{base}/agent/v1/heartbeat"))
-        .bearer_auth(&config.server_token)
-        .json(hb)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("heartbeat: {e}"))?;
-    if !resp.status().is_success() {
-        anyhow::bail!("heartbeat: HTTP {}", resp.status());
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn loadavg_parses_first_field() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let f = dir.path().join("loadavg");
-        std::fs::write(&f, "0.42 0.31 0.15 1/200 1234\n").expect("write");
-        assert_eq!(read_load1_from(&f), Some(0.42));
-    }
-
-    #[test]
-    fn meminfo_prefers_available_then_free() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let f = dir.path().join("meminfo");
-        std::fs::write(
-            &f,
-            "MemTotal:        8192000 kB\nMemFree:          512000 kB\nMemAvailable:    1024000 kB\n",
-        )
-        .expect("write");
-        assert_eq!(read_mem_from(&f), Some(1000));
-        std::fs::write(&f, "MemTotal: 8192000 kB\nMemFree: 512000 kB\n").expect("write");
-        assert_eq!(read_mem_from(&f), Some(500));
-    }
-
-    #[test]
-    fn boot_id_joins_kernel_id_and_process_nonce() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let f = dir.path().join("boot_id");
-        std::fs::write(&f, "6f1c-kernel\n").expect("write");
-        assert_eq!(boot_id_from(&f, "n1"), "6f1c-kernel-n1");
-        assert_ne!(boot_id_from(&f, "n1"), boot_id_from(&f, "n2"));
-        assert_eq!(boot_id_from(&dir.path().join("missing"), "n1"), "n1");
-        assert_eq!(boot_id(), boot_id(), "stable within one process");
-    }
-
-    #[test]
-    fn df_output_parses_last_number() {
-        assert_eq!(parse_df_avail("Avail\n  123456\n"), 123456);
-        assert_eq!(parse_df_avail("garbage"), 0);
-    }
 }

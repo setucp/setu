@@ -12,6 +12,9 @@ workspace = true
 # `setu helper --root <dir>` and `SudoHelper::with_program`: tests only,
 # never in release builds; `--root` is refused when `SUDO_UID` is set.
 test-root = []
+# `SETU_AGENT_TEST_EXIT_AFTER=<kind>`: exit after persisting a result of
+# that kind, before posting it (the e2e only; never in release builds).
+e2e-hooks = []
 
 [dependencies]
 tokio.workspace = true
