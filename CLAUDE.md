@@ -1,7 +1,7 @@
 # Setu — working rules for agents
 
 Setu is a control panel for single-binary web apps (and, from phase 2,
-container images): control plane `setu`, per-server `setu-agent`, React
+container images): one binary `setu`: `setu serve` is the control plane, `setu agent run` the per-server agent, React
 UI embedded in the control-plane binary. Read `docs/HANDOFF.md`, then the spec
 `docs/specs/2026-10-09-setu-design.md` and the plan
 `docs/plans/2026-10-09-setu-mvp.md`.
@@ -51,8 +51,8 @@ crates/manifest  app manifest schema, validator corpus, env resolution
 crates/proto     agent command/result/heartbeat types
 crates/db        sqlx repos + migrations
 crates/jobs      provision/update/backup/restore/delete state machines over AgentClient
-crates/api       axum control plane, utoipa, embedded UI  → binary `setu`
-crates/agent     Runtime trait, NativeRuntime, systemd/Postgres/Caddy adapters → `setu-agent`
+crates/api       axum control plane, utoipa, embedded UI; the one binary `setu` (serve | agent | cli)
+crates/agent     Runtime trait, NativeRuntime, systemd/Postgres/Caddy adapters (lib; `setu agent …`)
 crates/testkit   TestDb, TestServer, FakeAgent helpers
 apps/hello       tiny Axum app used by tests and the e2e
 ui/              Vite + React + TanStack + Tailwind + shadcn/ui
