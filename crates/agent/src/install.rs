@@ -52,10 +52,12 @@ pub async fn join(opts: &InstallOpts) -> Result<(), InstallError> {
 }
 
 /// System setup without joining (dirs, packages, units, sudoers).
+/// Packages come before dirs: the backups dir is group `postgres`
+/// (setgid, see `ensure_dirs`), which only exists after install.
 async fn system_setup() -> Result<(), InstallError> {
     ensure_user().await?;
-    ensure_dirs().await?;
     ensure_packages().await?;
+    ensure_dirs().await?;
     ensure_services().await?;
     ensure_caddy_admin().await?;
     write_sudoers().await?;
@@ -198,12 +200,7 @@ async fn ensure_user() -> Result<(), InstallError> {
 }
 
 async fn ensure_dirs() -> Result<(), InstallError> {
-    for dir in [
-        "/var/lib/setu",
-        "/var/lib/setu/backups",
-        "/srv/setu/sites",
-        "/etc/setu",
-    ] {
+    for dir in ["/var/lib/setu", "/srv/setu/sites", "/etc/setu"] {
         run(
             "install",
             &["-d", "-o", "setu", "-g", "setu", "-m", "0755", dir],
@@ -211,6 +208,29 @@ async fn ensure_dirs() -> Result<(), InstallError> {
         )
         .await?;
     }
+    // Backup leaves are `setu:postgres/0770` (see `backup_site`): the
+    // agent (setu) manages them while `pg_dump`/`pg_restore` (postgres)
+    // read and write inside. Setgid inherits the group; 2770 keeps other
+    // site users out of every backup. Requires the postgres group, hence
+    // packages-before-dirs in `system_setup`.
+    run(
+        "install",
+        &[
+            "-d",
+            "-o",
+            "setu",
+            "-g",
+            "postgres",
+            "-m",
+            "2770",
+            "/var/lib/setu/backups",
+        ],
+        "dirs",
+    )
+    .await?;
+    // Read access to postgres-group files (dumps) for future off-box
+    // upload; harmless today. Idempotent.
+    run("usermod", &["-aG", "postgres", "setu"], "agent db group").await?;
     Ok(())
 }
 

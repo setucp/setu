@@ -12,6 +12,11 @@ use setu_proto::SiteSpec;
 use crate::postgres::PostgresAdmin;
 
 /// Take a backup into `dest` (created as needed).
+///
+/// The leaf dir ends `0770`: the agent (owner) manages it while
+/// `pg_dump` (group `postgres`, inherited via the setgid backups root
+/// created by `install`) writes inside. Mode-only — no privilege needed.
+/// Other site users are blocked at the leaf (`o---`).
 pub async fn backup_site<P: PostgresAdmin>(
     pg: &P,
     site: &SiteSpec,
@@ -21,6 +26,12 @@ pub async fn backup_site<P: PostgresAdmin>(
 ) -> anyhow::Result<()> {
     std::fs::create_dir_all(dest)
         .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", dest.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o770))
+            .map_err(|e| anyhow::anyhow!("cannot chmod {}: {e}", dest.display()))?;
+    }
     pg.dump(db, &dest.join("db.dump")).await?;
     archive_dirs(&site.data_dir, dirs, &dest.join("files.tar.gz"))?;
     Ok(())
@@ -117,6 +128,17 @@ mod tests {
             .expect("backup");
         assert!(dest.join("db.dump").is_file());
         assert!(dest.join("files.tar.gz").is_file());
+        // The leaf must admit the postgres group writer (real `pg_dump`
+        // runs as the postgres user; the fake writes as us).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&dest).expect("stat").permissions().mode() & 0o777,
+                0o770,
+                "backup leaf must be 0770"
+            );
+        }
 
         // Delete the data, restore, expect it back.
         std::fs::remove_dir_all(&data).expect("rm data");
