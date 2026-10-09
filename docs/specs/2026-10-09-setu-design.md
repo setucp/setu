@@ -319,8 +319,13 @@ asserts the rule exists.
 ### Caddy
 
 Installed from the official Caddy apt repository (Ubuntu's own package
-is old). `setu agent install` replaces the default Caddyfile setup with
-a JSON config owned by Setu: admin on `unix//run/caddy/admin.sock`
+is old). The package ships two units: `caddy.service` (Caddyfile) and
+`caddy-api.service` (`caddy run --environ --resume`, for API-driven
+config). `setu agent install` disables `caddy.service`, enables
+`caddy-api.service` with a drop-in `ExecStart=/usr/bin/caddy run
+--environ --config /etc/caddy/setu.json --resume` (the persisted
+autosave wins when present, the base file seeds a fresh install), and
+writes that JSON config owned by Setu: admin on `unix//run/caddy/admin.sock`
 (mode 0660, group `caddy`, with `setu` in the group; TCP 2019 is
 **off**, `doctor` asserts it is closed), one HTTP server `setu` on
 `:80` and `:443` with automatic HTTPS, the panel's route when on a
@@ -574,9 +579,9 @@ dependency list.
 | HTTP | axum + tower, utoipa (OpenAPI, no Swagger UI) |
 | Database | PostgreSQL 16, sqlx 0.9 with embedded migrations |
 | Jobs | Postgres queue with leases, `FOR UPDATE SKIP LOCKED`, tokio scheduler |
-| Auth | argon2id, tower-sessions with a sqlx store (verified against sqlx 0.9 at plan time; else Vyasa's own session table approach) |
+| Auth | argon2id; sessions in our own `sessions` table (id, operator_id, expires_at, created_at; random 32-byte id in the cookie, hashed at rest) — `tower-sessions-sqlx-store` requires sqlx 0.8, checked 2026-10-09 |
 | Sealing | chacha20poly1305, Vyasa's KeyVault scheme (`v1:`/`plain:`, SHA-256 key derivation with a label) |
-| Agent | tokio, `reqwest` (rustls) for the control plane and downloads, unix-socket HTTP to Caddy, `sudo` to the helper and `psql` |
+| Agent | tokio, `reqwest` (rustls with the `ring` provider, which builds for musl without cmake) for the control plane and downloads, `hyper` 1 + `hyper-util` over a `tokio::net::UnixStream` for Caddy's admin socket, `sudo` to the helper and `psql` |
 | UI | Vite + React 19 + TypeScript, TanStack Router/Query/Table, Tailwind, shadcn/ui, vitest; rust-embed with `allow_missing` |
 | Config | config crate + env |
 | Release | x86_64 musl static binary, GitHub Actions, SHA256SUMS |

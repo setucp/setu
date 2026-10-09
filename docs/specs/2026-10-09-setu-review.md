@@ -63,10 +63,12 @@ Container image of Setu, aarch64, Swagger UI, TOTP, operator tokens and
 CLI, audit UI page, metric charts, fleet rollout batches,
 `update.strategy = "command"`, enforced disk quotas.
 
-## Declined to judge (left for the implementing session to verify)
+## Items the reviewer could not verify — checked 2026-10-09
 
-`jrei/systemd-ubuntu:24.04` under `cgroupns=private` on GitHub runners;
-musl build of the rustls provider; `tower-sessions-sqlx-store` with
-sqlx 0.9 (fallback: own session table); Caddy `persist_config`
-behaviour in the current package; the 60-second target on real
-hardware.
+| Item | Result | Effect |
+|---|---|---|
+| `jrei/systemd-ubuntu:24.04` exists | yes (`docker manifest inspect`) | e2e image confirmed; GitHub-runner behaviour under `cgroupns=private` still to be seen in CI |
+| `tower-sessions-sqlx-store` with sqlx 0.9 | no: 0.15.0 depends on sqlx ^0.8 | own `sessions` table, decided in spec §11 and Task 7 |
+| musl build of rustls | use the `ring` provider (no cmake) | pinned in the Tech Stack line |
+| Caddy config persistence | the apt package ships `caddy-api.service` (`caddy run --environ --resume`) for API-driven config | agent install uses it with `--config /etc/caddy/setu.json --resume`; e2e assertion 12 covers restart and autosave loss |
+| 60-second provisioning on real hardware | unverified | e2e prints the time; Task 15 records it on a Hetzner box if the owner provides one |
