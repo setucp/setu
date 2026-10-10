@@ -92,6 +92,16 @@ t_pgdg_pin_matches_rust_table() {
         grep -q "\"$PGDG_KEY_SHA256\"" "$ROOT/crates/agent/src/distro.rs"
 }
 
+# os-release values outside [A-Za-z0-9._-] are not distributions: they
+# are reported as unknown (so the whitespace-split read in install.sh stays
+# aligned) and refused as unsupported (0.1.2 M1).
+t_detect_rejects_whitespace_id() {
+    printf 'ID="ubuntu x"\nVERSION_ID="24.04"\n' >"$SCRATCH/space-id"
+    printf 'ID=ubuntu\nVERSION_ID="24 .04"\n' >"$SCRATCH/space-version"
+    [[ "$(detect_distro "$SCRATCH/space-id")" == "unknown unknown unsupported" ]] &&
+        [[ "$(detect_distro "$SCRATCH/space-version")" == "unknown unknown unsupported" ]]
+}
+
 failed=0
 count=0
 for t in $(declare -F | awk '{print $3}' | grep '^t_' | sort); do

@@ -65,8 +65,8 @@ select_archive() {
 }
 
 # detect_distro [os-release]: prints "<id> <version> <plan>", where plan is
-# ubuntu-24.04, ubuntu-22.04, debian-12, debian-13 or unsupported. The
-# table mirrors crates/agent/src/distro.rs (spec 0.1.2 §2).
+# ubuntu-24.04, ubuntu-22.04, debian-12, debian-13 or unsupported; an ID or
+# VERSION_ID outside [A-Za-z0-9._-] is unsupported. The table mirrors crates/agent/src/distro.rs (spec 0.1.2 §2).
 detect_distro() {
     local file="${1:-/etc/os-release}" id version plan
     if [[ ! -r "$file" ]]; then
@@ -75,6 +75,13 @@ detect_distro() {
     fi
     id="$(. "$file" && echo "${ID:-unknown}")"
     version="$(. "$file" && echo "${VERSION_ID:-unknown}")"
+    # Only plain identifiers: the result is read back with whitespace
+    # splitting, and an ID is never trusted as more than a name (0.1.2 M1).
+    local token='^[A-Za-z0-9._-]+$'
+    if [[ ! "$id" =~ $token || ! "$version" =~ $token ]]; then
+        echo "unknown unknown unsupported"
+        return 0
+    fi
     case "$id $version" in
         "ubuntu 24.04") plan=ubuntu-24.04 ;;
         "ubuntu 22.04") plan=ubuntu-22.04 ;;
