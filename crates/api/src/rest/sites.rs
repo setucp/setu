@@ -338,6 +338,44 @@ pub async fn list(
     }))
 }
 
+/// Lower-case a host name and drop a trailing dot (for comparisons).
+fn host_key(host: &str) -> String {
+    host.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// Refuse a site domain that would shadow the panel (R130): the
+/// `public_url` host, `localhost` and anything under `.localhost` or
+/// `localhost.localdomain`, and the hostname of any joined server.
+/// Caddy routes are first-match, so a site claiming one of these names
+/// could take over the panel's route (or the server's own name).
+async fn refuse_reserved_domain(state: &AppState, domain: &str) -> Result<(), AppError> {
+    let domain = host_key(domain);
+    let reserved = |what: &str| {
+        Err(AppError::validation(format!(
+            "domain {domain} is reserved ({what})"
+        )))
+    };
+    if let Some(panel) = state.config.public_url.host_str() {
+        if host_key(panel) == domain {
+            return reserved("the panel's host");
+        }
+    }
+    if domain == "localhost" || domain.ends_with(".localhost") || domain == "localhost.localdomain"
+    {
+        return reserved("localhost");
+    }
+    for server in state.db.servers().list().await? {
+        if server
+            .hostname
+            .as_deref()
+            .is_some_and(|h| host_key(h) == domain)
+        {
+            return reserved("a server's hostname");
+        }
+    }
+    Ok(())
+}
+
 /// Create a site and enqueue its provision job (operator and above).
 ///
 /// Validates the domain (unique → 409), the app version (must exist and
@@ -381,6 +419,7 @@ pub async fn create(
     if !body.owner_email.contains('@') {
         return Err(AppError::validation("owner_email must contain @"));
     }
+    refuse_reserved_domain(&state, &domain).await?;
     // Pre-check for the friendly 409 before resolving env; `create`
     // re-checks inside its transaction.
     if state

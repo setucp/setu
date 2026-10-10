@@ -1683,3 +1683,51 @@ async fn logs_sse_uses_cursor_without_duplicates() {
         "later pages pass the previous cursor: {fetches:?}"
     );
 }
+
+/// A site domain equal to the panel's host (or `localhost`, or a joined
+/// server's hostname) would let the site route shadow `setu-panel`.
+#[tokio::test]
+async fn create_site_rejects_panel_host_domain() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn_with_public_url(
+        tdb,
+        FakeAgent::new(),
+        "https://Panel.Example.com/".parse().expect("url"),
+    )
+    .await;
+    let owner = srv.login_as_owner().await;
+    publish(&srv, &owner, &hello_toml("0.1.0")).await;
+    let server_id = online_server(&srv, "box-1.example.net", 8192).await;
+    let plan_id = default_plan_id(&srv).await;
+    for domain in [
+        "panel.example.com",
+        "PANEL.example.com.",
+        "box-1.example.net",
+        "localhost.localdomain",
+        "app.localhost",
+    ] {
+        let resp = owner
+            .post(srv.url("/api/v1/sites"))
+            .json(&json!({
+                "name": unique("site"),
+                "app_id": "hello",
+                "version": "0.1.0",
+                "plan_id": plan_id,
+                "server_id": server_id,
+                "domain": domain,
+                "owner_email": "owner@example.com",
+                "prompts": {"HELLO_NAME": "x"},
+            }))
+            .send()
+            .await
+            .expect("post sends");
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "domain {domain} must be refused"
+        );
+        let body: Value = resp.json().await.expect("error body is json");
+        assert_eq!(body["error"]["code"], json!("validation"), "{domain}");
+    }
+    assert!(srv.agent.transcript().is_empty(), "no agent call may fire");
+}
