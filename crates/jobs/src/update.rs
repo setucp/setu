@@ -28,7 +28,8 @@ use setu_proto::{Command, SiteSpec};
 
 use crate::{
     binary_ref, build_spec, fully_sealed_env, load_manifest, open_env, register_secrets,
-    resolve_error, resolve_input, sealed_env, site_env, stored_db_url, without_once, JobCtx, Steps,
+    resolve_error, resolve_input, sealed_env, server_target, site_env, stored_db_url, without_once,
+    JobCtx, Steps,
 };
 
 /// The steps, in order (spec §6); `rollback` is the cursor of a rollback.
@@ -91,8 +92,9 @@ pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), Ap
         Err(e) => return Err(e),
     };
     let plan = ctx.db.plans().get(&site.plan_id).await?;
-    let new_spec = build_spec(&plan, &site, &new_manifest)?;
-    let binary = binary_ref(&new_manifest)?;
+    let target = server_target(&ctx.db, &site.server_id).await?;
+    let new_spec = build_spec(&plan, &site, &new_manifest, target)?;
+    let binary = binary_ref(&new_manifest, target)?;
 
     // `env`: merge and park the old state sealed in the payload. On
     // resume the old state comes back from the payload and the merged env
@@ -198,7 +200,8 @@ async fn load_target(
     to_version: &str,
 ) -> Result<setu_manifest::Manifest, AppError> {
     let manifest = load_manifest(&ctx.db, &site.app_id, to_version).await?;
-    binary_ref(&manifest)?;
+    let target = server_target(&ctx.db, &site.server_id).await?;
+    binary_ref(&manifest, target)?;
     Ok(manifest)
 }
 
@@ -212,7 +215,8 @@ async fn env_step(
 ) -> Result<Old, AppError> {
     let old_manifest = load_manifest(&ctx.db, &site.app_id, &site.app_version).await?;
     let plan = ctx.db.plans().get(&site.plan_id).await?;
-    let old_spec = build_spec(&plan, site, &old_manifest)?;
+    let target = server_target(&ctx.db, &site.server_id).await?;
+    let old_spec = build_spec(&plan, site, &old_manifest, target)?;
     let existing = site_env(ctx, site)?;
     // The role password lives in Postgres since provision: a
     // `postgres_url` is re-resolved from the stored URL, never a fresh

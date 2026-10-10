@@ -20,7 +20,8 @@ use setu_manifest::Manifest;
 use setu_proto::{Command, EnvVar, InventoryReport, SiteSpec};
 
 use crate::{
-    binary_ref, build_spec, load_manifest, mark_failed, site_env, without_once, JobCtx, Steps,
+    binary_ref, build_spec, load_manifest, mark_failed, server_target, site_env, without_once,
+    JobCtx, Steps,
 };
 
 /// The steps, in order (spec §6).
@@ -242,8 +243,9 @@ async fn validate(ctx: &JobCtx, site: &Site) -> Result<Prep, AppError> {
 async fn prepare(ctx: &JobCtx, site: &Site) -> Result<(Prep, Plan, Manifest), AppError> {
     let manifest = load_manifest(&ctx.db, &site.app_id, &site.app_version).await?;
     let plan = ctx.db.plans().get(&site.plan_id).await?;
-    let spec = build_spec(&plan, site, &manifest)?;
-    let binary = binary_ref(&manifest)?;
+    let target = server_target(&ctx.db, &site.server_id).await?;
+    let spec = build_spec(&plan, site, &manifest, target)?;
+    let binary = binary_ref(&manifest, target)?;
     let vars = site_env(ctx, site)?;
     if let Some(missing) = manifest
         .env
