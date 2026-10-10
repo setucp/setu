@@ -204,7 +204,11 @@ async fn validate(ctx: &JobCtx, site: &Site) -> Result<Prep, AppError> {
         )));
     }
     let server = ctx.db.servers().get(&site.server_id).await?;
-    if server.status(ctx.clock.now()) != setu_db::ServerStatus::Online {
+    // `rejoining` is an online server holding an outstanding join token.
+    if !matches!(
+        server.status(ctx.clock.now()),
+        setu_db::ServerStatus::Online | setu_db::ServerStatus::Rejoining
+    ) {
         return Err(AppError::validation(format!(
             "server {} is offline",
             server.name

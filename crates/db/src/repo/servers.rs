@@ -76,14 +76,18 @@ impl Server {
         if self.joined_at.is_none() {
             return ServerStatus::Pending;
         }
+        let seen_recently = self
+            .last_seen_at
+            .is_some_and(|seen| (now - seen).num_seconds() <= ONLINE_WINDOW_SECS);
+        if !seen_recently {
+            return ServerStatus::Offline;
+        }
         // A rotated join token is outstanding (R144): computed, never stored.
+        // Only a server that would otherwise be online reads as rejoining.
         if self.join_nonce.is_none() && self.join_expires_at.is_some_and(|e| e > now) {
             return ServerStatus::Rejoining;
         }
-        match self.last_seen_at {
-            Some(seen) if (now - seen).num_seconds() <= ONLINE_WINDOW_SECS => ServerStatus::Online,
-            _ => ServerStatus::Offline,
-        }
+        ServerStatus::Online
     }
 }
 

@@ -1324,3 +1324,27 @@ async fn rotate_refuses_unjoined_and_unknown_servers() {
         ErrorCode::NotFound
     );
 }
+
+/// A rotated server whose agent stopped heartbeating is `offline`, not
+/// `rejoining`: the rejoin state only ever stands in for `online`.
+#[tokio::test]
+async fn rejoining_server_that_stopped_heartbeating_is_offline() {
+    let (_test, db) = test_db().await;
+    let server = online_server(&db, 4096, false).await;
+    let (rotating, _) = db
+        .servers()
+        .rotate_join_token(&server.id)
+        .await
+        .expect("rotate");
+    let now = chrono::Utc::now();
+    assert_eq!(
+        rotating.status(now),
+        setu_db::ServerStatus::Rejoining,
+        "fresh heartbeat while the rotated token is outstanding"
+    );
+    assert_eq!(
+        rotating.status(now + chrono::Duration::seconds(120)),
+        setu_db::ServerStatus::Offline,
+        "stale heartbeat wins over the rejoin state"
+    );
+}
