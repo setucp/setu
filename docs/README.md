@@ -15,6 +15,7 @@ own. One binary (`setu`), one Ubuntu 24.04 box to start.
   knowledge Setu has.
 - Agents: [AGENT.md](AGENT.md) — `setu agent install|install-system|join|run|doctor`,
   `state.json`, reconcile and the agent protocol.
+- Trust model in plain words: [TRUST.md](TRUST.md).
 - Security model: [SECURITY.md](SECURITY.md) — trust model, the
   privileged helper, what hosted sites share, secrets at rest.
 - Cutting a release: [RELEASING.md](RELEASING.md).

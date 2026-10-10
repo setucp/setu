@@ -2,16 +2,27 @@
 
 # Setu
 
-A control panel for single-binary web apps. Pick an app, get a domain,
-a database, TLS, backups, updates and resource limits on servers you
-own. Think cPanel for apps written in Rust and Go (or Zig, Bun-compiled
-or .NET single-file): no PHP stack, no Docker required. Each site is a
-native systemd service with its own system user, its own Postgres
-database and a Caddy route with automatic HTTPS.
+### Your binaries. Your servers. One control panel.
+
+Deploy and operate Rust, Go and other compiled web applications on your
+own Linux servers. Each site gets a domain, automatic HTTPS, its own
+PostgreSQL database, backups, health-checked updates and resource
+limits. Nothing to build and no runtime to maintain on the server: the
+app is a published binary, and Setu runs it as a hardened systemd
+service.
+
+<p>
+  <img src="https://img.shields.io/badge/native%20systemd-4F46E5" alt="Native systemd">
+  <img src="https://img.shields.io/badge/automatic%20HTTPS-4F46E5" alt="Automatic HTTPS">
+  <img src="https://img.shields.io/badge/per--app%20PostgreSQL-4F46E5" alt="Per-app PostgreSQL">
+  <img src="https://img.shields.io/badge/rollback%20with%20restore-4F46E5" alt="Rollback with restore">
+</p>
 
 <p align="center"><img src="docs/brand/setu-demo.gif" alt="Installing Setu, creating a site from the panel, and the site serving over HTTPS" width="900"></p>
 
 *A real run: the installer, the panel, a Vyasa site provisioned in about ten seconds, live over HTTPS.*
+
+<p align="center"><img src="docs/brand/architecture.png" alt="Setu architecture: control plane, per-server agent, privileged helper, one systemd service per site" width="100%"></p>
 
 <p>
   <a href="https://github.com/setucp/setu/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/release-v0.1.0-4F46E5" alt="Release v0.1.0"></a>
@@ -174,6 +185,7 @@ later phases is in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Security
 
+Start with [docs/TRUST.md](docs/TRUST.md), the trust model in plain words. 
 The control plane is effectively root on every server that joins it:
 agents carry out the commands it queues, some through the privileged
 helper. The helper bounds *what* root can be asked to do (typed verbs,
