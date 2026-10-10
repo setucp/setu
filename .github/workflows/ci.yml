@@ -85,6 +85,47 @@ jobs:
         with:
           command: check
 
+  # 0.1.2 §3: the installer in a fresh systemd box per distribution, one
+  # image at a time (max-parallel 1: fixed container and network names).
+  # The shell unit tests run first, on the same checkout.
+  test-install:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        image:
+          - jrei/systemd-ubuntu:24.04
+          - jrei/systemd-ubuntu:22.04
+          - jrei/systemd-debian:12
+          - jrei/systemd-debian:13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+          targets: x86_64-unknown-linux-musl
+      - name: musl C toolchain (ring, zstd)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      - name: Installer shell unit tests
+        run: bash scripts/test-install-sh-unit.sh
+      - name: install.sh on ${{ matrix.image }}
+        shell: bash  # -eo pipefail: tee must not hide the exit code
+        env:
+          SETU_TEST_IMAGE: ${{ matrix.image }}
+          SETU_INSTALL_DIR: ${{ runner.temp }}/install
+        run: bash scripts/test-install.sh 2>&1 | tee "$RUNNER_TEMP/install.log"
+      - name: Upload install artefacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/install.log
+            ${{ runner.temp }}/install/*.log
+            ${{ runner.temp }}/install/diag-*.txt
+
   # Plan Task 11 / spec §9: control plane + agent in a systemd container +
   # hello + real Vyasa 0.2.0, 14 TAP assertions. Builds the musl binaries
   # with the test-only features `test-root,e2e-hooks` (the release

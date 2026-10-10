@@ -8,11 +8,16 @@
 #
 # Run with `--privileged --cgroupns=private` and no cgroup bind mount:
 # `e2e-init` re-mounts the container's own cgroup2 (see the file).
-FROM jrei/systemd-ubuntu:24.04
+#
+# BASE selects the systemd image (0.1.2 §3: scripts/test-install.sh runs the
+# installer on Ubuntu 22.04/24.04 and Debian 12/13). systemd-sysv is the
+# Debian packaging of PID 1 (a no-op on Ubuntu).
+ARG BASE=jrei/systemd-ubuntu:24.04
+FROM ${BASE}
 
 RUN apt-get update -qq \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-       curl ca-certificates sudo python3 iproute2 \
+       curl ca-certificates sudo python3 iproute2 systemd-sysv \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 

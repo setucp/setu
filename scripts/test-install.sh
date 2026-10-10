@@ -20,6 +20,11 @@
 # the host; no host network, no host cgroup mount. Cleanup removes only
 # the container, the network and the PID saved under $SETU_INSTALL_DIR.
 # SETU_INSTALL_KEEP=1 leaves them for debugging.
+#
+# SETU_TEST_IMAGE selects the systemd base image (default
+# jrei/systemd-ubuntu:24.04; CI also runs jrei/systemd-ubuntu:22.04,
+# jrei/systemd-debian:12 and jrei/systemd-debian:13). One at a time: each
+# run owns the fixed container and network names below.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -29,7 +34,8 @@ SETU_INSTALL_DIR=$(cd "$SETU_INSTALL_DIR" && pwd)
 
 NET=setu-install-net
 CTN=setu-install-test
-IMAGE=setu-e2e-agent:latest
+BASE_IMAGE=${SETU_TEST_IMAGE:-jrei/systemd-ubuntu:24.04}
+IMAGE="setu-install-test-image:$(printf '%s' "$BASE_IMAGE" | tr -c 'A-Za-z0-9._-' '_')"
 ART_PORT=8124
 TARGET=x86_64-unknown-linux-musl
 HOST=setu.test
@@ -205,7 +211,9 @@ ARCHIVE=setu-$VERSION-$TARGET.tar.gz
 note "packaged $ARCHIVE + SHA256SUMS"
 
 note "building image $IMAGE"
-docker build -q -t "$IMAGE" "$ROOT/scripts/e2e" >"$SETU_INSTALL_DIR/image.log" 2>&1 ||
+note "base image $BASE_IMAGE"
+docker build -q --build-arg "BASE=$BASE_IMAGE" -t "$IMAGE" "$ROOT/scripts/e2e" \
+  >"$SETU_INSTALL_DIR/image.log" 2>&1 ||
   { tail -20 "$SETU_INSTALL_DIR/image.log"; bail "docker build failed"; }
 
 # ---- network, asset server on the host's address on it
