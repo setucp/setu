@@ -315,8 +315,11 @@ export interface paths {
         /**
          * Tail a job's log as SSE (viewer and above): the accumulated `jobs.log`
          *     lines first, then — while the job is still `queued`/`running` — new
-         *     deltas every 500 ms until it finishes or 30 s pass. Finished jobs
-         *     close the stream after the backlog.
+         *     deltas every 500 ms until it finishes, then an `end` event whose data
+         *     is the final status (`done`/`failed`). CR/LF inside a line are
+         *     escaped; a `: keep-alive` comment goes out every poll so a gone client
+         *     ends the tail; a stream lives at most 30 minutes (then a `reconnect`
+         *     event).
          */
         get: operations["log"];
         put?: never;
@@ -693,9 +696,12 @@ export interface paths {
         /**
          * Live logs as SSE (viewer and above): `FetchLogs` every 2 s with the
          *     journal cursor of the previous page, so each line renders once as a
-         *     `data: <line>` event. The stream
-         *     ends when the client disconnects (a failed send breaks the loop) or
-         *     when the agent call fails (an `error` event first).
+         *     `data: <line>` event (CR/LF inside a line escaped). Every poll also
+         *     sends a `: keep-alive` comment, so a gone client is noticed (the send
+         *     fails, or the channel reports closed) and the agent is no longer
+         *     called. The stream ends on disconnect, after an `error` event with a
+         *     fixed message when the agent call fails (details are logged), or
+         *     with a `reconnect` event after 30 minutes.
          */
         get: operations["logs"];
         put?: never;
@@ -2065,7 +2071,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description SSE log tail (`data: <line>` events) */
+            /** @description SSE log tail (`data: <line>` events, then `event: end`) */
             200: {
                 headers: {
                     [name: string]: unknown;

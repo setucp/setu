@@ -1731,3 +1731,116 @@ async fn create_site_rejects_panel_host_domain() {
     }
     assert!(srv.agent.transcript().is_empty(), "no agent call may fire");
 }
+
+/// The logs SSE task notices a gone client: it sends a keep-alive
+/// comment every poll, checks `is_closed`, and stops calling the agent.
+#[tokio::test]
+async fn logs_sse_stops_when_client_disconnects() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_id, _) = running_site(&srv, &owner, "disc").await;
+    srv.agent.set_log_lines(vec!["disc-line-1".to_string()]);
+
+    let mut resp = owner
+        .get(srv.url(&format!("/api/v1/sites/{site_id}/logs")))
+        .send()
+        .await
+        .expect("logs sends");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let mut acc = String::new();
+    while !acc.contains("disc-line-1") {
+        let chunk = tokio::time::timeout(Duration::from_secs(5), resp.chunk())
+            .await
+            .expect("chunk arrives")
+            .expect("chunk ok")
+            .expect("stream open");
+        acc.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    // A keep-alive comment arrives on an idle poll.
+    while !acc.contains(": keep-alive") {
+        let chunk = tokio::time::timeout(Duration::from_secs(5), resp.chunk())
+            .await
+            .expect("keep-alive arrives")
+            .expect("chunk ok")
+            .expect("stream open");
+        acc.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    drop(resp);
+    drop(owner);
+    // At most one poll in flight when the client went away.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let after_drop = srv.agent.commands_of("fetch_logs").len();
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let later = srv.agent.commands_of("fetch_logs").len();
+    assert_eq!(
+        later, after_drop,
+        "no FetchLogs after the client disconnected ({after_drop} → {later})"
+    );
+}
+
+/// The job log SSE tails until the job finishes (no fixed 30 s), ends
+/// with an `end` event naming the status, and escapes CR/LF inside a
+/// line so one log line is one `data:` field.
+#[tokio::test]
+async fn job_log_sse_tails_until_done_and_escapes_lines() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    srv.kill_runner().await;
+    let owner = srv.login_as_owner().await;
+    let job = srv
+        .db
+        .jobs()
+        .enqueue("delete_backup", None, None, None)
+        .await
+        .expect("enqueue");
+    let claimed = srv
+        .db
+        .jobs()
+        .claim("w-sse", Duration::from_secs(120))
+        .await
+        .expect("claim")
+        .expect("a job");
+    assert_eq!(claimed.id, job.id);
+
+    let mut resp = owner
+        .get(srv.url(&format!("/api/v1/jobs/{}/log", job.id)))
+        .send()
+        .await
+        .expect("job log sends");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let db = srv.db.clone();
+    let id = job.id.clone();
+    let writer = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        db.jobs()
+            .append_log(&id, "first\rinjected: x\n")
+            .await
+            .expect("append");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        db.jobs()
+            .append_log(&id, "second line\n")
+            .await
+            .expect("append");
+        db.jobs().finish(&id, true, None).await.expect("finish");
+    });
+    let mut acc = String::new();
+    let ended = loop {
+        match tokio::time::timeout(Duration::from_secs(10), resp.chunk())
+            .await
+            .expect("chunk arrives")
+            .expect("chunk ok")
+        {
+            Some(bytes) => acc.push_str(&String::from_utf8_lossy(&bytes)),
+            None => break true,
+        }
+    };
+    writer.await.expect("writer");
+    assert!(ended);
+    assert!(acc.contains("data: first\\rinjected: x\n\n"), "{acc:?}");
+    assert!(acc.contains("data: second line\n\n"), "{acc:?}");
+    assert!(
+        acc.trim_end().ends_with("event: end\ndata: done"),
+        "{acc:?}"
+    );
+}

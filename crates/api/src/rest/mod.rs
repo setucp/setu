@@ -174,3 +174,96 @@ pub async fn readyz(State(state): State<AppState>) -> Result<impl IntoResponse, 
         database: "up".to_string(),
     }))
 }
+
+/// Server-sent-event framing shared by the site logs and job log tails.
+pub(crate) mod sse {
+    use std::time::Duration;
+
+    /// Longest life of one SSE response; the stream then ends with a
+    /// `reconnect` event and the client opens a new one (a forgotten tab
+    /// cannot hold an agent poll loop open forever).
+    pub const MAX_LIFETIME: Duration = Duration::from_secs(30 * 60);
+
+    /// An SSE comment: ignored by `EventSource`, but the write fails once
+    /// the client is gone, which is how an idle stream notices.
+    pub const KEEP_ALIVE: &str = ": keep-alive\n\n";
+
+    /// Ends the stream at [`MAX_LIFETIME`].
+    pub const RECONNECT: &str = "event: reconnect\ndata: stream lifetime reached\n\n";
+
+    /// One `data:` event for `line`, with `\r` and `\n` escaped so a line
+    /// can never end its event early or inject a field.
+    pub fn data(line: &str) -> String {
+        format!("data: {}\n\n", escape(line))
+    }
+
+    /// A named event with an escaped payload.
+    pub fn event(name: &str, payload: &str) -> String {
+        format!("event: {name}\ndata: {}\n\n", escape(payload))
+    }
+
+    /// The sending half every SSE task writes to.
+    pub type Tx = futures::channel::mpsc::Sender<Result<axum::body::Bytes, std::io::Error>>;
+
+    /// Queue `text` without waiting: `false` once the client is gone (a
+    /// full buffer just skips it; the next poll tries again).
+    pub fn offer(tx: &mut Tx, text: &'static str) -> bool {
+        match tx.try_send(Ok(axum::body::Bytes::from_static(text.as_bytes()))) {
+            Ok(()) => true,
+            Err(e) => !e.is_disconnected(),
+        }
+    }
+
+    /// Send `text`, waiting for room: `false` once the client is gone.
+    pub async fn send(tx: &mut Tx, text: String) -> bool {
+        use futures::SinkExt as _;
+        tx.send(Ok(axum::body::Bytes::from(text))).await.is_ok()
+    }
+
+    /// Run `body` for at most [`MAX_LIFETIME`]; past it, end the stream
+    /// with [`RECONNECT`]. Holds even when a send blocks on a stalled
+    /// client.
+    pub async fn with_lifetime<F>(tx: Tx, body: impl FnOnce(Tx) -> F)
+    where
+        F: std::future::Future<Output = ()>,
+    {
+        with_lifetime_of(MAX_LIFETIME, tx, body).await;
+    }
+
+    async fn with_lifetime_of<F>(limit: Duration, mut tx: Tx, body: impl FnOnce(Tx) -> F)
+    where
+        F: std::future::Future<Output = ()>,
+    {
+        if tokio::time::timeout(limit, body(tx.clone())).await.is_err() {
+            let _ = offer(&mut tx, RECONNECT);
+        }
+    }
+
+    fn escape(line: &str) -> String {
+        line.replace('\r', "\\r").replace('\n', "\\n")
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn data_escapes_cr_and_lf() {
+            assert_eq!(super::data("a\rb\nc"), "data: a\\rb\\nc\n\n");
+            assert_eq!(
+                super::event("error", "x\ny"),
+                "event: error\ndata: x\\ny\n\n"
+            );
+        }
+
+        #[tokio::test]
+        async fn lifetime_ends_with_reconnect() {
+            use futures::StreamExt as _;
+            let (tx, mut rx) = futures::channel::mpsc::channel(4);
+            super::with_lifetime_of(std::time::Duration::from_millis(50), tx, |_tx| {
+                std::future::pending::<()>()
+            })
+            .await;
+            let first = rx.next().await.expect("an event").expect("ok");
+            assert_eq!(&first[..], super::RECONNECT.as_bytes());
+        }
+    }
+}

@@ -790,7 +790,7 @@
         "tags": [
           "super::jobs"
         ],
-        "summary": "Tail a job's log as SSE (viewer and above): the accumulated `jobs.log`\nlines first, then — while the job is still `queued`/`running` — new\ndeltas every 500 ms until it finishes or 30 s pass. Finished jobs\nclose the stream after the backlog.",
+        "summary": "Tail a job's log as SSE (viewer and above): the accumulated `jobs.log`\nlines first, then — while the job is still `queued`/`running` — new\ndeltas every 500 ms until it finishes, then an `end` event whose data\nis the final status (`done`/`failed`). CR/LF inside a line are\nescaped; a `: keep-alive` comment goes out every poll so a gone client\nends the tail; a stream lives at most 30 minutes (then a `reconnect`\nevent).",
         "operationId": "log",
         "parameters": [
           {
@@ -805,7 +805,7 @@
         ],
         "responses": {
           "200": {
-            "description": "SSE log tail (`data: <line>` events)"
+            "description": "SSE log tail (`data: <line>` events, then `event: end`)"
           },
           "401": {
             "description": "",
@@ -2452,7 +2452,7 @@
         "tags": [
           "super::sites"
         ],
-        "summary": "Live logs as SSE (viewer and above): `FetchLogs` every 2 s with the\njournal cursor of the previous page, so each line renders once as a\n`data: <line>` event. The stream\nends when the client disconnects (a failed send breaks the loop) or\nwhen the agent call fails (an `error` event first).",
+        "summary": "Live logs as SSE (viewer and above): `FetchLogs` every 2 s with the\njournal cursor of the previous page, so each line renders once as a\n`data: <line>` event (CR/LF inside a line escaped). Every poll also\nsends a `: keep-alive` comment, so a gone client is noticed (the send\nfails, or the channel reports closed) and the agent is no longer\ncalled. The stream ends on disconnect, after an `error` event with a\nfixed message when the agent call fails (details are logged), or\nwith a `reconnect` event after 30 minutes.",
         "operationId": "logs",
         "parameters": [
           {

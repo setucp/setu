@@ -76,14 +76,17 @@ pub async fn get(
 
 /// Tail a job's log as SSE (viewer and above): the accumulated `jobs.log`
 /// lines first, then — while the job is still `queued`/`running` — new
-/// deltas every 500 ms until it finishes or 30 s pass. Finished jobs
-/// close the stream after the backlog.
+/// deltas every 500 ms until it finishes, then an `end` event whose data
+/// is the final status (`done`/`failed`). CR/LF inside a line are
+/// escaped; a `: keep-alive` comment goes out every poll so a gone client
+/// ends the tail; a stream lives at most 30 minutes (then a `reconnect`
+/// event).
 #[utoipa::path(
     get,
     path = "/api/v1/jobs/{id}/log",
     params(("id" = String, Path, description = "Job id")),
     responses(
-        (status = 200, description = "SSE log tail (`data: <line>` events)"),
+        (status = 200, description = "SSE log tail (`data: <line>` events, then `event: end`)"),
         (status = 401, body = super::ErrorBody),
         (status = 404, body = super::ErrorBody),
     )
@@ -93,44 +96,48 @@ pub async fn log(
     session: Session,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
+    use super::sse;
     require_role(&session, Role::Viewer).await?;
     let job = state.db.jobs().get(&id).await?;
 
-    let (mut tx, rx) = mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(64);
+    let (tx, rx) = mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(64);
     let db = state.db.clone();
-    tokio::spawn(async move {
-        let mut sent_len: usize;
+    tokio::spawn(sse::with_lifetime(tx, move |mut tx| async move {
+        let active = |status: &str| status == "queued" || status == "running";
         // Backlog first (the whole log for a finished job).
         for line in job.log.lines() {
-            let chunk = format!("data: {line}\n\n");
-            if tx.send(Ok(axum::body::Bytes::from(chunk))).await.is_err() {
+            if !sse::send(&mut tx, sse::data(line)).await {
                 return;
             }
         }
-        sent_len = job.log.len();
-        if job.status != "queued" && job.status != "running" {
-            return;
-        }
-        // Live tail: poll for appended log text.
-        for _ in 0..60 {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            let Ok(current) = db.jobs().get(&id).await else {
+        let mut sent_len = job.log.len();
+        let mut status = job.status.clone();
+        // Live tail: poll for appended log text until the job finishes.
+        while active(&status) {
+            if !sse::offer(&mut tx, sse::KEEP_ALIVE) {
                 return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let current = match db.jobs().get(&id).await {
+                Ok(current) => current,
+                Err(e) => {
+                    tracing::warn!(job = %id, error = %e, "job log: cannot read the job");
+                    sse::send(&mut tx, sse::event("error", "reading the job failed")).await;
+                    return;
+                }
             };
             if current.log.len() > sent_len {
                 for line in current.log[sent_len..].lines() {
-                    let chunk = format!("data: {line}\n\n");
-                    if tx.send(Ok(axum::body::Bytes::from(chunk))).await.is_err() {
+                    if !sse::send(&mut tx, sse::data(line)).await {
                         return;
                     }
                 }
                 sent_len = current.log.len();
             }
-            if current.status != "queued" && current.status != "running" {
-                return;
-            }
+            status = current.status;
         }
-    });
+        sse::send(&mut tx, sse::event("end", &status)).await;
+    }));
 
     Ok((
         StatusCode::OK,

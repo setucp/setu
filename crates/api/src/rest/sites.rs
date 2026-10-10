@@ -1109,9 +1109,12 @@ pub async fn env_reveal(
 
 /// Live logs as SSE (viewer and above): `FetchLogs` every 2 s with the
 /// journal cursor of the previous page, so each line renders once as a
-/// `data: <line>` event. The stream
-/// ends when the client disconnects (a failed send breaks the loop) or
-/// when the agent call fails (an `error` event first).
+/// `data: <line>` event (CR/LF inside a line escaped). Every poll also
+/// sends a `: keep-alive` comment, so a gone client is noticed (the send
+/// fails, or the channel reports closed) and the agent is no longer
+/// called. The stream ends on disconnect, after an `error` event with a
+/// fixed message when the agent call fails (details are logged), or
+/// with a `reconnect` event after 30 minutes.
 #[utoipa::path(
     get,
     path = "/api/v1/sites/{id}/logs",
@@ -1127,16 +1130,20 @@ pub async fn logs(
     session: Session,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
+    use super::sse;
     require_role(&session, Role::Viewer).await?;
     let site = state.db.sites().get(&id).await?;
     let server_id = site.server_id.clone();
     let short = site.short_id.clone();
 
-    let (mut tx, rx) = mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(32);
+    let (tx, rx) = mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(32);
     let agent = state.agent.clone();
-    tokio::spawn(async move {
+    tokio::spawn(sse::with_lifetime(tx, move |mut tx| async move {
         let mut cursor: Option<String> = None;
         loop {
+            if tx.is_closed() {
+                return;
+            }
             let call = agent
                 .call(
                     &server_id,
@@ -1149,23 +1156,11 @@ pub async fn logs(
                 )
                 .await;
             match call {
-                Ok(result) => {
-                    if !result.ok {
-                        let msg = result
-                            .error
-                            .unwrap_or_else(|| "fetch logs failed".to_string());
-                        let _ = tx
-                            .send(Ok(axum::body::Bytes::from(format!(
-                                "event: error\ndata: {msg}\n\n"
-                            ))))
-                            .await;
-                        break;
-                    }
+                Ok(result) if result.ok => {
                     let page: setu_proto::LogsOutput =
                         serde_json::from_value(result.output).unwrap_or_default();
                     for line in &page.lines {
-                        let chunk = format!("data: {line}\n\n");
-                        if tx.send(Ok(axum::body::Bytes::from(chunk))).await.is_err() {
+                        if !sse::send(&mut tx, sse::data(line)).await {
                             return;
                         }
                     }
@@ -1173,18 +1168,23 @@ pub async fn logs(
                         cursor = page.cursor;
                     }
                 }
-                Err(e) => {
-                    let _ = tx
-                        .send(Ok(axum::body::Bytes::from(format!(
-                            "event: error\ndata: {e}\n\n"
-                        ))))
-                        .await;
-                    break;
+                Ok(result) => {
+                    tracing::warn!(site = %short, error = ?result.error, "logs: fetch_logs failed");
+                    sse::send(&mut tx, sse::event("error", "fetching logs failed")).await;
+                    return;
                 }
+                Err(e) => {
+                    tracing::warn!(site = %short, error = %e, "logs: agent call failed");
+                    sse::send(&mut tx, sse::event("error", "the agent did not answer")).await;
+                    return;
+                }
+            }
+            if !sse::offer(&mut tx, sse::KEEP_ALIVE) {
+                return;
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
-    });
+    }));
 
     Ok((
         StatusCode::OK,

@@ -101,6 +101,11 @@ export function useSseLines(url: string | null, enabled = true): string[] {
       opened = true;
       if (m.push(event.data)) setLines([...m.lines]);
     };
+    // The job log ends with `event: end` once the job finished: stop
+    // instead of letting the browser reconnect and replay it.
+    source.addEventListener("end", () => {
+      source.close();
+    });
     return () => {
       source.close();
     };
