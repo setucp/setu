@@ -316,21 +316,57 @@ pub fn apt_commands(plan: &PackagePlan) -> Vec<Vec<&'static str>> {
 /// Caddy's own Debian package from its GitHub release, used when Caddy's
 /// apt repository cannot be reached (Cloudsmith answered `402 Access to
 /// the repository has been restricted` for every path in October 2026;
-/// ledger R116). Pinned by the SHA-512 the release's
-/// `caddy_<v>_checksums.txt` publishes; x86_64 only (the only release
-/// target).
-pub const CADDY_DEB_URL: &str =
-    "https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.deb";
-/// SHA-512 of [`CADDY_DEB_URL`].
-pub const CADDY_DEB_SHA512: &str = "47e8351c2317b427af14a103e763ca1118a3d2396a88b4c0669cdec9c4a68a957690194e2423a1633f53135741c33a41bdac2b55515b7d0f7adc8b733add50d9";
-const CADDY_DEB_PATH: &str = "/var/cache/apt/archives/setu-caddy_2.11.7_amd64.deb";
+/// ledger R116). Each entry is pinned by the SHA-512 that the release's
+/// `caddy_<v>_checksums.txt` publishes (0.1.2 I1).
+#[derive(Debug, PartialEq, Eq)]
+pub struct CaddyDeb {
+    pub url: &'static str,
+    pub path: &'static str,
+    pub sha512: &'static str,
+}
+
+/// The pinned release packages, keyed by `std::env::consts::ARCH`.
+static CADDY_DEBS: [(&str, CaddyDeb); 2] = [
+    (
+        "x86_64",
+        CaddyDeb {
+            url: "https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.deb",
+            path: "/var/cache/apt/archives/setu-caddy_2.11.7_amd64.deb",
+            sha512: "47e8351c2317b427af14a103e763ca1118a3d2396a88b4c0669cdec9c4a68a957690194e2423a1633f53135741c33a41bdac2b55515b7d0f7adc8b733add50d9",
+        },
+    ),
+    (
+        "aarch64",
+        CaddyDeb {
+            url: "https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_arm64.deb",
+            path: "/var/cache/apt/archives/setu-caddy_2.11.7_arm64.deb",
+            sha512: "ac32f03f0eea04021f2d4e5d89bfd01b84ead115f2eba9d2a0d06447e86d4af932899e56f090993a566d0925dbd1063002929b395541a8c5f5e51d7039f7375a",
+        },
+    ),
+];
+
+/// The pinned Caddy release package for `arch` (`std::env::consts::ARCH`
+/// names); an error for an architecture without one.
+pub fn caddy_deb_for_arch(arch: &str) -> Result<&'static CaddyDeb, InstallError> {
+    CADDY_DEBS
+        .iter()
+        .find(|(a, _)| *a == arch)
+        .map(|(_, deb)| deb)
+        .ok_or_else(|| {
+            InstallError::Step(
+                "caddy fallback",
+                format!("no Caddy fallback package for {arch}"),
+            )
+        })
+}
 
 /// The fallback after a failed repository install: drop the Caddy list
 /// (a failing source breaks every later `apt-get update`), install the
 /// spec packages except Caddy from the distribution, then Caddy's
-/// release `.deb`, verified before `apt-get` sees it.
-pub fn caddy_deb_fallback_commands(plan: &PackagePlan) -> Vec<Vec<String>> {
-    let mut cmds = caddy_only_fallback_commands();
+/// release `.deb` (`deb`, see [`caddy_deb_for_arch`]), verified before
+/// `apt-get` sees it.
+pub fn caddy_deb_fallback_commands(plan: &PackagePlan, deb: &CaddyDeb) -> Vec<Vec<String>> {
+    let mut cmds = caddy_only_fallback_commands(deb);
     let packages = install_argv(plan).into_iter().map(str::to_string).collect();
     cmds.insert(2, packages);
     cmds
@@ -338,7 +374,7 @@ pub fn caddy_deb_fallback_commands(plan: &PackagePlan) -> Vec<Vec<String>> {
 
 /// The release-package part of the fallback (download, verify, install,
 /// remove), shared by both fallbacks.
-fn caddy_deb_steps() -> Vec<Vec<String>> {
+fn caddy_deb_steps(deb: &CaddyDeb) -> Vec<Vec<String>> {
     let v = |a: &[&str]| {
         a.iter()
             .map(std::string::ToString::to_string)
@@ -346,29 +382,24 @@ fn caddy_deb_steps() -> Vec<Vec<String>> {
     };
     vec![
         v(&[
-            "curl",
-            "-fsSL",
-            "--proto",
-            "=https",
-            "--retry",
-            "3",
-            "-o",
-            CADDY_DEB_PATH,
-            CADDY_DEB_URL,
+            "curl", "-fsSL", "--proto", "=https", "--retry", "3", "-o", deb.path, deb.url,
         ]),
         v(&[
             "sh",
             "-c",
-            &format!("echo '{CADDY_DEB_SHA512}  {CADDY_DEB_PATH}' | sha512sum -c --quiet -"),
+            &format!(
+                "echo '{}  {}' | sha512sum -c --quiet -",
+                deb.sha512, deb.path
+            ),
         ]),
-        v(&["apt-get", "install", "-y", CADDY_DEB_PATH]),
-        v(&["rm", "-f", CADDY_DEB_PATH]),
+        v(&["apt-get", "install", "-y", deb.path]),
+        v(&["rm", "-f", deb.path]),
     ]
 }
 
 /// The fallback for Caddy alone (`ensure_caddy_package`): Caddy's
 /// release package, no distribution packages.
-fn caddy_only_fallback_commands() -> Vec<Vec<String>> {
+fn caddy_only_fallback_commands(deb: &CaddyDeb) -> Vec<Vec<String>> {
     let v = |a: &[&str]| {
         a.iter()
             .map(std::string::ToString::to_string)
@@ -378,7 +409,7 @@ fn caddy_only_fallback_commands() -> Vec<Vec<String>> {
         v(&["rm", "-f", "/etc/apt/sources.list.d/caddy-stable.list"]),
         v(&["apt-get", "update"]),
     ];
-    cmds.extend(caddy_deb_steps());
+    cmds.extend(caddy_deb_steps(deb));
     cmds
 }
 
@@ -390,22 +421,28 @@ pub fn caddy_apt_commands() -> Vec<Vec<&'static str>> {
     cmds
 }
 
-/// Run `cmds`; when a step from the Caddy keyring on fails (x86_64),
-/// run `fallback` instead of the rest (ledger R116).
+/// Run `cmds`; when a step from the Caddy keyring on fails, run the
+/// fallback that `fallback` builds for this host's pinned Caddy package
+/// instead of the rest (ledger R116). The first two commands use only the
+/// distribution archive: their failure is not Caddy's repository.
 async fn apt_with_caddy_fallback(
     sys: &dyn SystemCommands,
     cmds: &[Vec<&str>],
-    fallback: &[Vec<String>],
+    fallback: impl FnOnce(&CaddyDeb) -> Vec<Vec<String>>,
 ) -> Result<(), InstallError> {
     for (i, argv) in cmds.iter().enumerate() {
         if let Err(e) = sys.run(argv[0], &argv[1..]).await {
-            // The first two commands use only the distribution archive:
-            // their failure is not Caddy's repository.
-            if i < 2 || std::env::consts::ARCH != "x86_64" {
+            if i < 2 {
                 return Err(step("apt")(e));
             }
-            tracing::warn!(error = %format!("{e:#}"), url = CADDY_DEB_URL, "Caddy apt repository failed; installing Caddy's release package");
-            for argv in fallback {
+            let deb = match caddy_deb_for_arch(std::env::consts::ARCH) {
+                Ok(deb) => deb,
+                Err(no_fallback) => {
+                    return Err(InstallError::Step("apt", format!("{e:#}; {no_fallback}")));
+                }
+            };
+            tracing::warn!(error = %format!("{e:#}"), url = deb.url, "Caddy apt repository failed; installing Caddy's release package");
+            for argv in fallback(deb) {
                 let args: Vec<&str> = argv[1..].iter().map(String::as_str).collect();
                 sys.run(&argv[0], &args)
                     .await
@@ -428,7 +465,7 @@ pub async fn ensure_caddy_package(sys: &dyn SystemCommands) -> Result<(), Instal
     if status.contains("install ok installed") {
         return Ok(());
     }
-    apt_with_caddy_fallback(sys, &caddy_apt_commands(), &caddy_only_fallback_commands()).await
+    apt_with_caddy_fallback(sys, &caddy_apt_commands(), caddy_only_fallback_commands).await
 }
 
 async fn ensure_packages(
@@ -439,7 +476,10 @@ async fn ensure_packages(
     crate::distro::ensure_repos(plan, sys, fetch)
         .await
         .map_err(step("apt repositories"))?;
-    apt_with_caddy_fallback(sys, &apt_commands(plan), &caddy_deb_fallback_commands(plan)).await?;
+    apt_with_caddy_fallback(sys, &apt_commands(plan), |deb| {
+        caddy_deb_fallback_commands(plan, deb)
+    })
+    .await?;
     // policy-rc.d (containers, hardened hosts) can skip the deb's own
     // start; converge Postgres explicitly. Caddy is `install_system`'s.
     sys.run("systemctl", &["enable", "--now", "postgresql"])
@@ -787,6 +827,11 @@ mod tests {
         assert!(!AGENT_UNIT_ASSET.contains("ReadWritePaths="));
     }
 
+    /// The pinned Caddy package of the architecture the tests run on.
+    fn host_caddy() -> &'static CaddyDeb {
+        caddy_deb_for_arch(std::env::consts::ARCH).expect("the host has a Caddy package")
+    }
+
     fn ubuntu_2404_plan() -> PackagePlan {
         plan_on(
             &Distro {
@@ -855,6 +900,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn caddy_fallback_package_matches_arch() {
+        let amd = caddy_deb_for_arch("x86_64").expect("x86_64 has a package");
+        assert!(
+            amd.url.ends_with("/caddy_2.11.7_linux_amd64.deb"),
+            "{}",
+            amd.url
+        );
+        assert!(
+            amd.path.ends_with("setu-caddy_2.11.7_amd64.deb"),
+            "{}",
+            amd.path
+        );
+        let arm = caddy_deb_for_arch("aarch64").expect("aarch64 has a package");
+        assert!(
+            arm.url.ends_with("/caddy_2.11.7_linux_arm64.deb"),
+            "{}",
+            arm.url
+        );
+        assert!(
+            arm.path.ends_with("setu-caddy_2.11.7_arm64.deb"),
+            "{}",
+            arm.path
+        );
+        assert_eq!(amd.sha512.len(), 128);
+        assert_eq!(arm.sha512.len(), 128);
+        assert_ne!(amd.sha512, arm.sha512);
+        let err = caddy_deb_for_arch("riscv64").expect_err("no riscv64 package");
+        assert!(
+            err.to_string()
+                .contains("no Caddy fallback package for riscv64"),
+            "{err}"
+        );
+    }
+
     #[tokio::test]
     async fn caddy_repo_failure_falls_back_to_the_verified_release_package() {
         let sys = crate::install_system::RecordingCommands::new()
@@ -875,15 +955,15 @@ mod tests {
         ));
         let get = rest
             .iter()
-            .position(|c| c.starts_with("curl ") && c.ends_with(CADDY_DEB_URL))
+            .position(|c| c.starts_with("curl ") && c.ends_with(host_caddy().url))
             .expect("download");
         let check = rest
             .iter()
-            .position(|c| c.contains("sha512sum -c") && c.contains(CADDY_DEB_SHA512))
+            .position(|c| c.contains("sha512sum -c") && c.contains(host_caddy().sha512))
             .expect("verify");
         let inst = rest
             .iter()
-            .position(|c| c == &format!("apt-get install -y {CADDY_DEB_PATH}"))
+            .position(|c| c == &format!("apt-get install -y {}", host_caddy().path))
             .expect("install deb");
         assert!(get < check && check < inst, "{rest:?}");
         assert!(
@@ -919,7 +999,7 @@ mod tests {
         let calls = sys.calls();
         assert!(calls
             .iter()
-            .any(|c| c == &format!("apt-get install -y {CADDY_DEB_PATH}")));
+            .any(|c| c == &format!("apt-get install -y {}", host_caddy().path)));
         assert!(calls.iter().all(|c| !c.contains("postgresql")));
     }
 
@@ -939,7 +1019,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert!(sys.calls().iter().all(|c| !c.contains(CADDY_DEB_URL)));
+        assert!(sys.calls().iter().all(|c| !c.contains(host_caddy().url)));
     }
 
     #[test]
