@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0B1020"/><stop offset="1" stop-color="#1E1B4B"/></linearGradient>
+<radialGradient id="glow" cx="0.78" cy="0.3" r="0.6"><stop offset="0" stop-color="#4F46E5" stop-opacity="0.45"/><stop offset="1" stop-color="#4F46E5" stop-opacity="0"/></radialGradient></defs>
+<rect width="1280" height="640" fill="url(#g)"/><rect width="1280" height="640" fill="url(#glow)"/>
+<g transform="translate(120 196) scale(3.9)" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M10 42 H54" stroke-width="6"/>
+  <path d="M10 42 C18 16 46 16 54 42" stroke-width="6"/>
+  <path d="M22 42 V27.5 M32 42 V22.5 M42 42 V27.5" stroke-width="4"/>
+</g>
+<text x="420" y="330" font-family="Inter" font-weight="600" font-size="150" letter-spacing="-0.03em" fill="#FFFFFF">Setu</text>
+<text x="424" y="400" font-family="Inter" font-weight="400" font-size="34" fill="#C7D2FE">A control panel for single-binary web apps.</text>
+<text x="424" y="446" font-family="Inter" font-weight="400" font-size="24" fill="#818CF8">Rust · Go · one binary · your servers</text></svg>

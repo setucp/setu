@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/brand/github-banner.png" alt="Setu — a control panel for single-binary web apps" width="100%"></p>
+
 # Setu
 
 A control panel for single-binary web apps: pick an app, get a domain,

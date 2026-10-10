@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="64" viewBox="0 0 260 64"><g transform="translate(0 0) scale(1.0)" fill="none" stroke="#4F46E5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M10 42 H54" stroke-width="6"/>
+  <path d="M10 42 C18 16 46 16 54 42" stroke-width="6"/>
+  <path d="M22 42 V27.5 M32 42 V22.5 M42 42 V27.5" stroke-width="4"/>
+</g><text x="76" y="47" font-family="Inter" font-weight="600" font-size="40" letter-spacing="-0.03em" fill="#0F172A">Setu</text></svg>
