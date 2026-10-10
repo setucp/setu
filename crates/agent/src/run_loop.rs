@@ -251,6 +251,10 @@ where
 /// `setu agent run`: reconcile + heartbeat tasks, then the loop.
 pub async fn run_forever(config: AgentConfig) -> anyhow::Result<()> {
     let cp = Arc::new(ControlPlane::new(&config)?);
+    let pruned = crate::download::prune_stale_parts(&config.downloads_dir);
+    if pruned > 0 {
+        tracing::info!(files = pruned, "removed stale download part files");
+    }
     let agent = Agent::new(prod_runtime(&config));
     tokio::spawn(reconcile_forever(
         agent.clone(),
