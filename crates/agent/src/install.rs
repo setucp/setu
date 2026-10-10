@@ -473,9 +473,21 @@ async fn ensure_packages(
     plan: &PackagePlan,
     fetch: &dyn KeyFetch,
 ) -> Result<(), InstallError> {
-    crate::distro::ensure_repos(plan, sys, fetch)
-        .await
-        .map_err(step("apt repositories"))?;
+    // The tools the repository steps and the keyring fetch rely on come
+    // first (0.1.2 M2): CA certificates for HTTPS, curl and gnupg for the
+    // Caddy steps.
+    sys.run(
+        "apt-get",
+        &["install", "-y", "ca-certificates", "curl", "gnupg"],
+    )
+    .await
+    .map_err(step("apt packages"))?;
+    if let Err(e) = crate::distro::ensure_repos(plan, sys, fetch).await {
+        // A list written before the failure breaks every later
+        // `apt-get update`; take it back out.
+        let _ = sys.run("rm", &["-f", crate::distro::PGDG_LIST_PATH]).await;
+        return Err(step("apt repositories")(e));
+    }
     apt_with_caddy_fallback(sys, &apt_commands(plan), |deb| {
         caddy_deb_fallback_commands(plan, deb)
     })
@@ -933,6 +945,82 @@ mod tests {
                 .contains("no Caddy fallback package for riscv64"),
             "{err}"
         );
+    }
+
+    /// Serves `bytes` as every keyring, after recording the fetch in the
+    /// same command log as the commands.
+    struct LoggingFetch {
+        sys: crate::install_system::RecordingCommands,
+        bytes: Vec<u8>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::distro::KeyFetch for LoggingFetch {
+        async fn fetch(&self, url: &str) -> anyhow::Result<Vec<u8>> {
+            self.sys.run("fetch", &[url]).await?;
+            Ok(self.bytes.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn ca_certificates_installed_before_pgdg_repo() {
+        let sys = crate::install_system::RecordingCommands::new();
+        let plan = plan_on(
+            &Distro {
+                id: "debian".into(),
+                version_id: "12".into(),
+                codename: Some("bookworm".into()),
+            },
+            false,
+        )
+        .expect("supported");
+        let fetch = LoggingFetch {
+            sys: sys.clone(),
+            bytes: Vec::new(),
+        };
+        // The keyring does not verify, so the repository step fails; only
+        // the order of the first commands matters here.
+        assert!(ensure_packages(&sys, &plan, &fetch).await.is_err());
+        let calls = sys.calls();
+        let certs = calls
+            .iter()
+            .position(|c| c == "apt-get install -y ca-certificates curl gnupg")
+            .expect("ca-certificates installed");
+        let key = calls
+            .iter()
+            .position(|c| c == &format!("fetch {}", plan.repos[0].keyring_url))
+            .expect("pgdg keyring fetched");
+        assert!(certs < key, "{calls:?}");
+    }
+
+    #[tokio::test]
+    async fn failed_repo_setup_removes_the_pgdg_list() {
+        let sys = crate::install_system::RecordingCommands::new().failing_on("apt-get update");
+        let mut plan = ubuntu_2404_plan();
+        plan.repos = vec![crate::distro::AptRepo {
+            list_line: "deb https://apt.example.test noble-pgdg main".into(),
+            keyring_url: "https://keys.example.test/pgdg.asc".into(),
+            // sha256 of b"key"
+            keyring_sha256: "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+            keyring_path: crate::distro::PGDG_KEYRING_PATH,
+        }];
+        let fetch = LoggingFetch {
+            sys: sys.clone(),
+            bytes: b"key".to_vec(),
+        };
+        assert!(ensure_packages(&sys, &plan, &fetch).await.is_err());
+        let calls = sys.calls();
+        let list = calls
+            .iter()
+            .position(|c| {
+                c.starts_with("install -D -m 0644 ") && c.ends_with(crate::distro::PGDG_LIST_PATH)
+            })
+            .expect("pgdg list written");
+        let removed = calls
+            .iter()
+            .position(|c| c == &format!("rm -f {}", crate::distro::PGDG_LIST_PATH))
+            .expect("pgdg list removed after the failure");
+        assert!(list < removed, "{calls:?}");
     }
 
     #[tokio::test]
