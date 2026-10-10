@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-const CASES: usize = 17;
+const CASES: usize = 19;
 
 #[test]
 fn corpus() {

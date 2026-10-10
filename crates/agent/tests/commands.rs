@@ -187,6 +187,7 @@ async fn every_command_kind_is_handled() {
         version: "0.1.0".to_string(),
         url: servers.tarball_url.clone(),
         sha256: servers.tarball_sha.clone(),
+        format: setu_proto::BinaryFormat::TarGz,
         exec: "app".to_string(),
     };
     let backup_id = "01jbackup0000000000000001";
@@ -651,6 +652,7 @@ async fn commands_for_one_site_run_in_order_while_other_sites_and_readonly_run_c
         version: "0.1.0".to_string(),
         url: servers.tarball_url.clone(),
         sha256: servers.tarball_sha.clone(),
+        format: setu_proto::BinaryFormat::TarGz,
         exec: "app".to_string(),
     };
     let install = |site: &str| Command::Install {

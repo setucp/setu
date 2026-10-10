@@ -513,6 +513,10 @@ pub(crate) fn binary_ref(manifest: &Manifest) -> Result<setu_proto::BinaryRef, A
         version: manifest.app.version.clone(),
         url: target.url.clone(),
         sha256: target.sha256.clone(),
+        format: match target.format {
+            setu_manifest::BinaryFormat::TarGz => setu_proto::BinaryFormat::TarGz,
+            setu_manifest::BinaryFormat::Binary => setu_proto::BinaryFormat::Binary,
+        },
         exec: target.exec.clone(),
     })
 }

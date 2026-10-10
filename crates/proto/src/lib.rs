@@ -51,8 +51,25 @@ pub struct BinaryRef {
     pub version: String,
     pub url: String,
     pub sha256: String,
-    /// Path of the executable inside the archive (relative).
+    /// What the download is (mirrors the manifest's `format`); absent in
+    /// commands from older control planes, which means `tar.gz`.
+    #[serde(default)]
+    pub format: BinaryFormat,
+    /// Path of the executable inside the archive (relative), or the file
+    /// name a `binary` download is installed under.
     pub exec: String,
+}
+
+/// What a [`BinaryRef`] download is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub enum BinaryFormat {
+    /// A gzip-compressed tar archive, extracted into `bin/<version>/`.
+    #[default]
+    #[serde(rename = "tar.gz")]
+    TarGz,
+    /// A bare executable, copied to `bin/<version>/<exec>`.
+    #[serde(rename = "binary")]
+    Binary,
 }
 
 /// One concrete env var to write into the site env file.
@@ -507,6 +524,7 @@ mod tests {
                         url: "https://example.com/app.tar.gz".to_string(),
                         sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                             .to_string(),
+                        format: BinaryFormat::Binary,
                         exec: "app".to_string(),
                     },
                 },
@@ -800,5 +818,26 @@ mod tests {
             .map(|(_, k)| k)
             .collect();
         assert_eq!(read_only, ["status", "fetch_logs", "inventory"]);
+    }
+
+    /// A command from a control plane that predates `format` still reads,
+    /// as a `tar.gz` install; the wire names are the manifest's.
+    #[test]
+    fn binary_ref_format_defaults_to_tar_gz() {
+        let old: BinaryRef = serde_json::from_value(serde_json::json!({
+            "version": "0.1.0", "url": "https://example.com/a.tar.gz",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "exec": "app"
+        }))
+        .expect("old command");
+        assert_eq!(old.format, BinaryFormat::TarGz);
+        assert_eq!(
+            serde_json::to_value(BinaryFormat::Binary).expect("json"),
+            "binary"
+        );
+        assert_eq!(
+            serde_json::to_value(BinaryFormat::TarGz).expect("json"),
+            "tar.gz"
+        );
     }
 }

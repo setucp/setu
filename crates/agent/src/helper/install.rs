@@ -1,5 +1,9 @@
-//! `install {version, sha256}` and `switch-version {version}`, plus the
-//! checked archive extractor `restore` shares.
+//! `install {version, sha256[, format, exec]}` and `switch-version
+//! {version}`, plus the checked archive extractor `restore` shares.
+//!
+//! `format = "binary"` (from the request, never sniffed): the verified
+//! download is the executable itself and is copied to
+//! `bin/<version>/<exec>` mode 0755, `exec` being one file name.
 //!
 //! An archive may hold only regular files and directories with relative,
 //! `..`-free names and no setuid/setgid/sticky bit. Anything else
@@ -23,6 +27,7 @@ use super::fs::{
     walk_nofollow, Kind,
 };
 use super::{validate, Ctx, HelperError, DOWNLOADS, SITES};
+use setu_proto::BinaryFormat;
 
 /// `install` input.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -30,6 +35,14 @@ use super::{validate, Ctx, HelperError, DOWNLOADS, SITES};
 pub struct InstallInput {
     pub version: String,
     pub sha256: String,
+    /// What the download is; absent means `tar.gz`. Taken from the
+    /// request, never sniffed from the bytes.
+    #[serde(default)]
+    pub format: setu_proto::BinaryFormat,
+    /// `binary` only: the single file name the executable gets in
+    /// `bin/<version>/`. Refused for `tar.gz` (the archive names its own).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec: Option<String>,
 }
 
 /// `switch-version` input.
@@ -182,6 +195,22 @@ pub(crate) fn extract_checked<R: Read>(
     Ok(())
 }
 
+/// Copy a raw `binary` download into `dest/<exec>`, mode 0755 (no
+/// special bits whatever the download had). `exec` is one validated
+/// file name; `O_EXCL` in a fresh staging dir.
+fn place_executable<R: Read>(
+    reader: &mut R,
+    dest: BorrowedFd<'_>,
+    exec: &str,
+) -> Result<(), HelperError> {
+    let mut f = create_new(dest, OsStr::new(exec))?;
+    std::io::copy(reader, &mut f).map_err(|e| HelperError::io(exec, e))?;
+    fchmod(f.as_fd(), Mode::from_bits_truncate(INSTALL_MODES.file_exec))
+        .map_err(|e| HelperError::io(exec, e))?;
+    f.sync_all().map_err(|e| HelperError::io(exec, e))?;
+    Ok(())
+}
+
 /// Open `bin/` of a site, no-follow all the way.
 fn open_bin(ctx: &Ctx, short: &str) -> Result<std::os::fd::OwnedFd, HelperError> {
     let root = open_root(&ctx.root)?;
@@ -198,6 +227,23 @@ pub fn install(
 ) -> Result<serde_json::Value, HelperError> {
     validate::version(&input.version)?;
     validate::sha256(&input.sha256)?;
+    let exec_name = match (input.format, input.exec.as_deref()) {
+        (BinaryFormat::TarGz, None) => None,
+        (BinaryFormat::TarGz, Some(_)) => {
+            return Err(HelperError::Invalid(
+                "exec (only with format binary)".to_string(),
+            ))
+        }
+        (BinaryFormat::Binary, Some(e)) => {
+            validate::exec_file(e)?;
+            Some(e.to_string())
+        }
+        (BinaryFormat::Binary, None) => {
+            return Err(HelperError::Invalid(
+                "exec (required with format binary)".to_string(),
+            ))
+        }
+    };
     let root = open_root(&ctx.root)?;
     let downloads = walk_nofollow(root.as_fd(), &DOWNLOADS)?;
     let name = format!("{}.tar.gz", input.sha256);
@@ -243,8 +289,13 @@ pub fn install(
     let staging = tmp_name("install");
     let (stage_fd, _) = ensure_dir(bin.as_fd(), &staging, 0o700)?;
     let result = (|| {
-        let gz = flate2::read::GzDecoder::new(&mut file);
-        extract_checked(gz, stage_fd.as_fd(), None, INSTALL_MODES)?;
+        match &exec_name {
+            None => {
+                let gz = flate2::read::GzDecoder::new(&mut file);
+                extract_checked(gz, stage_fd.as_fd(), None, INSTALL_MODES)?;
+            }
+            Some(exec) => place_executable(&mut file, stage_fd.as_fd(), exec)?,
+        }
         let path = ctx.site_path(short, &["bin", &input.version]);
         ctx.own.chown(stage_fd.as_fd(), &path, 0, 0)?;
         ctx.own.chmod(stage_fd.as_fd(), &path, 0o755)?;

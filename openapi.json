@@ -3129,6 +3129,14 @@
           }
         }
       },
+      "BinaryFormat": {
+        "type": "string",
+        "description": "What a [`BinaryRef`] download is.",
+        "enum": [
+          "tar.gz",
+          "binary"
+        ]
+      },
       "BinaryRef": {
         "type": "object",
         "description": "One downloadable binary release.",
@@ -3141,7 +3149,11 @@
         "properties": {
           "exec": {
             "type": "string",
-            "description": "Path of the executable inside the archive (relative)."
+            "description": "Path of the executable inside the archive (relative), or the file\nname a `binary` download is installed under."
+          },
+          "format": {
+            "$ref": "#/components/schemas/BinaryFormat",
+            "description": "What the download is (mirrors the manifest's `format`); absent in\ncommands from older control planes, which means `tar.gz`."
           },
           "sha256": {
             "type": "string"

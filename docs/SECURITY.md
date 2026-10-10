@@ -66,7 +66,7 @@ agent doctor` checks both). The agent calls it only as `sudo -n
 | `site-create {dirs}` | `useradd setu-site-<short>` (uid 30000–39999, no shell); site tree root 0755, `data/`, `run/`, `data/<dir>` site user 0750 |
 | `write-unit {short_id, version, exec, args, workdir, memory_mb, cpu_percent}` | the drop-in `setu-site@<short>.service.d/10-setu.conf` from a fixed template; `daemon-reload` when changed |
 | `write-env [{name, value}]` | `/srv/setu/sites/<short>/env`, root:root 0600 |
-| `install {version, sha256}` | verify `/var/lib/setu/downloads/<sha256>.tar.gz`, extract to `bin/<version>/` |
+| `install {version, sha256[, format, exec]}` | verify `/var/lib/setu/downloads/<sha256>.tar.gz` (the name is kept for a raw binary too), then extract it to `bin/<version>/`, or with `format: "binary"` copy it to `bin/<version>/<exec>` (`exec` one file name), 0755 |
 | `switch-version {version}` | atomic swap of the `bin/current` symlink |
 | `unit {op}` | `start` = `systemctl enable --now`, `stop` = `disable --now`, `restart` = `enable` + `restart`, `show` = unit properties + `du -sb data/` (R118) |
 | `backup {dirs}` | `tar.zst` of `data/<dir>`… to stdout |

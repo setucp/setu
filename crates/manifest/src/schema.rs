@@ -147,7 +147,29 @@ impl<'de> Deserialize<'de> for BinaryRun {
 pub struct BinaryTarget {
     pub url: String,
     pub sha256: String,
+    /// `tar.gz` (default): `exec` is a path inside the archive.
+    /// `binary`: the download is the executable and `exec` its file name.
+    #[serde(default, skip_serializing_if = "BinaryFormat::is_default")]
+    pub format: BinaryFormat,
     pub exec: String,
+}
+
+/// `run.binary.<target>.format`: what the download is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub enum BinaryFormat {
+    /// A gzip-compressed tar archive.
+    #[default]
+    #[serde(rename = "tar.gz")]
+    TarGz,
+    /// A bare executable.
+    #[serde(rename = "binary")]
+    Binary,
+}
+
+impl BinaryFormat {
+    pub fn is_default(&self) -> bool {
+        *self == Self::TarGz
+    }
 }
 
 /// Body of `[run.image]`.
