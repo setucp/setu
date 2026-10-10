@@ -35,7 +35,15 @@ IMAGE=setu-e2e-agent:latest
 SERVE_PORT=7010
 PG_PORT=55441
 ART_PORT=8123
-TARGET=x86_64-unknown-linux-musl
+# SETU_E2E_TARGET selects the architecture (0.1.2 §1: the aarch64 run is the
+# non-blocking CI job on ubuntu-24.04-arm). The hello manifest's binary key
+# follows it, so the server's target is the one the app ships.
+TARGET=${SETU_E2E_TARGET:-x86_64-unknown-linux-musl}
+case "$TARGET" in
+  x86_64-unknown-linux-musl) ARCH_KEY=x86_64-linux ;;
+  aarch64-unknown-linux-musl) ARCH_KEY=aarch64-linux ;;
+  *) echo "e2e.sh: unsupported SETU_E2E_TARGET $TARGET" >&2; exit 2 ;;
+esac
 OWNER_EMAIL=owner@e2e.test
 JAR=$SETU_E2E_DIR/cookies.txt
 ART_DIR=$SETU_E2E_DIR/artefacts
@@ -273,11 +281,12 @@ mkdir -p "$DATA_DIR" "$ART_DIR"
 
 # ---- build (musl, features test-root + e2e-hooks; never in releases)
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
+CC_VAR=CC_${TARGET//-/_}
 if ! command -v musl-gcc >/dev/null 2>&1 &&
-  ! command -v x86_64-linux-musl-gcc >/dev/null 2>&1 &&
-  [ -z "${CC_x86_64_unknown_linux_musl:-}" ]; then
+  ! command -v "${TARGET%%-*}-linux-musl-gcc" >/dev/null 2>&1 &&
+  [ -z "${!CC_VAR:-}" ]; then
   command -v clang >/dev/null 2>&1 || bail "no C compiler for $TARGET (install musl-tools or clang)"
-  export CC_x86_64_unknown_linux_musl=clang
+  export "$CC_VAR=clang"
 fi
 note "building setu + hello ($TARGET, release)"
 # From $ROOT so rustup applies its rust-toolchain.toml (channel + musl target).
@@ -385,6 +394,7 @@ for v in 0.1.0 0.1.1 0.1.2; do
   extra=""
   [ "$v" = 0.1.2 ] && extra='HELLO_FAIL = { value = "1" }'
   sed -e "s|__VERSION__|$v|g" -e "s|__URL__|http://$HOSTIP:$ART_PORT/hello-$v.tar.gz|" \
+    -e "s|\"x86_64-linux\"|\"$ARCH_KEY\"|" \
     -e "s|__SHA256__|$sha|" -e "s|__EXTRA_ENV__|$extra|" \
     "$ROOT/apps/hello/manifest.tmpl.toml" >"$SETU_E2E_DIR/hello-$v.toml"
 done

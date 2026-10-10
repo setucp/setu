@@ -155,3 +155,72 @@ jobs:
             ${{ runner.temp }}/e2e.log
             ${{ runner.temp }}/e2e/*.log
             ${{ runner.temp }}/e2e/diag-*.txt
+
+  # 0.1.2 §1: the Rust suite on the aarch64 runner (no ARM hardware here).
+  test-arm:
+    runs-on: ubuntu-24.04-arm
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: setu
+          POSTGRES_PASSWORD: setu
+        ports:
+          - 55440:5432
+        options: >-
+          --health-cmd "pg_isready -U setu -d postgres"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      SETU_TEST_PG_PORT: 55440
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+          components: rustfmt, clippy
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build UI (embeds into setu-api)
+        run: bash scripts/build-ui.sh
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Rust tests
+        run: bash scripts/test.sh
+
+  # 0.1.2 §1: the end-to-end on aarch64. Non-blocking (continue-on-error)
+  # until it has passed three times in a row; then drop continue-on-error
+  # and ledger the switch.
+  e2e-arm:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    continue-on-error: true
+    env:
+      SETU_E2E_TARGET: aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+          targets: aarch64-unknown-linux-musl
+      - name: musl C toolchain (ring, zstd)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      - name: End-to-end (aarch64)
+        shell: bash  # -eo pipefail: tee must not hide the exit code
+        env:
+          SETU_E2E_DIR: ${{ runner.temp }}/e2e
+        run: bash scripts/e2e.sh 2>&1 | tee "$RUNNER_TEMP/e2e-arm.log"
+      - name: Upload e2e artefacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-arm
+          path: |
+            ${{ runner.temp }}/e2e-arm.log
+            ${{ runner.temp }}/e2e/*.log
+            ${{ runner.temp }}/e2e/diag-*.txt
