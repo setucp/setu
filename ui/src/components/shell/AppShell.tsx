@@ -82,7 +82,7 @@ export function AppShell({ operator }: { operator: Pick<Operator, "email" | "rol
 
           <main id="main" tabIndex={-1} className="flex-1 outline-hidden">
             <div className="mx-auto w-full max-w-[1200px] px-4 py-6 sm:px-6 md:py-8 lg:px-8">
-              <Breadcrumbs className="mb-4 md:hidden" />
+              <Breadcrumbs className="mb-4 md:hidden" hideSingle />
               <Outlet />
             </div>
           </main>

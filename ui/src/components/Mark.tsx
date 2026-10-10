@@ -25,13 +25,13 @@ export function Mark({ className, title }: { className?: string; title?: string 
 export function Logo({ className }: { className?: string }) {
   return (
     <span className={cn("inline-flex items-center", className)}>
-      <img src="/logo.svg" alt="Setu" width={78} height={19} className="h-[19px] w-auto dark:hidden" />
+      <img src="/logo.svg" alt="Setu" width={98} height={24} className="h-6 w-auto dark:hidden" />
       <img
         src="/logo-dark.svg"
         alt="Setu"
-        width={78}
-        height={19}
-        className="hidden h-[19px] w-auto dark:block"
+        width={98}
+        height={24}
+        className="hidden h-6 w-auto dark:block"
       />
     </span>
   );

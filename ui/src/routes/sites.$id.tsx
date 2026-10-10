@@ -21,7 +21,7 @@ import { ErrorText } from "@/components/ErrorText";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { tabListClass, tabTriggerActiveClass, tabTriggerClass } from "@/components/ui/tabs";
+import { tabListClass, tabTriggerClass } from "@/components/ui/tabs";
 import { useSite, useSiteAction, useTakeBackup } from "@/lib/api";
 import { ApiError, type SiteDetail } from "@/lib/client";
 import { formatBytes } from "@/lib/format";
@@ -187,10 +187,11 @@ function SiteDetailLayout() {
             to={tab.to}
             params={{ id }}
             activeOptions={tab.exact ? { exact: true } : undefined}
-            className={cn(tabTriggerClass, tab.label === "Danger" && "text-destructive/80 hover:text-destructive")}
-            activeProps={{
-              className: cn(tabTriggerActiveClass, tab.label === "Danger" && "text-destructive after:bg-destructive"),
-            }}
+            className={cn(
+              tabTriggerClass,
+              tab.label === "Danger" &&
+                "text-destructive/80 hover:text-destructive data-[status=active]:text-destructive data-[status=active]:after:bg-destructive",
+            )}
           >
             {tab.label}
           </Link>

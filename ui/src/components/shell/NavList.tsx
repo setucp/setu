@@ -5,8 +5,9 @@ import { NAV } from "./nav";
 
 const linkBase =
   "touch-target group relative flex h-9 items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground outline-hidden transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
+// TanStack's Link marks the active route with data-status="active" (and aria-current).
 const linkActive =
-  "bg-accent text-foreground before:absolute before:inset-y-2 before:-left-3 before:w-[3px] before:rounded-r-full before:bg-primary [&_svg]:text-link";
+  "data-[status=active]:bg-accent data-[status=active]:text-foreground data-[status=active]:before:absolute data-[status=active]:before:inset-y-2 data-[status=active]:before:-left-3 data-[status=active]:before:w-[3px] data-[status=active]:before:rounded-r-full data-[status=active]:before:bg-primary data-[status=active]:[&_svg]:text-link";
 
 /**
  * Primary navigation. `collapsible` (the sidebar) hides labels between
@@ -27,8 +28,7 @@ export function NavList({
           <Link
             to={item.to}
             onClick={onNavigate}
-            className={cn(linkBase, collapsible && "md:max-lg:justify-center md:max-lg:px-0")}
-            activeProps={{ className: linkActive }}
+            className={cn(linkBase, linkActive, collapsible && "md:max-lg:justify-center md:max-lg:px-0")}
           >
             <Icon className="size-4 shrink-0" aria-hidden="true" />
             <span className={cn(collapsible && "md:max-lg:sr-only")}>{item.label}</span>

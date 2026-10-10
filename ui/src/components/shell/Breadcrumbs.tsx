@@ -73,9 +73,17 @@ function label(c: Crumb) {
 }
 
 /** Route-derived breadcrumb trail for the top bar. */
-export function Breadcrumbs({ className }: { className?: string }) {
+export function Breadcrumbs({
+  className,
+  hideSingle = false,
+}: {
+  className?: string;
+  /** Render nothing for a top-level page (the page title already says it). */
+  hideSingle?: boolean;
+}) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const crumbs = crumbsFor(pathname);
+  if (hideSingle && crumbs.length < 2) return null;
   return (
     <Breadcrumb className={className}>
       {crumbs.map((c, i) => {

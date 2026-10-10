@@ -18,8 +18,7 @@ function useTabsContext(): TabsContextValue {
 export const tabListClass =
   "scrollbar-thin -mb-px flex items-center gap-1 overflow-x-auto border-b";
 export const tabTriggerClass =
-  "touch-target relative inline-flex h-10 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap px-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-transparent disabled:pointer-events-none disabled:opacity-50";
-export const tabTriggerActiveClass = "text-foreground after:bg-primary";
+  "touch-target relative inline-flex h-10 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap px-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-transparent disabled:pointer-events-none disabled:opacity-50 aria-selected:text-foreground aria-selected:after:bg-primary data-[status=active]:text-foreground data-[status=active]:after:bg-primary";
 
 /** Minimal controlled tabs (button-based triggers, no extra deps). */
 export function Tabs({
@@ -86,7 +85,7 @@ export function TabsTrigger({
       disabled={disabled}
       title={title}
       onClick={() => setValue(value)}
-      className={cn(tabTriggerClass, selected && tabTriggerActiveClass, className)}
+      className={cn(tabTriggerClass, className)}
     >
       {children}
     </button>

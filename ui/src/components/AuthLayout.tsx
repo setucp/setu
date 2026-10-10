@@ -29,7 +29,7 @@ export function AuthLayout({
       <main className="relative flex flex-1 flex-col items-center px-4 pb-16 pt-2 sm:justify-center sm:pt-0">
         <div className={wide ? "w-full max-w-xl" : "w-full max-w-sm"}>
           <div className="mb-8 flex justify-center">
-            <Logo className="[&_img]:h-7" />
+            <Logo className="[&_img]:h-9" />
           </div>
           {children}
         </div>
