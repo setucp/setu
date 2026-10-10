@@ -388,6 +388,35 @@ async fn provision_refuses_manifest_without_server_arch() {
     assert_eq!(site.failed_step.as_deref(), Some("validate"));
 }
 
+/// The mirror image: an x86_64 server takes the x86_64 artefact of a
+/// dual-target manifest and not the aarch64 one (0.1.2 M5).
+#[tokio::test]
+async fn x86_64_server_gets_x86_64_binary_from_a_dual_target_manifest() {
+    let src = manifest_toml("0.1.0").replacen(
+        "[needs]",
+        "\"aarch64-linux\" = { url = \"https://example.com/hello-0.1.0-arm.tar.gz\", sha256 = \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\", exec = \"hello\" }\n\n[needs]",
+        1,
+    );
+    let (test_db, fx) = setup(&src).await;
+    exec(
+        &test_db,
+        "UPDATE servers SET arch = 'x86_64' WHERE id = $1",
+        &fx.server_id,
+    )
+    .await;
+    let agent = FakeAgent::new();
+    let (ctx, _logs) = ctx_with_logs(fx.db.clone(), &agent);
+
+    provision::run(&ctx, &fx.site_id)
+        .await
+        .expect("an x86_64 binary is declared");
+    let installs = agent.commands_of("install");
+    assert_eq!(installs.len(), 1, "{installs:?}");
+    let url = installs[0].to_string();
+    assert!(url.contains("hello-0.1.0.tar.gz"), "{url}");
+    assert!(!url.contains("hello-0.1.0-arm.tar.gz"), "{url}");
+}
+
 /// The same app with an aarch64-linux artefact provisions on an aarch64
 /// server, fetching that artefact and not the x86_64 one.
 #[tokio::test]
