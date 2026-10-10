@@ -290,8 +290,18 @@ fn is_non_public(ip: IpAddr) -> bool {
                 || (raw & 0xffc0_0000) == 0x6440_0000
         }
         IpAddr::V6(v6) => {
+            let seg = v6.segments();
             v6.is_loopback()
                 || v6.is_unspecified()
+                // 64:ff9b::/96 NAT64 and 64:ff9b:1::/48 local-use NAT64:
+                // a gateway forwards them to an embedded v4 address.
+                || (seg[0] == 0x0064 && seg[1] == 0xff9b && seg[2..6] == [0, 0, 0, 0])
+                || (seg[0] == 0x0064 && seg[1] == 0xff9b && seg[2] == 0x0001)
+                // 2002::/16 6to4: relays to the embedded v4 address.
+                || seg[0] == 0x2002
+                // ::a.b.c.d v4-compatible (deprecated, still routable by
+                // some stacks).
+                || (seg[..6] == [0, 0, 0, 0, 0, 0] && !v6.is_loopback())
                 || v6.is_multicast()
                 // 2001:db8::/32 documentation (`is_documentation` is nightly
                 // for v6).
@@ -309,15 +319,12 @@ fn is_non_public(ip: IpAddr) -> bool {
 /// must resolve to public addresses only, redirects disabled (a public URL
 /// must not bounce to an internal one), 10 s timeout, 1 MiB cap.
 ///
-/// Ruling (Task 7 review, SSRF residual TOCTOU): the `lookup_host` check
-/// below runs before `reqwest`'s own internal resolution, so a hostile DNS
-/// that flips answers between the two lookups could still steer the fetch
-/// to a private address. Pinning the fetch to the vetted IP literal would
-/// break https certificate verification (SNI/SAN mismatch against the IP),
-/// so the residual is accepted: EVERY resolved address must be public
-/// (not just the first), redirects stay disabled, and the timeout + size
-/// cap apply. Exploiting the remainder needs attacker-controlled DNS plus
-/// winning a race on every fetch.
+/// The fetch is pinned to the addresses that were vetted
+/// (`ClientBuilder::resolve_to_addrs`), so a hostile DNS that answers
+/// differently on a second lookup cannot steer it to a private address;
+/// the URL keeps its host name, so https still verifies the certificate
+/// against it (SNI). This closes the TOCTOU the Task 7 ruling accepted
+/// (M3, R138).
 async fn fetch_manifest_url(url_str: &str) -> Result<String, AppError> {
     let url =
         url::Url::parse(url_str).map_err(|_| AppError::validation("url is not a valid URL"))?;
@@ -326,11 +333,12 @@ async fn fetch_manifest_url(url_str: &str) -> Result<String, AppError> {
     }
     let host = url
         .host_str()
-        .ok_or_else(|| AppError::validation("url must have a host"))?;
+        .ok_or_else(|| AppError::validation("url must have a host"))?
+        .to_string();
     let port = url
         .port_or_known_default()
         .ok_or_else(|| AppError::validation("url must have a port"))?;
-    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
         .await
         .map_err(|_| AppError::validation("cannot resolve manifest host"))?
         .collect();
@@ -344,9 +352,16 @@ async fn fetch_manifest_url(url_str: &str) -> Result<String, AppError> {
             ));
         }
     }
+    fetch_pinned(url, &host, &addrs).await
+}
+
+/// GET `url` with `host` resolved only to `addrs` (no DNS of its own).
+async fn fetch_pinned(url: url::Url, host: &str, addrs: &[SocketAddr]) -> Result<String, AppError> {
     let client = reqwest::Client::builder()
         .timeout(FETCH_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .resolve_to_addrs(host, addrs)
         .build()
         .map_err(|e| {
             tracing::error!(error = %e, "manifest fetch client failed");
@@ -373,4 +388,59 @@ async fn fetch_manifest_url(url_str: &str) -> Result<String, AppError> {
         bytes.extend_from_slice(&chunk);
     }
     String::from_utf8(bytes).map_err(|_| AppError::validation("manifest is not valid UTF-8"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// v6 forms that reach a v4 address — NAT64 (`64:ff9b::/96`, and the
+    /// local-use `64:ff9b:1::/48`), 6to4 (`2002::/16`), v4-mapped and
+    /// v4-compatible — are refused like the private v4 ranges (M3).
+    #[test]
+    fn non_public_covers_nat64_6to4_and_mapped() {
+        for bad in [
+            "64:ff9b::a9fe:a9fe",
+            "64:ff9b::808:808",
+            "64:ff9b:1::1",
+            "2002:a9fe:a9fe::1",
+            "2002:808:808::1",
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+            "::ffff:10.0.0.1",
+            "::127.0.0.1",
+            "fe80::1",
+            "fc00::1",
+            "::1",
+        ] {
+            let ip: IpAddr = bad.parse().expect(bad);
+            assert!(is_non_public(ip), "{bad} must be refused");
+        }
+        for good in ["2606:4700::1111", "8.8.8.8", "::ffff:8.8.8.8"] {
+            let ip: IpAddr = good.parse().expect(good);
+            assert!(!is_non_public(ip), "{good} is public");
+        }
+    }
+
+    /// The fetch connects to the vetted addresses, not to a second DNS
+    /// answer: a name that does not resolve at all is fetched from the
+    /// address it was pinned to (and keeps its name for TLS/SNI).
+    #[tokio::test]
+    async fn fetch_uses_the_vetted_addresses() {
+        let app = axum::Router::new().route(
+            "/m.toml",
+            axum::routing::get(|| async { "name = \"pinned\"" }),
+        );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = l.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(l, app).await.expect("serve") });
+        let url = url::Url::parse(&format!("http://manifest.invalid:{}/m.toml", addr.port()))
+            .expect("url");
+        let body = fetch_pinned(url, "manifest.invalid", &[addr])
+            .await
+            .expect("pinned fetch");
+        assert_eq!(body, "name = \"pinned\"");
+    }
 }
