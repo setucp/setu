@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the Rust workspace tests against the throwaway Postgres container.
-#   CARGO_BUILD_JOBS=4 bash /home/gopal/Desktop/wp/setu-work-1/scripts/test.sh [-p crate] [test-name...]
+#   CARGO_BUILD_JOBS=4 bash scripts/test.sh [-p crate] [test-name...]
 # Ensures test-pg is up, exports SETU_TEST_PG_URL, keeps the container after the run.
 set -euo pipefail
 

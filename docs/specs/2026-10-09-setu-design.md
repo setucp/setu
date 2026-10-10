@@ -3,7 +3,7 @@
 Date: 2026-10-09 · **Revision 4 (as built, 2026-10-10)**: revision 3
 amended to match what shipped on branch `mvp`. Every passage that
 changed cites the ruling that changed it, e.g. "(R118)"; rulings are in
-`docs/plans/2026-10-09-setu-mvp.ledger.md`. Revision 3 followed two
+`the ledger (private planning repository)`. Revision 3 followed two
 independent review passes; their findings and resolutions, and the
 revision 3 → as-built record, are in
 `docs/specs/2026-10-09-setu-review.md` · Status: approved in

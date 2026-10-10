@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Golden check of the agent sudoers asset (spec §4) plus `visudo -cf`.
-#   bash /home/gopal/Desktop/wp/setu-work-1/scripts/check-sudoers.sh
+#   bash scripts/check-sudoers.sh
 # The asset is embedded in the agent (`install::SUDOERS_ASSET`) and
 # compared byte for byte in crates/agent/tests/golden.rs as well.
 set -euo pipefail

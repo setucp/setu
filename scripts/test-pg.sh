@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Throwaway Postgres for Setu tests.
-#   bash /home/gopal/Desktop/wp/setu-work-1/scripts/test-pg.sh up|down|status
+#   bash scripts/test-pg.sh up|down|status
 # Container `setu-test-pg`, port ${SETU_TEST_PG_PORT:-55440}. Never 5432.
 set -euo pipefail
 

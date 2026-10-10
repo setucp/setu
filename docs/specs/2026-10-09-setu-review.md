@@ -124,7 +124,7 @@ GitHub-runner behaviour with `--cgroupns=private`.
 Phase 1 was built on branch `mvp` against revision 3 (gap work list
 `docs/plans/2026-10-09-rev3-gap.md`, work sets WS1–WS12). Where the
 build had to depart from revision 3, the departure is a ruling in
-`docs/plans/2026-10-09-setu-mvp.ledger.md`; spec revision 4 folds them
+`the ledger (private planning repository)`; spec revision 4 folds them
 in and cites each one inline. The rulings that changed the spec text:
 
 | Section | Rulings | Change |

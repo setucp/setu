@@ -1,80 +1,25 @@
-# Setu — working rules for agents
+# Setu — notes for contributors and coding agents
 
-Setu is a control panel for single-binary web apps (and, from phase 2,
-container images): one binary `setu`: `setu serve` is the control plane, `setu agent run` the per-server agent, React
-UI embedded in the control-plane binary. Read `docs/HANDOFF.md`, then the spec
-`docs/specs/2026-10-09-setu-design.md` (revision 4, as built), the review
-record `docs/specs/2026-10-09-setu-review.md` and the plan
-`docs/plans/2026-10-09-setu-mvp.md` (revision 3) with its ledger.
-The spec is the authority; the plan argues from it; disagreements are
-rulings recorded in the plan's ledger.
+Setu is a control panel for single-binary web apps: one binary `setu`
+(`serve` = control plane with the embedded React UI, `agent` = per-server
+agent, `helper` = the privileged helper reached only through `sudo -n`).
+Design: `docs/specs/2026-10-09-setu-design.md`; review record:
+`docs/specs/2026-10-09-setu-review.md`; everything else under `docs/`.
 
-## Non-negotiable
-
-- No Claude co-author trailers, no `Claude-Session:` lines, no
-  "Generated with Claude Code" in commits or PRs.
-- Remote is github.com/vyasa-cms/setu (private). Never make it
-  public. Never force-push shared branches. Never bare `git stash`.
-- The host runs production services as this user: never `pkill` by
-  name; stop only processes whose PID you saved. Never connect to
-  Postgres on port 5432; tests use the throwaway container from
-  `scripts/test-pg.sh` on `SETU_TEST_PG_PORT` (default 55440).
-- One heavy cargo job at a time, `CARGO_BUILD_JOBS=4`. Check `df -h /`
-  before long builds (`target/` has filled the disk before).
-- Absolute paths in every shell command; parallel calls share a cwd.
-- Never print secrets (tokens, env values, keys). Structs holding them
-  get a manual `Debug` that redacts. Nothing path-like, no mode and no
-  owner ever crosses the sudo boundary: the helper takes a short id and
-  typed JSON only, re-validates version/exec/args/dirs itself, streams
-  archives over stdin/stdout, and `--root` exists only under the
-  `test-root` feature and never under sudo (spec §4). Passwords never
-  on argv.
-- UI codegen (`pnpm -C ui gen:api`) reads `openapi.json` from the repo,
-  never a running server.
-
-## Workflow
-
-- superpowers skills: brainstorming → writing-plans →
-  subagent-driven-development (or executing-plans) → requesting-code-
-  review → finishing-a-development-branch. TDD on every task: a test you
-  watched fail, then the code.
-- Work in a worktree (`../setu-work-<n>`), one branch per plan; PRs
-  against `origin/main`.
-- Repo agents in `.claude/agents/` (`rust-implementer`, `ui-implementer`,
-  `code-reviewer`, `e2e-verifier`) and skills in `.claude/skills/`
-  (`setu-testing`, `setu-e2e`, `setu-conventions`) — use them.
-- Every task ends green:
-  `cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && scripts/test.sh`,
-  plus `pnpm -C ui lint && pnpm -C ui typecheck && pnpm -C ui test` when `ui/` changed.
-- Migrations are forward-only sqlx files in `crates/db/migrations`;
-  `.sqlx/` offline data is regenerated with `scripts/sqlx-prepare.sh`.
-
-## Layout
-
-```
-crates/common    config (listen, trusted_proxies), seal (v1:/plain:, KeyVault scheme), ids, domain,
-                 validate (shared regexes), error (envelope + codes)
-crates/manifest  schema, validate (+ corpus in tests/corpus), resolve (env resolution and merge)
-crates/proto     agent commands, SiteSpec, results, heartbeat, join, inventory (one lib.rs)
-crates/db        repo/{apps,audit,backups,commands,jobs,metrics,operators,plans,servers,sessions,
-                 settings,sites} + migrations/0001_init.sql
-crates/testkit   TestDb (throwaway database per test)
-crates/jobs      agent (AgentClient, DbAgentClient, FakeAgent in `agent::testing`), runner, scheduler, clock,
-                 provision, update, backup, restore, delete, delete_backup, env_update, lifecycle
-crates/api       the one binary `setu` (main.rs: serve | migrate | operator | backup | setting |
-                 openapi | agent | helper); listen (unix/TCP, Peer), auth/{session,client_ip},
-                 rest/{setup,auth,operators,servers,apps,plans,sites,backups,jobs,agent,docs},
-                 notifier (LISTEN/NOTIFY), embed (UI), cli, state, testing (TestServer)
-crates/agent     (lib; `setu agent …`, `setu helper …`) helper/{cli,validate,fs,site,unit,env,install,
-                 backup,remove,users,ownership}, helper_client, runtime/{mod (Runtime trait),native},
-                 commands, dispatch, run_loop, heartbeat, reconcile, state, caddy, postgres, journal,
-                 backup, paths, metrics, netstat, download, install, install_system, doctor, config, cli;
-                 assets/ (golden units, sudoers, nftables, Caddy base and drop-in)
-
-apps/hello       tiny Axum app used by the e2e (manifest.tmpl.toml)
-ui/              Vite + React + TanStack + Tailwind + shadcn/ui
-scripts/         test.sh, test-pg.sh, sqlx-prepare.sh, build-ui.sh, check-sudoers.sh, check-links.sh,
-                 e2e.sh (+ e2e/Dockerfile, e2e/e2e-init), test-install.sh, package-release.sh,
-                 check-release-version.sh, release-notes.sh
-install.sh       the single-node installer (attached to each release)
-```
+- Gate before every commit: `cargo fmt --check && cargo clippy
+  --workspace --all-targets --all-features -- -D warnings && bash
+  scripts/test.sh`, plus `pnpm -C ui lint && pnpm -C ui typecheck && pnpm
+  -C ui test` when `ui/` changed. `scripts/test.sh` starts a throwaway
+  Postgres container (`SETU_TEST_PG_PORT`, default 55440); never point
+  tests at a real database.
+- Security invariants (see `docs/SECURITY.md`): nothing path-like, no
+  mode and no owner crosses the sudo boundary; the helper takes a short
+  id and typed JSON only and re-validates everything; secrets never on
+  argv, in logs or in `Debug`; every agent command is idempotent.
+- Migrations are forward-only (`crates/db/migrations`); regenerate
+  `.sqlx/` with `scripts/sqlx-prepare.sh`. UI types come from the
+  checked-in `openapi.json` (`pnpm -C ui gen:api`), never a server.
+- End-to-end proof: `scripts/e2e.sh` (14 assertions in a systemd
+  container) and `scripts/test-install.sh` (the installer); see
+  `docs/E2E.md`.
+- No AI co-author trailers in commits.

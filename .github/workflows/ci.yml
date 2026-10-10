@@ -17,6 +17,7 @@ jobs:
         with:
           toolchain: "1.99"
           components: rustfmt
+      - run: bash scripts/check-public-tree.sh
       - run: cargo fmt --check
 
   clippy:

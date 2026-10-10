@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Regenerate sqlx offline query data (.sqlx/) at the workspace root.
 #
-#   CARGO_BUILD_JOBS=4 bash /home/gopal/Desktop/wp/setu-work-1/scripts/sqlx-prepare.sh
+#   CARGO_BUILD_JOBS=4 bash scripts/sqlx-prepare.sh
 #
 # Uses the throwaway test Postgres (never 5432): creates a scratch
 # database, runs crates/db/migrations on it, then `cargo sqlx prepare`
