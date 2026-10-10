@@ -35,7 +35,7 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
 #[openapi(
     info(
         title = "Setu API",
-        version = "0.1.0",
+        version = "0.1.1",
         description = "Control-plane REST API for single-binary web apps"
     ),
     paths(

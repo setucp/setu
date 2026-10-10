@@ -3,7 +3,7 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
-## 0.1.1 — Unreleased
+## 0.1.1 — 2026-10-10
 
 Follow-ups from the first release (spec
 `docs/specs/2026-10-10-setu-0.1.1-design.md`, issues #2–#10).

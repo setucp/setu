@@ -30,6 +30,11 @@ user-visible change; the release notes are cut from it.
    - creates the GitHub release with the changelog section as notes
      and those three files attached.
 
+6. After the release workflow: `SETU_VERIFY_DIR=<dir> bash
+   scripts/verify-release.sh <ver>` installs the published release in a
+   fresh container, provisions the Miniflux and hello-axum manifests and
+   must print `VERIFY PASS` (the 0.1.1 acceptance check).
+
 `install.sh` downloads `releases/download/v<ver>/<archive>` and
 `SHA256SUMS` (the latest release when `--version` is absent) and
 refuses an archive whose line in `SHA256SUMS` does not match.

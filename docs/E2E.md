@@ -133,3 +133,14 @@ and the server is `online` within 60 s; `setu agent doctor` exit 0;
 `install.sh` keeps `setu.toml` and does not restart `setu.service`.
 `SETU_INSTALL_KEEP=1` leaves the box up; diagnostics land in
 `$SETU_INSTALL_DIR/diag-NN-<name>.txt`.
+
+## Verifying a published release
+
+`scripts/verify-release.sh <version>` is the public-release check: a
+fresh systemd container (the same image and host rules as `e2e.sh`)
+installs `v<version>` from github.com/setucp/setu, creates the owner,
+joins the local agent, publishes the Miniflux and hello-axum manifests
+from github.com/setucp/manifests and provisions both. Nine TAP
+assertions end in `VERIFY PASS` or `VERIFY FAIL`. It needs outbound
+HTTPS from the container; `SETU_VERIFY_KEEP=1` keeps the container for
+inspection.
