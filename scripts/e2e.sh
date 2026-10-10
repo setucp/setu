@@ -67,12 +67,16 @@ why() { WHY="$*"; }
 # run_test <name> <function>: one TAP line; on failure the reason and a
 # diagnostic dump. Assertion functions return non-zero with `why` set.
 run_test() {
-  local name=$1 fn=$2
+  local name=$1 fn=$2 rc=0
   N=$((N + 1))
   WHY=""
   local t0=$SECONDS
-  if "$fn"; then
+  "$fn" || rc=$?
+  if [ "$rc" = 0 ]; then
     echo "ok $N - $name"
+  elif [ "$rc" = 77 ]; then
+    # Skipped (TAP): the assertion does not apply to this target.
+    echo "ok $N - $name # SKIP ${SKIP_WHY:-not applicable}"
   else
     echo "not ok $N - $name"
     echo "#   reason: ${WHY:-unknown}"
@@ -663,8 +667,18 @@ t_delete_site() {
   fi
 }
 
+# Vyasa 0.2.0 ships no aarch64 release (0.1.2 I2): the aarch64 run skips
+# the Vyasa assertions instead of failing them.
+vyasa_applies() {
+  [ "$ARCH_KEY" != aarch64-linux ]
+}
+
 t_vyasa_0_2_0() {
   local r t0 secs st
+  if ! vyasa_applies; then
+    SKIP_WHY="no aarch64 Vyasa release"
+    return 77
+  fi
   r=$(jq -n --rawfile t "$ROOT/crates/manifest/tests/corpus/vyasa_0_2_0.toml" '{toml: $t}' | api POST /apps)
   [ "$(echo "$r" | jq -r '.version.version // empty')" = 0.2.0 ] || { why "POST /apps vyasa: $r"; return 1; }
   t0=$SECONDS
@@ -694,7 +708,7 @@ t_vyasa_0_2_0() {
 
 both_serve() {
   [ "$(tls_get two.test /)" = "hello from e2e v0.1.0" ] &&
-    [ "$(tls_code vyasa.test /readyz)" = 200 ]
+    { ! vyasa_applies || [ "$(tls_code vyasa.test /readyz)" = 200 ]; }
 }
 
 t_survives_container_restart() {
