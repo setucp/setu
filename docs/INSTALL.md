@@ -119,9 +119,9 @@ the first line of stdin.
 
 Re-run `install.sh --version <new> …` with the same flags: it verifies
 the new archive, replaces the binary and restarts `setu.service`
-(migrations run on boot). It does not restart the local agent: run
-`systemctl restart setu-agent` afterwards, and upgrade other servers'
-binaries by hand ([OPERATIONS.md](OPERATIONS.md#upgrading)). Back up
+(migrations run on boot) and, when the local agent is installed,
+`setu-agent.service` (only when the binary changed; R139). Upgrade other
+servers' binaries by hand ([OPERATIONS.md](OPERATIONS.md#upgrading)). Back up
 first (`setu backup`); migrations are forward-only. Site updates are
 separate: each site moves to a newer app version from the UI with
 automatic rollback.

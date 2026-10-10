@@ -135,12 +135,12 @@ the new version:
 
 ```sh
 bash install.sh --panel-host setu.example.com --version 0.1.1
-systemctl restart setu-agent
 ```
 
 The installer verifies the archive, replaces `/opt/setu/setu`, and
-restarts `setu.service` (migrations run on boot). It does not restart
-the agent, which keeps running the old binary until restarted. On other
+restarts `setu.service` (migrations run on boot) and the local
+`setu-agent.service` when it is installed — only when the binary
+changed, so a re-run of the same version restarts nothing (R139). On other
 servers, replace `/opt/setu/setu` with the new binary from the same
 release (root:root 0755) and `systemctl restart setu-agent`. Site apps
 are updated separately, per site, from the UI.

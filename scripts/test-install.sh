@@ -23,7 +23,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-SETU_INSTALL_DIR=${SETU_INSTALL_DIR:-/tmp/claude-1000/-home-gopal-Desktop-wp/a208dcfa-eb02-4ac4-8268-ba82cf4b2d26/scratchpad/install-test}
+SETU_INSTALL_DIR=${SETU_INSTALL_DIR:-${TMPDIR:-/tmp}/setu-install}
 mkdir -p "$SETU_INSTALL_DIR"
 SETU_INSTALL_DIR=$(cd "$SETU_INSTALL_DIR" && pwd)
 
@@ -334,8 +334,9 @@ t_self_backup() {
 }
 
 t_rerun_is_noop() {
-  local pid_before pid_after sum
+  local pid_before pid_after agent_before agent_after sum
   pid_before=$(cx systemctl show -p MainPID --value setu)
+  agent_before=$(cx systemctl show -p MainPID --value setu-agent)
   if ! timeout 900 docker exec "$CTN" bash /root/install.sh "${INSTALL_ARGS[@]}" \
     >"$SETU_INSTALL_DIR/install-2.log" 2>&1; then
     why "second install.sh failed: $(tail -3 "$SETU_INSTALL_DIR/install-2.log" | tr '\n' ' ')"
@@ -347,6 +348,9 @@ t_rerun_is_noop() {
   [ "$sum" = "$TOML_SUM" ] || { why "setu.toml changed"; return 1; }
   pid_after=$(cx systemctl show -p MainPID --value setu)
   [ "$pid_before" = "$pid_after" ] || { why "setu.service restarted ($pid_before → $pid_after)"; return 1; }
+  agent_after=$(cx systemctl show -p MainPID --value setu-agent)
+  [ "$agent_before" = "$agent_after" ] ||
+    { why "setu-agent.service restarted with the binary unchanged ($agent_before → $agent_after)"; return 1; }
   grep -q "Setup is complete" "$SETU_INSTALL_DIR/install-2.log" ||
     { why "second run offered setup again"; return 1; }
   server_online || { why "server not online after the second run"; return 1; }

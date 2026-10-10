@@ -6,9 +6,11 @@
 //! sessions.
 //!
 //! Idempotent across restarts: a site is due once per local day, and is
-//! skipped when its newest `scheduled` backup was taken on or after that
-//! day's due time or when it already has an active job; a backup gets a
-//! `delete_backup` job only when none is active for it.
+//! skipped when its newest `scheduled` backup was taken at or after that
+//! day's due time − 12 h (so a backup taken just before the jittered due
+//! time still counts) or when it already has an active job; a backup gets
+//! a `delete_backup` job only when none is active for it, on its live
+//! site (a busy site's waits for a later tick, R136).
 
 use std::sync::Arc;
 use std::time::Duration;

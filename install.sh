@@ -255,6 +255,12 @@ systemctl enable setu.service >/dev/null 2>&1
 if [[ "$BIN_CHANGED" == 1 || "$UNIT_CHANGED" == 1 ]] || ! systemctl is-active --quiet setu.service; then
     systemctl restart setu.service
 fi
+# The local agent runs the same binary: an upgrade restarts it too (only
+# when the binary changed and the agent was installed, R139).
+if [[ "$BIN_CHANGED" == 1 ]] && systemctl is-enabled --quiet setu-agent.service 2>/dev/null; then
+    say "Restarting setu-agent.service on the new binary"
+    systemctl restart setu-agent.service
+fi
 
 say "Waiting for ${PUBLIC_URL}/healthz through Caddy"
 healthy=0

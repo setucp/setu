@@ -24,7 +24,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-SETU_E2E_DIR=${SETU_E2E_DIR:-/tmp/claude-1000/-home-gopal-Desktop-wp/a208dcfa-eb02-4ac4-8268-ba82cf4b2d26/scratchpad/e2e}
+SETU_E2E_DIR=${SETU_E2E_DIR:-${TMPDIR:-/tmp}/setu-e2e}
 mkdir -p "$SETU_E2E_DIR"
 SETU_E2E_DIR=$(cd "$SETU_E2E_DIR" && pwd)
 
