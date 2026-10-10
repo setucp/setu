@@ -186,9 +186,11 @@ pub fn caddy_base_config(
     Ok(config)
 }
 
-/// `base` with the routes of the running config kept: every current
-/// route whose `@id` the base does not define, in order, then the base's
-/// own routes (the panel route, which replaces an older one).
+/// `base` with the routes of the running config kept: the base's own
+/// routes first (the panel route, which replaces an older one), then a
+/// running `setu-panel` the base does not define, then every other
+/// current route whose `@id` the base does not define, in order. Caddy
+/// routes are first-match, so the panel always precedes the sites (R130).
 pub fn merge_routes(
     mut base: serde_json::Value,
     current: Vec<serde_json::Value>,
@@ -199,15 +201,17 @@ pub fn merge_routes(
         .iter()
         .filter_map(|r| r.get("@id").and_then(|v| v.as_str()))
         .collect();
-    let mut merged: Vec<serde_json::Value> = current
+    let (panel, others): (Vec<serde_json::Value>, Vec<serde_json::Value>) = current
         .into_iter()
         .filter(|r| {
             r.get("@id")
                 .and_then(|v| v.as_str())
                 .is_none_or(|id| !base_ids.contains(&id))
         })
-        .collect();
-    merged.extend(base_routes.iter().cloned());
+        .partition(|r| r.get("@id").and_then(|v| v.as_str()) == Some(crate::caddy::PANEL_ROUTE_ID));
+    let mut merged = base_routes.clone();
+    merged.extend(panel);
+    merged.extend(others);
     *routes = serde_json::Value::Array(merged);
     base
 }
@@ -397,8 +401,46 @@ mod tests {
             .as_array()
             .expect("routes");
         assert_eq!(routes.len(), 2);
-        assert_eq!(routes[0], site);
-        assert_eq!(routes[1]["match"][0]["host"][0], "new.example.test");
+        assert_eq!(routes[0]["match"][0]["host"][0], "new.example.test");
+        assert_eq!(routes[1], site);
+    }
+
+    /// Caddy routes are first-match: the panel route must precede every
+    /// site route so no site can shadow the panel's host (R130).
+    #[test]
+    fn install_system_merge_keeps_panel_route_first() {
+        let panel = PanelRoute {
+            host: "panel.example.test".into(),
+            upstream: "unix//run/setu/http.sock".into(),
+        };
+        let site = route_json("setu-site-abcd1234", "a.test", "127.0.0.1:20001").expect("site");
+        let site2 = route_json("setu-site-efgh5678", "b.test", "127.0.0.1:20002").expect("site");
+        let old_panel = route_json(
+            PANEL_ROUTE_ID,
+            "old.example.test",
+            "unix//run/setu/http.sock",
+        )
+        .expect("p");
+
+        let base = caddy_base_config(false, Some(&panel)).expect("base");
+        let merged = merge_routes(base, vec![site.clone(), old_panel.clone(), site2.clone()]);
+        let routes = merged["apps"]["http"]["servers"]["setu"]["routes"]
+            .as_array()
+            .expect("routes")
+            .clone();
+        assert_eq!(routes.len(), 3);
+        assert_eq!(routes[0]["@id"], PANEL_ROUTE_ID);
+        assert_eq!(routes[0]["match"][0]["host"][0], "panel.example.test");
+        assert_eq!(routes[1], site);
+        assert_eq!(routes[2], site2);
+
+        // Without a panel in the base, a running panel route still goes first.
+        let base = caddy_base_config(false, None).expect("base");
+        let merged = merge_routes(base, vec![site.clone(), old_panel.clone()]);
+        assert_eq!(
+            merged["apps"]["http"]["servers"]["setu"]["routes"],
+            serde_json::json!([old_panel, site])
+        );
     }
 
     #[test]
