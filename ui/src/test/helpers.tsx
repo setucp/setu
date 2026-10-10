@@ -171,3 +171,32 @@ export const planFixture = {
   created_at: NOW,
   updated_at: NOW,
 };
+
+/**
+ * Replaces `window.matchMedia` so that queries in `matching` match.
+ * Returns a restore function.
+ */
+export function mockMatchMedia(matching: string[]): () => void {
+  const original = window.matchMedia;
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    configurable: true,
+    value: (query: string) => ({
+      matches: matching.includes(query),
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }),
+  });
+  return () => {
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      configurable: true,
+      value: original,
+    });
+  };
+}

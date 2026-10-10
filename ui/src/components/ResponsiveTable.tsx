@@ -18,7 +18,7 @@ export interface Column<T> {
 
 /**
  * One data set, two layouts: a table from 768 px up, a list of cards on
- * phones. Each card shows `cardTitle` (or the first column) prominently,
+ * phones. Each card shows `cardTitle` (or else the first column) as its title,
  * the remaining columns as label/value pairs, and `cardActions` below.
  */
 export function ResponsiveTable<T>({
@@ -44,7 +44,8 @@ export function ResponsiveTable<T>({
   const phone = useIsPhone();
 
   if (phone) {
-    const body = cardTitle === undefined ? columns.slice(1) : columns;
+    // The first column is the card's title (or `cardTitle` replaces it).
+    const body = columns.slice(1);
     const title = cardTitle ?? ((row: T) => columns[0]?.cell(row));
     return (
       <ul aria-label={label} className="flex flex-col gap-3">

@@ -47,7 +47,7 @@ describe("env", () => {
     await screen.findByText("VYASA_ADMIN_PASSWORD");
 
     // Every secret is masked; plain values show.
-    expect(screen.getAllByText("[MASKED_VALUE]")).toHaveLength(2);
+    expect(screen.getAllByText("Masked value")).toHaveLength(2);
     expect(screen.getByText("20001")).toBeInTheDocument();
     expect(screen.queryByText(SECRET)).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /reveal/i })).toHaveLength(2);
@@ -82,7 +82,7 @@ describe("env", () => {
     await user.click(within(dialog).getByRole("button", { name: /^done$/i }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.queryByText(SECRET)).not.toBeInTheDocument();
-    expect(screen.getAllByText("[MASKED_VALUE]")).toHaveLength(2);
+    expect(screen.getAllByText("Masked value")).toHaveLength(2);
   }, 20000);
 
   it("env save puts the edited values and reports the restart job", async () => {

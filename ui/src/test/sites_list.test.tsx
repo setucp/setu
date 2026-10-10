@@ -67,7 +67,7 @@ describe("sites list", () => {
     const row = screen.getByRole("row", { name: /blog\.example\.com/i });
     expect(within(row).getByText("blog")).toBeInTheDocument();
     expect(within(row).getByText("hello 0.1.0")).toBeInTheDocument();
-    const link = within(row).getByRole("link", { name: /blog/i });
+    const link = within(row).getByRole("link", { name: "blog" });
     expect(link).toHaveAttribute("href", "/sites/site1");
     expect(within(row).getByText("running")).toBeInTheDocument();
     expect(within(row).getByText("512M")).toBeInTheDocument();

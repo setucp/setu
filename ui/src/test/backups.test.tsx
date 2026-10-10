@@ -52,7 +52,8 @@ describe("backups", () => {
     const row = await screen.findByRole("row", { name: /manual/ });
     expect(within(row).getByText("2.0 MiB")).toBeInTheDocument();
     expect(within(row).getByText("completed")).toBeInTheDocument();
-    expect(within(row).getByText(new Date("2026-10-05T00:00:00Z").toLocaleString())).toBeInTheDocument();
+    // Relative time on screen, the exact time on hover.
+    expect(within(row).getByTitle(new Date("2026-10-05T00:00:00Z").toLocaleString())).toBeInTheDocument();
     const failed = screen.getByRole("row", { name: /pre_update/ });
     expect(within(failed).getByText("failed")).toBeInTheDocument();
     // Only a completed backup can be restored.
