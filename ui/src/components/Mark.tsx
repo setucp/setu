@@ -21,18 +21,13 @@ export function Mark({ className, title }: { className?: string; title?: string 
   );
 }
 
-/** Full logo lockup; swaps to the white variant in dark mode via CSS. */
+/** Full logo lockup: the inline mark plus the wordmark as text, so it
+ * follows the theme (currentColor) and uses the page's Inter webfont. */
 export function Logo({ className }: { className?: string }) {
   return (
-    <span className={cn("inline-flex items-center", className)}>
-      <img src="/logo.svg" alt="Setu" width={98} height={24} className="h-6 w-auto dark:hidden" />
-      <img
-        src="/logo-dark.svg"
-        alt="Setu"
-        width={98}
-        height={24}
-        className="hidden h-6 w-auto dark:block"
-      />
+    <span className={cn("inline-flex items-center gap-2", className)} aria-label="Setu" role="img">
+      <Mark className="size-7 shrink-0" />
+      <span className="text-[1.15rem] font-semibold tracking-[-0.03em] text-foreground">Setu</span>
     </span>
   );
 }
