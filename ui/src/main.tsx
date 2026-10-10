@@ -4,6 +4,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { routeTree } from "./routeTree.gen";
 import { api, ApiError } from "@/lib/client";
+import { NotFound, RouteError } from "@/components/RouteStates";
+import { Mark } from "@/components/Mark";
 import "@/styles/globals.css";
 
 const queryClient = new QueryClient({
@@ -32,6 +34,8 @@ const router = createRouter({
   routeTree,
   context: { queryClient },
   defaultPreload: "intent",
+  defaultNotFoundComponent: NotFound,
+  defaultErrorComponent: RouteError,
 });
 
 declare module "@tanstack/react-router" {
@@ -65,7 +69,8 @@ function App() {
 
   if (!ready) {
     return (
-      <div className="flex min-h-dvh items-center justify-center">
+      <div role="status" className="flex min-h-dvh flex-col items-center justify-center gap-3">
+        <Mark className="size-10 motion-safe:animate-pulse" />
         <span className="text-sm text-muted-foreground">Loading Setu…</span>
       </div>
     );

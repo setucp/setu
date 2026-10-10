@@ -315,3 +315,17 @@ export function useSetupStatus() {
 export function useAudit() {
   return useQuery({ queryKey: ["audit"], queryFn: () => api.listAudit() });
 }
+
+/** Control-plane liveness (`GET /healthz`), polled for the top-bar pill. */
+export function useHealth() {
+  return useQuery({
+    queryKey: ["healthz"],
+    queryFn: async (): Promise<{ status: string }> => {
+      const response = await fetch("/healthz", { credentials: "same-origin" });
+      if (!response.ok) throw new Error(`healthz ${response.status}`);
+      return (await response.json()) as { status: string };
+    },
+    refetchInterval: 30_000,
+    retry: false,
+  });
+}
