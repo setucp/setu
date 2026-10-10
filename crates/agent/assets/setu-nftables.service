@@ -1,0 +1,13 @@
+[Unit]
+Description=Setu firewall table (inet setu)
+After=nftables.service
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/setu/nftables.conf
+
+[Install]
+WantedBy=multi-user.target

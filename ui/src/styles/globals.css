@@ -1,0 +1,263 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-primary-subtle: hsl(var(--primary-subtle));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-destructive-subtle: hsl(var(--destructive-subtle));
+
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+  --color-success-subtle: hsl(var(--success-subtle));
+
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-warning-subtle: hsl(var(--warning-subtle));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif;
+  --font-mono:
+    ui-monospace, SF Mono, JetBrains Mono, Menlo, Consolas, monospace;
+
+  --animate-fade-in: fade-in 0.15s ease-out;
+  --animate-scale-in: scale-in 0.15s ease-out;
+  --animate-slide-in-left: slide-in-left 0.2s ease-out;
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes scale-in {
+    from {
+      opacity: 0;
+      transform: scale(0.97);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @keyframes slide-in-left {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+  @keyframes shimmer {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+}
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+}
+
+@utility touch-target {
+  @media (pointer: coarse) {
+    min-height: 44px;
+  }
+}
+
+@utility scrollbar-thin {
+  /* Comfortable touch target on coarse pointers without bloating desktop. */
+  scrollbar-width: thin;
+  &::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 4px;
+  }
+}
+
+/*
+ * Palette: iron-oxide primary on neutral grounds.
+ *
+ * Two constraints shape the choices here.
+ *
+ * 1. The primary is a vermilion red (hue 6-8, the brand: warm enough that the
+ *    lighter dark-mode value stays red rather than drifting pink), and red is also the universal
+ *    destructive signal. Destructive therefore sits at hue ~352, a cooler
+ *    crimson, darker in light mode and paired with the warning icon, so
+ *    Publish and Delete never read as the same button.
+ * 2. The usual warning amber (~38) reads close to a red primary, so warning
+ *    stays a distinctly yellow gold (~45).
+ *
+ * Dark mode is true black — #000, not a tinted near-black — with strictly
+ * neutral greys (0% saturation). Structure comes from borders rather than
+ * from lifting the background.
+ */
+@layer base {
+  :root {
+    /* Warm-neutral grounds, so the light theme agrees with the rust accent
+       instead of fighting it with a blue-grey. */
+    --background: 30 25% 99%;
+    --foreground: 24 14% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 24 14% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 24 14% 10%;
+
+    --primary: 6 72% 46%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 30 16% 95%;
+    --secondary-foreground: 24 12% 24%;
+
+    --muted: 30 16% 95%;
+    --muted-foreground: 25 8% 44%;
+
+    --accent: 28 20% 93%;
+    --accent-foreground: 24 14% 14%;
+
+    --destructive: 352 72% 42%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 152 55% 30%;
+    --success-foreground: 0 0% 100%;
+    --warning: 45 93% 33%;
+    --warning-foreground: 0 0% 100%;
+
+    /* Tinted surfaces for chips and callouts. */
+    --primary-subtle: 6 80% 95%;
+    --success-subtle: 150 42% 93%;
+    --warning-subtle: 46 80% 91%;
+    --destructive-subtle: 6 72% 95%;
+
+    --border: 28 15% 89%;
+    --input: 28 14% 85%;
+    --ring: 6 72% 46%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    /* True black. Cards and popovers lift by a few percent so panels remain
+       readable as distinct surfaces; the greys carry no hue at all. */
+    --background: 0 0% 0%;
+    --foreground: 0 0% 93%;
+    --card: 0 0% 5%;
+    --card-foreground: 0 0% 93%;
+    --popover: 0 0% 7%;
+    --popover-foreground: 0 0% 93%;
+
+    --primary: 8 80% 60%;
+    --primary-foreground: 0 40% 8%;
+
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 88%;
+
+    --muted: 0 0% 9%;
+    --muted-foreground: 0 0% 62%;
+
+    --accent: 0 0% 14%;
+    --accent-foreground: 0 0% 93%;
+
+    --destructive: 4 85% 72%;
+    --destructive-foreground: 0 0% 8%;
+
+    --success: 152 50% 55%;
+    --success-foreground: 0 0% 8%;
+    --warning: 45 85% 60%;
+    --warning-foreground: 0 0% 8%;
+
+    --primary-subtle: 8 40% 13%;
+    --success-subtle: 155 32% 11%;
+    --warning-subtle: 44 34% 12%;
+    --destructive-subtle: 6 40% 13%;
+
+    --border: 0 0% 16%;
+    --input: 0 0% 22%;
+    --ring: 8 80% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    /* Prevent iOS auto-zoom on focus without shrinking desktop type. */
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    /* No page-level sideways scroll on narrow screens; wide content scrolls
+       inside its own container instead. */
+    overflow-x: hidden;
+  }
+
+  /* Visible keyboard focus everywhere, including custom controls. */
+  :focus-visible {
+    @apply outline-hidden ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+
+  ::selection {
+    background: hsl(var(--primary-subtle));
+    color: hsl(var(--foreground));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

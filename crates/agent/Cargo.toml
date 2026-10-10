@@ -1,0 +1,52 @@
+[package]
+name = "setu-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# `setu helper --root <dir>` and `SudoHelper::with_program`: tests only,
+# never in release builds; `--root` is refused when `SUDO_UID` is set.
+test-root = []
+# `SETU_AGENT_TEST_EXIT_AFTER=<kind>`: exit after persisting a result of
+# that kind, before posting it (the e2e only; never in release builds).
+e2e-hooks = []
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+reqwest.workspace = true
+clap.workspace = true
+tempfile.workspace = true
+chrono.workspace = true
+async-trait.workspace = true
+sha2.workspace = true
+hex.workspace = true
+tar.workspace = true
+flate2.workspace = true
+toml.workspace = true
+futures.workspace = true
+zstd.workspace = true
+nix.workspace = true
+url.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+setu-common = { path = "../common" }
+setu-proto = { path = "../proto" }
+
+[dev-dependencies]
+# Self dev-dependency: integration tests drive the `--root` CLI path.
+setu-agent = { path = ".", features = ["test-root"] }
+axum.workspace = true
+tokio.workspace = true
+tempfile.workspace = true

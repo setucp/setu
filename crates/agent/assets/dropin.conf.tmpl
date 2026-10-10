@@ -1,0 +1,6 @@
+[Service]
+ExecStart=
+ExecStart=/srv/setu/sites/{short}/bin/current/{exec} {args}
+WorkingDirectory={workdir}
+MemoryMax={memory_mb}M
+CPUQuota={cpu_percent}%

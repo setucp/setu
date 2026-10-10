@@ -1,0 +1,15 @@
+[Unit]
+Description=Setu server agent
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=setu
+Group=setu
+ExecStart=/opt/setu/setu agent run
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

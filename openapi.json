@@ -1,0 +1,4990 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Setu API",
+    "description": "Control-plane REST API for single-binary web apps",
+    "license": {
+      "name": "AGPL-3.0-only",
+      "identifier": "AGPL-3.0-only"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/agent/v1/commands": {
+      "get": {
+        "tags": [
+          "super::agent"
+        ],
+        "summary": "The next undelivered command for this server (200), or 204 when none\narrives within the wait window. The poll subscribes to the\n[`crate::notifier::Notifier`] BEFORE it checks the queue, then sleeps\nuntil a `setu_commands` notification for this server (or the 5 s\nfallback tick) and checks again, so an enqueue racing the check is\nnever missed. Delivery marks the command delivered; a new agent\n`boot_id` requeues delivered commands (spec §5). More than 600 polls\nper server per minute is 429.",
+        "operationId": "commands",
+        "parameters": [
+          {
+            "name": "wait",
+            "in": "query",
+            "description": "Long-poll ceiling in seconds, default/cap 30",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Next undelivered command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandEnvelope"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No command within the wait window"
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent/v1/commands/{id}/result": {
+      "post": {
+        "tags": [
+          "super::agent"
+        ],
+        "summary": "Report a command result; unblocks the `DbAgentClient::call` waiting on\nit. Scoped to the authed server: a command owned by another server is\n404, so agents cannot complete each other's commands. Unknown ids are\n404; a body id that disagrees with the path is a 400 (the path is\nauthoritative). Repeat posts are an ok idempotent no-op (first writer\nwins, no overwrite — see `complete_for`).",
+        "operationId": "result",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Command id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandResult"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Result recorded"
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent/v1/heartbeat": {
+      "post": {
+        "tags": [
+          "super::agent"
+        ],
+        "summary": "Heartbeat: marks the server `online` and stores the metrics batch\n(the repo upserts both atomically).",
+        "operationId": "heartbeat",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Heartbeat"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Heartbeat recorded"
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent/v1/join": {
+      "post": {
+        "tags": [
+          "super::agent"
+        ],
+        "summary": "Redeem a single-use join token (`JoinRequest` → `JoinResponse`). A\nspent, unknown or expired token is 401 from the repo; the join marks\nthe server `online`.",
+        "operationId": "join",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/apps": {
+      "get": {
+        "tags": [
+          "super::apps"
+        ],
+        "summary": "List catalogue apps (viewer and above).",
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppListOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "super::apps"
+        ],
+        "summary": "Publish a version from pasted TOML or a URL (operator and above).",
+        "operationId": "publish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/apps/validate": {
+      "post": {
+        "tags": [
+          "super::apps"
+        ],
+        "summary": "Validate pasted TOML without storing it (operator and above). Always\n200: validity is in the body (`ok` + `errors`).",
+        "operationId": "validate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/apps/{id}/versions": {
+      "get": {
+        "tags": [
+          "super::apps"
+        ],
+        "summary": "One app's versions, newest first (viewer and above).",
+        "operationId": "versions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "App id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppVersionListOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/audit": {
+      "get": {
+        "tags": [
+          "super::jobs"
+        ],
+        "summary": "Recent audit rows, newest first (viewer and above — the authz matrix\ngrants viewers every GET).",
+        "operationId": "audit_list",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max rows, default 100, cap 500",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditListOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "super::auth"
+        ],
+        "summary": "Log in: verify the argon2id hash, start a fresh session (a new random\ncookie, never the one the request carried: fixation guard) and return\nthe operator. Failures count per client IP (spec §7, behind Caddy or a\ntrusted proxy the forwarded address): 10 within 15 minutes → 429.",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "super::auth"
+        ],
+        "summary": "Log out: destroy the session row and clear the cookie. Anonymous\ncallers get 401.",
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": [
+          "super::auth"
+        ],
+        "summary": "The current operator, or 401 when anonymous.",
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backups": {
+      "get": {
+        "tags": [
+          "super::backups"
+        ],
+        "summary": "All backups, newest first, including those of deleted sites\n(`site_id` null; `site_name` and `domain` name them). Viewer and above.",
+        "operationId": "list_all",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupListOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backups/{bid}": {
+      "delete": {
+        "tags": [
+          "super::backups"
+        ],
+        "summary": "Delete any backup by id (operator and above), the only way to delete\na `pre_delete` backup once its site is gone: 202 with the same\n`delete_backup` job as `DELETE /sites/{id}/backups/{bid}` (on the\nsite while it exists, else server-level); 409 when already deleted or\nqueued, or the site has an active job.",
+        "operationId": "delete_any",
+        "parameters": [
+          {
+            "name": "bid",
+            "in": "path",
+            "description": "Backup id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs": {
+      "get": {
+        "tags": [
+          "super::jobs"
+        ],
+        "summary": "Recent jobs, newest first (viewer and above).",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max rows, default 50, cap 200",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobListOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{id}": {
+      "get": {
+        "tags": [
+          "super::jobs"
+        ],
+        "summary": "One job (viewer and above).",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Job id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{id}/log": {
+      "get": {
+        "tags": [
+          "super::jobs"
+        ],
+        "summary": "Tail a job's log as SSE (viewer and above): the accumulated `jobs.log`\nlines first, then — while the job is still `queued`/`running` — new\ndeltas every 500 ms until it finishes, then an `end` event whose data\nis the final status (`done`/`failed`). CR/LF inside a line are\nescaped; a `: keep-alive` comment goes out every poll so a gone client\nends the tail; a stream lives at most 30 minutes (then a `reconnect`\nevent).",
+        "operationId": "log",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Job id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE log tail (`data: <line>` events, then `event: end`)"
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "tags": [],
+        "summary": "The OpenAPI document (viewer and above).",
+        "operationId": "openapi_json",
+        "responses": {
+          "200": {
+            "description": "This API's OpenAPI 3.1 document"
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operators": {
+      "get": {
+        "tags": [
+          "super::operators"
+        ],
+        "summary": "List operators (owner only).",
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorListOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "super::operators"
+        ],
+        "summary": "Create an operator (owner only). The password is hashed with argon2id\nbefore storage and never logged.",
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOperatorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operators/{id}/password": {
+      "put": {
+        "tags": [
+          "super::operators"
+        ],
+        "summary": "Change a password: your own (with `current_password`), or anyone's\nas the owner. Every session of that operator ends (spec §3); changing\nyour own starts a fresh session for this browser.",
+        "operationId": "set_password",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Operator id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plans": {
+      "get": {
+        "tags": [
+          "super::plans"
+        ],
+        "summary": "List plans (viewer and above).",
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanListOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "super::plans"
+        ],
+        "summary": "Create a plan (owner only).",
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plans/{id}": {
+      "get": {
+        "tags": [
+          "super::plans"
+        ],
+        "summary": "One plan (viewer and above).",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Plan id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "super::plans"
+        ],
+        "summary": "Update a plan (owner only).",
+        "operationId": "update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Plan id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/servers": {
+      "get": {
+        "tags": [
+          "super::servers"
+        ],
+        "summary": "List servers (viewer and above).",
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerListOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "super::servers"
+        ],
+        "summary": "Register a pending server and mint its join token (operator and above).",
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateServerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateServerResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/servers/{id}": {
+      "get": {
+        "tags": [
+          "super::servers"
+        ],
+        "summary": "One server (viewer and above).",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Server id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "super::servers"
+        ],
+        "summary": "Delete a server (operator and above); 409 while sites reference it.",
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Server id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/servers/{id}/cordon": {
+      "post": {
+        "tags": [
+          "super::servers"
+        ],
+        "summary": "Cordon or uncordon a server (operator and above): a cordoned server\ntakes no new sites (provision `validate` and placement refuse it);\nits running sites are untouched.",
+        "operationId": "cordon",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Server id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CordonRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/setup": {
+      "get": {
+        "tags": [
+          "super::setup"
+        ],
+        "summary": "Setup status (public, no auth).",
+        "operationId": "status",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatusOut"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "super::setup"
+        ],
+        "summary": "Create the owner with the setup token. 401 on a wrong token, 201 once,\n409 for everyone once any operator exists.",
+        "operationId": "create_owner",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/setup/local-server": {
+      "post": {
+        "tags": [
+          "super::setup"
+        ],
+        "summary": "Register this box as a pending control-plane server (owner only).",
+        "operationId": "local_server",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalServerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalServerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites": {
+      "get": {
+        "tags": [
+          "super::sites"
+        ],
+        "summary": "List sites (viewer and above).",
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteListOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "super::sites"
+        ],
+        "summary": "Create a site and enqueue its provision job (operator and above).",
+        "description": "Validates the domain (unique → 409), the app version (must exist and\nparse; `image` manifests are rejected with `validation` — phase 2),\nthe plan (must allow the app) and the server (explicit, or the\nonline server with the most free memory). Generates the env once,\nfrom the allocated port and short id and the operator-supplied\n`prompts`, seals it into the `provisioning` row in the same\ntransaction, then enqueues `provision_site` (which reads the stored\nenv and never regenerates it).",
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSiteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateSiteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}": {
+      "get": {
+        "tags": [
+          "super::sites"
+        ],
+        "summary": "One site with its latest metric sample (viewer and above).",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteDetailOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "super::sites"
+        ],
+        "summary": "Delete the site (operator and above): 202 with a `delete_site` job.\nThe row disappears when the job finishes; until then `GET` still\nfinds it (`deleting`). 409 while another job is live.",
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}/backups": {
+      "get": {
+        "tags": [
+          "super::backups"
+        ],
+        "summary": "A site's backups, newest first (viewer and above).",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupListOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "super::backups"
+        ],
+        "summary": "Take a manual backup (operator and above): 202 with a `backup_site`\njob; the row lands `completed` when the job finishes. 409 while\nanother job is live for the site.",
+        "operationId": "create",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}/backups/{bid}": {
+      "delete": {
+        "tags": [
+          "super::backups"
+        ],
+        "summary": "Delete a backup's files on its server (operator and above): 202 with a\n`delete_backup` job on the site (it serialises with the site's other\njobs); the row ends `deleted` and leaves the list. 409 when the backup\nis already deleted, a delete is already queued, or the site has an\nactive job.",
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bid",
+            "in": "path",
+            "description": "Backup id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupJobResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}/backups/{bid}/restore": {
+      "post": {
+        "tags": [
+          "super::backups"
+        ],
+        "summary": "Restore a backup (operator and above): 202 with a `restore_site` job\ncarrying `payload.backup_id`. The backup must belong to the site.",
+        "operationId": "restore",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bid",
+            "in": "path",
+            "description": "Backup id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupJobResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}/env": {
+      "get": {
+        "tags": [
+          "super::sites"
+        ],
+        "summary": "Masked env list (viewer and above): names plus `secret`/`once`\nflags and `has_value`; secret values render as [`MASKED_VALUE`],\nnever plaintext.",
+        "operationId": "env_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvGetOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "super::sites"
+        ],
+        "summary": "Update non-generated env vars (operator and above): only manifest\nentries spelled `value` or `prompt` may change (`generate`/`from`\nare derived and rejected with `validation`). Enqueues an\n`env_update` job carrying the changes sealed; the job stores them,\nrewrites the env file (never with `once` values) and restarts a\nrunning site.",
+        "operationId": "env_put",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnvPutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteJobResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}/env/{name}/reveal": {
+      "post": {
+        "tags": [
+          "super::sites"
+        ],
+        "summary": "Reveal one env value (operator and above) after re-checking the\ncaller's password (argon2). Every call is audited: `env.reveal` when\nthe value is returned, `env.reveal_denied` on a wrong password, with\ntarget `<site id>:<NAME>`. Wrong passwords count toward the login\nlimiter of the client IP.",
+        "operationId": "env_reveal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Env var name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevealRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevealOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}/logs": {
+      "get": {
+        "tags": [
+          "super::sites"
+        ],
+        "summary": "Live logs as SSE (viewer and above): `FetchLogs` every 2 s with the\njournal cursor of the previous page, so each line renders once as a\n`data: <line>` event (CR/LF inside a line escaped). Every poll also\nsends a `: keep-alive` comment, so a gone client is noticed (the send\nfails, or the channel reports closed) and the agent is no longer\ncalled. The stream ends on disconnect, after an `error` event with a\nfixed message when the agent call fails (details are logged), or\nwith a `reconnect` event after 30 minutes.",
+        "operationId": "logs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE log stream (`data: <line>` events)"
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}/restart": {
+      "post": {
+        "tags": [
+          "super::sites"
+        ],
+        "summary": "Restart: stop then start via the runner (operator and above).",
+        "operationId": "restart",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}/retry": {
+      "post": {
+        "tags": [
+          "super::sites"
+        ],
+        "summary": "Retry a `failed` site: a fresh `provision_site` job from step 1 with\nthe same allocations and stored env (operator+).",
+        "operationId": "retry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}/start": {
+      "post": {
+        "tags": [
+          "super::sites"
+        ],
+        "summary": "Start the unit (operator and above).",
+        "operationId": "start",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}/stop": {
+      "post": {
+        "tags": [
+          "super::sites"
+        ],
+        "summary": "Stop the unit (operator and above).",
+        "operationId": "stop",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}/update": {
+      "post": {
+        "tags": [
+          "super::sites"
+        ],
+        "summary": "Update to another published version (operator and above): 202 with an\n`update_site` job. 409 while any job is live for the site or the site\nis not `running` (the runner would refuse it anyway).",
+        "operationId": "update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSiteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteJobResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "tags": [
+          "super"
+        ],
+        "summary": "Liveness: always 200, no auth, no database.",
+        "operationId": "healthz",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "super"
+        ],
+        "summary": "Readiness: 200 when `SELECT 1` succeeds, 503 otherwise.",
+        "operationId": "readyz",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AppListOut": {
+        "type": "object",
+        "required": [
+          "apps"
+        ],
+        "properties": {
+          "apps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AppOut"
+            }
+          }
+        }
+      },
+      "AppOut": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "homepage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "AppVersionListOut": {
+        "type": "object",
+        "required": [
+          "versions"
+        ],
+        "properties": {
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AppVersionOut"
+            }
+          }
+        }
+      },
+      "AppVersionOut": {
+        "type": "object",
+        "required": [
+          "id",
+          "app_id",
+          "version",
+          "channel",
+          "published_at"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "AuditEntryOut": {
+        "type": "object",
+        "required": [
+          "id",
+          "action",
+          "at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operator_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AuditListOut": {
+        "type": "object",
+        "required": [
+          "audit"
+        ],
+        "properties": {
+          "audit": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditEntryOut"
+            }
+          }
+        }
+      },
+      "AuditQuery": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "BackupJobResponse": {
+        "type": "object",
+        "required": [
+          "job"
+        ],
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/JobOut"
+          }
+        }
+      },
+      "BackupListOut": {
+        "type": "object",
+        "required": [
+          "backups"
+        ],
+        "properties": {
+          "backups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackupOut"
+            }
+          }
+        }
+      },
+      "BackupOut": {
+        "type": "object",
+        "required": [
+          "id",
+          "site_name",
+          "domain",
+          "taken_at",
+          "kind",
+          "status"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "site_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` once the site is deleted (the backup outlives it)."
+          },
+          "site_name": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          },
+          "taken_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BinaryRef": {
+        "type": "object",
+        "description": "One downloadable binary release.",
+        "required": [
+          "version",
+          "url",
+          "sha256",
+          "exec"
+        ],
+        "properties": {
+          "exec": {
+            "type": "string",
+            "description": "Path of the executable inside the archive (relative)."
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "Command": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "site_create"
+                ]
+              },
+              "site": {
+                "$ref": "#/components/schemas/SiteSpec"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "db",
+              "role",
+              "password",
+              "kind"
+            ],
+            "properties": {
+              "db": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "create_database"
+                ]
+              },
+              "password": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "db",
+              "role",
+              "kind"
+            ],
+            "properties": {
+              "db": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "drop_database"
+                ]
+              },
+              "role": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "binary",
+              "kind"
+            ],
+            "properties": {
+              "binary": {
+                "$ref": "#/components/schemas/BinaryRef"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "install"
+                ]
+              },
+              "site": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "version",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "switch_version"
+                ]
+              },
+              "site": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "write_unit"
+                ]
+              },
+              "site": {
+                "$ref": "#/components/schemas/SiteSpec"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "env",
+              "kind"
+            ],
+            "properties": {
+              "env": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/EnvVar"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "write_env"
+                ]
+              },
+              "site": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "start"
+                ]
+              },
+              "site": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "stop"
+                ]
+              },
+              "site": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "restart"
+                ]
+              },
+              "site": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "status"
+                ]
+              },
+              "site": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "health"
+                ]
+              },
+              "site": {
+                "$ref": "#/components/schemas/SiteSpec"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site_short_id",
+              "domain",
+              "port",
+              "kind"
+            ],
+            "properties": {
+              "domain": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "set_route"
+                ]
+              },
+              "port": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "site_short_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site_short_id",
+              "domain",
+              "kind"
+            ],
+            "properties": {
+              "domain": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "remove_route"
+                ]
+              },
+              "site_short_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "db",
+              "dirs",
+              "backup_id",
+              "kind"
+            ],
+            "properties": {
+              "backup_id": {
+                "type": "string"
+              },
+              "db": {
+                "type": "string"
+              },
+              "dirs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "backup"
+                ]
+              },
+              "site": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "db",
+              "role",
+              "dirs",
+              "backup_id",
+              "kind"
+            ],
+            "properties": {
+              "backup_id": {
+                "type": "string"
+              },
+              "db": {
+                "type": "string"
+              },
+              "dirs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "restore"
+                ]
+              },
+              "role": {
+                "type": "string"
+              },
+              "site": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "backup_id",
+              "kind"
+            ],
+            "properties": {
+              "backup_id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "delete_backup"
+                ]
+              },
+              "site": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "site_remove"
+                ]
+              },
+              "site": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "site",
+              "lines",
+              "kind"
+            ],
+            "properties": {
+              "cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "fetch_logs"
+                ]
+              },
+              "lines": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "site": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "inventory"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Idempotent agent commands, JSON-tagged by `kind` (snake_case)."
+      },
+      "CommandEnvelope": {
+        "type": "object",
+        "description": "A command in flight: stable `id` so redelivery is idempotent.\nThe wire has no delivery counter (ledger R85): the agent dedupes by\nid; `agent_commands.attempts` stays a control-plane diagnostic.",
+        "required": [
+          "id",
+          "created_at",
+          "expires_at",
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "$ref": "#/components/schemas/Command"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "site_short_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CommandResult": {
+        "type": "object",
+        "description": "The agent's report for one command id.",
+        "required": [
+          "id",
+          "ok",
+          "output",
+          "log"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "log": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "output": {}
+        }
+      },
+      "CordonRequest": {
+        "type": "object",
+        "required": [
+          "cordoned"
+        ],
+        "properties": {
+          "cordoned": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateOperatorRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
+      "CreatePlanRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "limits"
+        ],
+        "properties": {
+          "allowed_app_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "limits": {
+            "$ref": "#/components/schemas/PlanLimitsIn"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateServerRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateServerResponse": {
+        "type": "object",
+        "required": [
+          "server",
+          "join_token",
+          "install_command"
+        ],
+        "properties": {
+          "install_command": {
+            "type": "string",
+            "description": "`setu agent install --control-plane <public_url>` (no token)."
+          },
+          "join_token": {
+            "type": "string",
+            "description": "Single-use join token (valid 1 hour); shown once. Pass it to the\ninstall command as `SETU_JOIN_TOKEN` or on stdin."
+          },
+          "server": {
+            "$ref": "#/components/schemas/ServerOut"
+          }
+        }
+      },
+      "CreateSiteRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "app_id",
+          "version",
+          "plan_id",
+          "domain",
+          "owner_email"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_email": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "prompts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateSiteResponse": {
+        "type": "object",
+        "required": [
+          "site",
+          "job"
+        ],
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/JobOut"
+          },
+          "site": {
+            "$ref": "#/components/schemas/SiteOut"
+          }
+        }
+      },
+      "EnvEntryOut": {
+        "type": "object",
+        "required": [
+          "name",
+          "value",
+          "masked",
+          "secret",
+          "once",
+          "has_value"
+        ],
+        "properties": {
+          "has_value": {
+            "type": "boolean"
+          },
+          "masked": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "once": {
+            "type": "boolean"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "value": {
+            "type": "string",
+            "description": "Plaintext for non-secret vars, [`MASKED_VALUE`] for secrets."
+          }
+        }
+      },
+      "EnvGetOut": {
+        "type": "object",
+        "required": [
+          "env"
+        ],
+        "properties": {
+          "env": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvEntryOut"
+            }
+          }
+        }
+      },
+      "EnvPutRequest": {
+        "type": "object",
+        "required": [
+          "env"
+        ],
+        "properties": {
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "EnvVar": {
+        "type": "object",
+        "description": "One concrete env var to write into the site env file.",
+        "required": [
+          "name",
+          "value",
+          "secret",
+          "once"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "once": {
+            "type": "boolean"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "`{ \"error\": { \"code\": \"...\", \"message\": \"...\" } }` (spec §6).",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        }
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "HealthOut": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "Heartbeat": {
+        "type": "object",
+        "description": "Agent heartbeat posted every 15 s. `boot_id` changes whenever the\nagent process (or the host) restarts.",
+        "required": [
+          "agent_version",
+          "boot_id",
+          "load1",
+          "mem_free_mb",
+          "disk_free_mb",
+          "units",
+          "metrics"
+        ],
+        "properties": {
+          "agent_version": {
+            "type": "string"
+          },
+          "boot_id": {
+            "type": "string"
+          },
+          "disk_free_mb": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "load1": {
+            "type": "number",
+            "format": "double"
+          },
+          "mem_free_mb": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SiteMetric"
+            }
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnitState"
+            }
+          }
+        }
+      },
+      "JobListOut": {
+        "type": "object",
+        "required": [
+          "jobs"
+        ],
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobOut"
+            }
+          }
+        }
+      },
+      "JobOut": {
+        "type": "object",
+        "description": "One job row. `payload` is never rendered (it may carry prompt\nanswers); poll `log` for progress.",
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "attempts",
+          "log",
+          "created_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "log": {
+            "type": "string"
+          },
+          "server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "site_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "worker": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "JobResponse": {
+        "type": "object",
+        "description": "A bare 202 job body (delete: the site row is gone when the job\nfinishes, so no site is returned).",
+        "required": [
+          "job"
+        ],
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/JobOut"
+          }
+        }
+      },
+      "JobsQuery": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "JoinRequest": {
+        "type": "object",
+        "description": "First contact: the agent redeems a single-use join token with a\nrandom `nonce` (a retry within 60 s with the same nonce gets the same\nserver token; another nonce is refused).",
+        "required": [
+          "join_token",
+          "nonce",
+          "hostname",
+          "arch",
+          "os",
+          "cpu_cores",
+          "memory_mb",
+          "disk_mb"
+        ],
+        "properties": {
+          "arch": {
+            "type": "string"
+          },
+          "cpu_cores": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "disk_mb": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "join_token": {
+            "type": "string"
+          },
+          "memory_mb": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "nonce": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          }
+        }
+      },
+      "JoinResponse": {
+        "type": "object",
+        "description": "Control-plane answer to a join: the long-lived server identity.",
+        "required": [
+          "server_id",
+          "server_token"
+        ],
+        "properties": {
+          "server_id": {
+            "type": "string"
+          },
+          "server_token": {
+            "type": "string"
+          }
+        }
+      },
+      "Limits": {
+        "type": "object",
+        "description": "Resource limits for one site (mirrors the manifest `limits.default`;\nkept local so the agent needs no manifest dependency).",
+        "required": [
+          "memory_mb",
+          "cpu_percent",
+          "disk_mb"
+        ],
+        "properties": {
+          "cpu_percent": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "disk_mb": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "memory_mb": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "LocalServerRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Explicit server name; defaults to the machine's hostname."
+          }
+        }
+      },
+      "LocalServerResponse": {
+        "type": "object",
+        "required": [
+          "server",
+          "join_token",
+          "install_command"
+        ],
+        "properties": {
+          "install_command": {
+            "type": "string",
+            "description": "`setu agent install --control-plane …` for this box (no token)."
+          },
+          "join_token": {
+            "type": "string",
+            "description": "Single-use join token (valid 1 hour); shown once. Pass it as\n`SETU_JOIN_TOKEN` or on stdin, never on the command line."
+          },
+          "server": {
+            "$ref": "#/components/schemas/ServerOut"
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "ManifestErrorOut": {
+        "type": "object",
+        "required": [
+          "path",
+          "message"
+        ],
+        "properties": {
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "OperatorListOut": {
+        "type": "object",
+        "required": [
+          "operators"
+        ],
+        "properties": {
+          "operators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorOut"
+            }
+          }
+        }
+      },
+      "OperatorOut": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "role",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
+      "PlanLimitsIn": {
+        "type": "object",
+        "required": [
+          "memory_mb",
+          "cpu_percent",
+          "disk_mb"
+        ],
+        "properties": {
+          "cpu_percent": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "disk_mb": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "memory_mb": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "PlanListOut": {
+        "type": "object",
+        "required": [
+          "plans"
+        ],
+        "properties": {
+          "plans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanOut"
+            }
+          }
+        }
+      },
+      "PlanOut": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "limits",
+          "allowed_app_ids",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "allowed_app_ids": {},
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "limits": {},
+          "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PublishRequest": {
+        "type": "object",
+        "properties": {
+          "toml": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pasted manifest TOML. Exactly one of `toml` / `url` is required."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "URL to fetch the manifest from (public hosts only)."
+          }
+        }
+      },
+      "PublishResponse": {
+        "type": "object",
+        "required": [
+          "app",
+          "version"
+        ],
+        "properties": {
+          "app": {
+            "$ref": "#/components/schemas/AppOut"
+          },
+          "version": {
+            "$ref": "#/components/schemas/AppVersionOut"
+          }
+        }
+      },
+      "ReadyOut": {
+        "type": "object",
+        "required": [
+          "status",
+          "database"
+        ],
+        "properties": {
+          "database": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "RevealOut": {
+        "type": "object",
+        "description": "The plaintext of one env value. Holds a secret: `Debug` redacts it.",
+        "required": [
+          "name",
+          "value"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "RevealRequest": {
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The caller's own password (re-authentication)."
+          }
+        }
+      },
+      "ServerListOut": {
+        "type": "object",
+        "required": [
+          "servers"
+        ],
+        "properties": {
+          "servers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServerOut"
+            }
+          }
+        }
+      },
+      "ServerOut": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "cordoned",
+          "is_control_plane",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "agent_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "arch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cordoned": {
+            "type": "boolean",
+            "description": "No new sites are placed on a cordoned server."
+          },
+          "cpu_cores": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "disk_free_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "disk_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "is_control_plane": {
+            "type": "boolean",
+            "description": "The control plane's own box (`POST /setup/local-server`)."
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "load1": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "From the latest heartbeat (`null` before the first)."
+          },
+          "mem_free_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "memory_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "os": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "Computed on read (spec §3): `pending` until the first join, then\n`online` while `last_seen_at` is within 60 s, else `offline`."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SetPasswordRequest": {
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Required when changing your own password."
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "SetupRequest": {
+        "type": "object",
+        "required": [
+          "token",
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string",
+            "description": "The one-time token from `<data_dir>/setup-token`."
+          }
+        }
+      },
+      "SetupStatusOut": {
+        "type": "object",
+        "required": [
+          "needed",
+          "public_url"
+        ],
+        "properties": {
+          "needed": {
+            "type": "boolean",
+            "description": "True while no operator exists (the wizard must run)."
+          },
+          "public_url": {
+            "type": "string",
+            "description": "The configured `public_url`, shown by the wizard."
+          }
+        }
+      },
+      "SiteDetailOut": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SiteOut"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "metrics": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SiteMetricOut"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "`GET /sites/{id}`: the site plus its latest metric sample."
+      },
+      "SiteJobResponse": {
+        "type": "object",
+        "required": [
+          "site",
+          "job"
+        ],
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/JobOut"
+          },
+          "site": {
+            "$ref": "#/components/schemas/SiteOut"
+          }
+        }
+      },
+      "SiteListOut": {
+        "type": "object",
+        "required": [
+          "sites"
+        ],
+        "properties": {
+          "sites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SiteOut"
+            }
+          }
+        }
+      },
+      "SiteMetric": {
+        "type": "object",
+        "description": "One per-site metrics sample.",
+        "required": [
+          "short_id",
+          "at",
+          "cpu_seconds",
+          "memory_bytes",
+          "disk_bytes"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cpu_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "disk_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "short_id": {
+            "type": "string"
+          }
+        }
+      },
+      "SiteMetricOut": {
+        "type": "object",
+        "description": "The newest 1-minute sample of a site (spec §3 `site_metrics`).",
+        "required": [
+          "at",
+          "cpu_seconds",
+          "memory_bytes",
+          "disk_bytes"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cpu_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "disk_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SiteOut": {
+        "type": "object",
+        "description": "One site row (the sealed `env` is never included; see `./env`).",
+        "required": [
+          "id",
+          "name",
+          "app_id",
+          "app_version",
+          "server_id",
+          "plan_id",
+          "domain",
+          "status",
+          "port",
+          "db_name",
+          "owner_email",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string"
+          },
+          "app_version": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "db_name": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "failed_step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_email": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SiteSpec": {
+        "type": "object",
+        "description": "Everything the agent needs to materialise one site. No paths, no\nuser, no env file: the agent derives them from `short_id` (spec §4).",
+        "required": [
+          "site_id",
+          "short_id",
+          "version",
+          "port",
+          "exec",
+          "args",
+          "workdir",
+          "dirs",
+          "limits",
+          "health",
+          "startup_grace_s"
+        ],
+        "properties": {
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dirs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Directories under `data/` (manifest `needs.dirs`)."
+          },
+          "exec": {
+            "type": "string",
+            "description": "Executable inside `bin/<version>/` (relative, validated)."
+          },
+          "health": {
+            "type": "string",
+            "description": "Health path polled on `127.0.0.1:<port>`."
+          },
+          "limits": {
+            "$ref": "#/components/schemas/Limits"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "short_id": {
+            "type": "string"
+          },
+          "site_id": {
+            "type": "string"
+          },
+          "startup_grace_s": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "version": {
+            "type": "string",
+            "description": "The version `bin/current` should run."
+          },
+          "workdir": {
+            "$ref": "#/components/schemas/Workdir"
+          }
+        }
+      },
+      "UnitState": {
+        "type": "object",
+        "description": "One site unit's state as observed by the agent.",
+        "required": [
+          "short_id",
+          "active",
+          "sub",
+          "restarts"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "pid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "restarts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "short_id": {
+            "type": "string"
+          },
+          "sub": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdatePlanRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "limits"
+        ],
+        "properties": {
+          "allowed_app_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "limits": {
+            "$ref": "#/components/schemas/PlanLimitsIn"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateSiteRequest": {
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "prompts": {
+            "type": "object",
+            "description": "Answers for `prompt` rules the target version adds (sealed into\nthe job; existing answers are kept by name).",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "ValidateRequest": {
+        "type": "object",
+        "required": [
+          "toml"
+        ],
+        "properties": {
+          "toml": {
+            "type": "string"
+          }
+        }
+      },
+      "ValidateResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManifestErrorOut"
+            }
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Workdir": {
+        "type": "string",
+        "description": "The unit's working directory (mirrors the manifest's `run.workdir`).",
+        "enum": [
+          "exec_dir",
+          "bin",
+          "data"
+        ]
+      }
+    }
+  }
+}

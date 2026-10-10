@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sessions SET expires_at = now() + make_interval(secs => $2)\n             WHERE id_hash = $1\n               AND expires_at > now()\n               AND expires_at < now() + make_interval(secs => $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8d0619f03d565c5c54b017e1d5210e73aaa4881a24980bbaa016162d0815c86d"
+}

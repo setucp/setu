@@ -1,0 +1,120 @@
+name: Release
+
+# A `v*` tag builds the x86_64 musl-static `setu` (spec §8: no aarch64,
+# no container image until phase 2), packages it with install.sh and one
+# SHA256SUMS, and creates the GitHub release. The binary is built WITHOUT
+# the `test-root` and `e2e-hooks` features. Tags with a `-`
+# (v0.1.0-rc.1) are prereleases and never move `latest`.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 4
+
+jobs:
+  meta:
+    name: Version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"; publish=true
+          else
+            version="$(awk '/^\[workspace.package\]/{w=1; next} /^\[/{w=0} w && /^version *=/{gsub(/.*= *"|".*/, ""); print; exit}' Cargo.toml)"
+            publish=false
+          fi
+          prerelease=false; [[ "$version" == *-* ]] && prerelease=true
+          {
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+      # Fail before building anything when the tag disagrees with
+      # Cargo.toml or has no changelog entry.
+      - if: steps.v.outputs.publish == 'true'
+        run: |
+          bash scripts/check-release-version.sh "${{ steps.v.outputs.version }}"
+          bash scripts/release-notes.sh "${{ steps.v.outputs.version }}" > /dev/null
+
+  build:
+    name: Build and package (x86_64 musl)
+    needs: meta
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - run: bash scripts/build-ui.sh
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-musl
+      - name: Install musl linker
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      # No --features: `test-root` and `e2e-hooks` never ship.
+      - name: Build
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl -p setu-api --bin setu
+      - name: Check the binary
+        run: |
+          set -euo pipefail
+          bin=target/x86_64-unknown-linux-musl/release/setu
+          file "$bin" | grep -q static
+          "$bin" --version | grep -qx "setu ${{ needs.meta.outputs.version }}"
+          if "$bin" helper --help 2>&1 | grep -q -- '--root'; then
+            echo "release binary exposes --root (test-root feature)" >&2; exit 1
+          fi
+      - name: Package
+        run: >
+          bash scripts/package-release.sh "${{ needs.meta.outputs.version }}"
+          target/x86_64-unknown-linux-musl/release dist
+      - run: cd dist && sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/*
+
+  release:
+    name: GitHub release
+    needs: [meta, build]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+      - run: bash scripts/release-notes.sh "${{ needs.meta.outputs.version }}" > notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: notes.md
+          prerelease: ${{ needs.meta.outputs.prerelease == 'true' }}
+          files: |
+            dist/setu-*-x86_64-unknown-linux-musl.tar.gz
+            dist/install.sh
+            dist/SHA256SUMS

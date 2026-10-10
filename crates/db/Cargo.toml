@@ -1,0 +1,29 @@
+[package]
+name = "setu-db"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+sqlx.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+sha2.workspace = true
+hex.workspace = true
+rand.workspace = true
+base64.workspace = true
+setu-common = { path = "../common" }
+setu-proto = { path = "../proto" }
+
+[dev-dependencies]
+setu-testkit = { path = "../testkit" }

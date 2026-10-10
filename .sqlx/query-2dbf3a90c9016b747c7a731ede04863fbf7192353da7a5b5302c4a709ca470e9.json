@@ -1,0 +1,326 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE servers SET\n                     token_hash = $2, join_nonce = $3, join_token_sealed = $4,\n                     joined_at = now(), last_seen_at = now(),\n                     hostname = $5, public_ip = $6, arch = $7, os = $8,\n                     cpu_cores = $9, memory_mb = $10, disk_mb = $11\n                 WHERE id = $1\n                 RETURNING id, short_id, name, hostname, public_ip, token_hash, join_token_hash,\n                    join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,\n                    boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,\n                    is_control_plane, created_at, load1, mem_free_mb, disk_free_mb",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "short_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "short_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "hostname",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "hostname"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "public_ip",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "public_ip"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "token_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "token_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "join_token_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "join_token_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "join_expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "join_expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "join_nonce",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "join_nonce"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "join_token_sealed",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "join_token_sealed"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "joined_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "joined_at"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "agent_version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "agent_version"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "boot_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "boot_id"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "arch",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "arch"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "os",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "os"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "cpu_cores",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "cpu_cores"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "memory_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "memory_mb"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "disk_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "disk_mb"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "last_seen_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "last_seen_at"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "cordoned",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "cordoned"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "is_control_plane",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "is_control_plane"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "load1",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "load1"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "mem_free_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "mem_free_mb"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "disk_free_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "disk_free_mb"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "2dbf3a90c9016b747c7a731ede04863fbf7192353da7a5b5302c4a709ca470e9"
+}

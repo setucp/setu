@@ -1,0 +1,48 @@
+schema = 1
+
+[app]
+id = "vyasa"                 # [a-z][a-z0-9-]{1,31}
+name = "Vyasa"
+version = "0.2.0"            # semver
+homepage = "https://vyasa.site"
+health = "/readyz"           # GET on the bind address → 2xx means ready
+admin_path = "/admin"        # link shown after provisioning
+startup_grace_s = 90         # how long health may fail after start
+
+[run]
+kind = "binary"              # "binary" | "image" (image: phase 2)
+workdir = "exec_dir"         # cwd: "exec_dir" (directory holding exec) | "bin" (bin/current) | "data"
+args = ["serve"]
+[run.binary."x86_64-linux"]
+url = "https://github.com/vyasa-cms/vyasa/releases/download/v0.2.0/vyasa-0.2.0-x86_64-unknown-linux-gnu.tar.gz"
+sha256 = "84b5a99beccace445037191ff2bb168e8b0287a3f52d460191a9ce745220debc"
+exec = "vyasa-0.2.0-x86_64-unknown-linux-gnu/vyasa"   # path inside the archive
+# [run.binary."aarch64-linux"] … (accepted; built artefacts are phase 2)
+
+[needs]
+postgres = ">=16"            # one database + role per site
+dirs = ["media", "index", "registry"]   # persistent, under data/, backed up unless excluded
+
+[env]                        # one rule per variable
+VYASA_BIND_ADDR      = { from = "bind_addr" }        # 127.0.0.1:<port>
+VYASA_DATABASE_URL   = { from = "postgres_url" }
+VYASA_SECRET_KEY     = { generate = "hex32", secret = true }
+VYASA_MEDIA_DIR      = { from = "dir", dir = "media" }
+VYASA_INDEX_DIR      = { from = "dir", dir = "index" }
+VYASA_REGISTRY_DIR   = { from = "dir", dir = "registry" }
+VYASA_RUN_DIR        = { from = "run_dir" }
+VYASA_TRUSTED_PROXIES = { value = "127.0.0.1" }
+VYASA_ADMIN_EMAIL    = { from = "owner_email" }
+VYASA_ADMIN_PASSWORD = { generate = "password20", secret = true, once = true }
+
+[limits.default]             # overridden by the plan
+memory_mb = 512
+cpu_percent = 100            # 100 = one core
+disk_mb = 5120               # reported, not enforced, in phase 1
+
+[backup]
+postgres = true
+dirs = ["media", "registry"] # "index" is derivable, excluded
+
+[update]
+strategy = "replace"         # the only strategy in phase 1

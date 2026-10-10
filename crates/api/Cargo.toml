@@ -1,0 +1,65 @@
+[package]
+name = "setu-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+autobins = false
+
+[lib]
+name = "setu_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "setu"
+path = "src/main.rs"
+
+[features]
+# Forwarded: `setu helper --root` for tests (never in release builds).
+test-root = ["setu-agent/test-root"]
+# Forwarded: the agent's e2e exit hook (never in release builds).
+e2e-hooks = ["setu-agent/e2e-hooks"]
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio.workspace = true
+axum.workspace = true
+tower.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+url.workspace = true
+clap.workspace = true
+argon2.workspace = true
+utoipa.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+futures.workspace = true
+hostname.workspace = true
+sqlx.workspace = true
+rust-embed.workspace = true
+async-trait.workspace = true
+rand.workspace = true
+hex.workspace = true
+base64.workspace = true
+ipnet.workspace = true
+nix.workspace = true
+tempfile.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+setu-common = { path = "../common" }
+setu-db = { path = "../db" }
+setu-jobs = { path = "../jobs" }
+setu-manifest = { path = "../manifest" }
+setu-proto = { path = "../proto" }
+setu-agent = { path = "../agent" }
+setu-testkit = { path = "../testkit" }
+
+[dev-dependencies]
+setu-testkit = { path = "../testkit" }
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true

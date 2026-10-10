@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT site_id, at, cpu_seconds, memory_bytes, disk_bytes\n             FROM site_metrics WHERE site_id = $1 ORDER BY at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "site_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "site_metrics",
+            "name": "site_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "site_metrics",
+            "name": "at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "cpu_seconds",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "site_metrics",
+            "name": "cpu_seconds"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "memory_bytes",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "site_metrics",
+            "name": "memory_bytes"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "disk_bytes",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "site_metrics",
+            "name": "disk_bytes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6f9ca8e4295fc5380905a2da5d1117a04d817dc73df4bf292b697748d5d6c5e7"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE servers SET\n                 last_seen_at = now(), agent_version = $2,\n                 boot_id = COALESCE($3, boot_id),\n                 load1 = $5, mem_free_mb = $6, disk_free_mb = $7,\n                 join_token_sealed = CASE\n                     WHEN joined_at < now() - make_interval(secs => $4) THEN NULL\n                     ELSE join_token_sealed END\n             WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Float8",
+        "Float8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8b9c8f7e1a522d80663e36a280f57442155b113030ce103d4480a626230f0818"
+}

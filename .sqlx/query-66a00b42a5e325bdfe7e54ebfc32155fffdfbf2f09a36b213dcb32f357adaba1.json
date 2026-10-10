@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE jobs SET log = log || $3\n             WHERE id = $1 AND locked_by = $2 AND status = 'running'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "66a00b42a5e325bdfe7e54ebfc32155fffdfbf2f09a36b213dcb32f357adaba1"
+}

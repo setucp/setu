@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO site_metrics (site_id, at, cpu_seconds, memory_bytes, disk_bytes)\n             VALUES ($1, $2, $3, $4, $5)\n             ON CONFLICT (site_id, at) DO UPDATE\n               SET cpu_seconds = excluded.cpu_seconds,\n                   memory_bytes = excluded.memory_bytes,\n                   disk_bytes = excluded.disk_bytes",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Float8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cdc300e485aeed17ef9e57a12e23a6733d6fb1c54a80bdcc089aa1c2da4ba292"
+}

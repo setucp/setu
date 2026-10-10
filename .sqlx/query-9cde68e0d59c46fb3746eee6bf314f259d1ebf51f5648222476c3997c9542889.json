@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE agent_commands\n             SET status = 'expired', command = setu_redact_command(command)\n             WHERE server_id = $1 AND status = 'queued' AND expires_at <= now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9cde68e0d59c46fb3746eee6bf314f259d1ebf51f5648222476c3997c9542889"
+}

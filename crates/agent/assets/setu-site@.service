@@ -1,0 +1,24 @@
+[Unit]
+Description=Setu site %i
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=setu-site-%i
+Group=setu-site-%i
+EnvironmentFile=/srv/setu/sites/%i/env
+Restart=on-failure
+RestartSec=2
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/srv/setu/sites/%i/data /srv/setu/sites/%i/run
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

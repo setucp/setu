@@ -1,0 +1,72 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, memory_mb, cordoned, is_control_plane,\n                    (joined_at IS NOT NULL AND last_seen_at IS NOT NULL\n                     AND last_seen_at > now() - make_interval(secs => $2)) AS \"online!\"\n             FROM servers WHERE id = $1 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "memory_mb",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "memory_mb"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "cordoned",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "cordoned"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "is_control_plane",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "servers",
+            "name": "is_control_plane"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "online!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "8d553a8476b387fe93cfbf3cfafbe2384532a01ef240db07f549528ee2976945"
+}

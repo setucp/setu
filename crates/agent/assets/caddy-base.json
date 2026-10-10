@@ -1,0 +1,18 @@
+{
+  "admin": {
+    "listen": "unix//run/caddy/admin.sock|0660",
+    "config": {
+      "persist": true
+    }
+  },
+  "apps": {
+    "http": {
+      "servers": {
+        "setu": {
+          "listen": [":443"],
+          "routes": []
+        }
+      }
+    }
+  }
+}
