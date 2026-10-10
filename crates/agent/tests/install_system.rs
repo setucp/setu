@@ -108,6 +108,7 @@ async fn install_system_writes_all_assets_and_enables_units() {
             "systemctl daemon-reload".to_string(),
             "systemctl enable setu-nftables.service".to_string(),
             "systemctl restart setu-nftables.service".to_string(),
+            "install -d -o caddy -g caddy -m 0750 /var/lib/caddy".to_string(),
             "systemctl disable --now caddy.service".to_string(),
             "systemctl enable caddy-api.service".to_string(),
             "systemctl restart caddy-api.service".to_string(),
@@ -150,6 +151,7 @@ async fn install_system_caddy_only_touches_only_caddy_files() {
         sys.calls(),
         vec![
             "systemctl daemon-reload".to_string(),
+            "install -d -o caddy -g caddy -m 0750 /var/lib/caddy".to_string(),
             "systemctl disable --now caddy.service".to_string(),
             "systemctl enable caddy-api.service".to_string(),
             "systemctl restart caddy-api.service".to_string(),
@@ -198,6 +200,10 @@ async fn install_system_rerun_merges_existing_routes() {
         "a running Caddy is reloaded through the socket, not restarted: {calls:?}"
     );
     assert!(calls.contains(&"systemctl enable caddy-api.service".to_string()));
+    assert!(
+        calls.contains(&"install -d -o caddy -g caddy -m 0750 /var/lib/caddy".to_string()),
+        "Caddy's home must be owned by caddy even when the directory pre-existed (a volume, a re-install): {calls:?}"
+    );
 
     let loaded = loads(&caddy);
     assert_eq!(loaded.len(), 1, "{loaded:?}");

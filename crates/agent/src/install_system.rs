@@ -274,6 +274,25 @@ pub async fn install_system_with(
         sys.run("systemctl", &["restart", "setu-nftables.service"])
             .await?;
     }
+    // The package only chowns /var/lib/caddy when it creates it. A
+    // pre-existing directory (a mounted volume, a re-install) stays
+    // root-owned and Caddy then cannot write its internal CA or the
+    // autosave, so caddy-api exits 1. `install -d` fixes owner and mode
+    // on an existing directory as well as creating a missing one.
+    sys.run(
+        "install",
+        &[
+            "-d",
+            "-o",
+            "caddy",
+            "-g",
+            "caddy",
+            "-m",
+            "0750",
+            "/var/lib/caddy",
+        ],
+    )
+    .await?;
     sys.run("systemctl", &["disable", "--now", "caddy.service"])
         .await?;
     sys.run("systemctl", &["enable", "caddy-api.service"])

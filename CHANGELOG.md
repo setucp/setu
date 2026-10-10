@@ -3,11 +3,18 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
-## 0.1.0 — Unreleased
+## 0.1.0 — 2026-10-10
 
 First release (MVP): a control panel for single-binary web apps on
 Ubuntu 24.04 x86_64 servers you own. Design: spec revision 4
 (`docs/specs/2026-10-09-setu-design.md`).
+
+### Fixed before release
+
+- `install_system` now sets `caddy:caddy 0750` on `/var/lib/caddy` with
+  `install -d`, so a pre-existing directory (a mounted volume, a
+  re-install) no longer leaves Caddy unable to write its internal CA
+  and autosave (found deploying the panel into a container).
 
 ### The binary
 
