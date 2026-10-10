@@ -50,6 +50,17 @@ export function SiteOverview({ site }: { site: SiteDetail }) {
                 {site.domain}
                 <ExternalLink className="size-3.5" aria-hidden="true" />
               </a>
+              {site.admin_url ? (
+                <a
+                  href={site.admin_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="ml-3 inline-flex items-center gap-1 text-link hover:underline"
+                >
+                  Admin
+                  <ExternalLink className="size-3.5" aria-hidden="true" />
+                </a>
+              ) : null}
             </Row>
             <Row term="App">
               {site.app_id} <span className="font-mono text-xs">{site.app_version}</span>

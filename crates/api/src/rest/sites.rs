@@ -191,12 +191,27 @@ impl SiteMetricOut {
     }
 }
 
-/// `GET /sites/{id}`: the site plus its latest metric sample.
+/// The app's admin page on the site: `https://<domain><admin_path>` when
+/// the manifest's `admin_path` is an absolute path (one leading slash,
+/// no whitespace or control characters); `None` otherwise (#4).
+pub fn admin_url(domain: &str, admin_path: &str) -> Option<String> {
+    let ok = admin_path.starts_with('/')
+        && !admin_path.starts_with("//")
+        && !admin_path
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control());
+    ok.then(|| format!("https://{domain}{admin_path}"))
+}
+
+/// `GET /sites/{id}`: the site plus its latest metric sample and admin page.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SiteDetailOut {
     #[serde(flatten)]
     pub site: SiteOut,
     pub metrics: Option<SiteMetricOut>,
+    /// `https://<domain><app.admin_path>`, or `null` when the manifest
+    /// names no usable path (or the version row is missing).
+    pub admin_url: Option<String>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -593,9 +608,22 @@ pub async fn get(
         .latest_for_site(&site.id)
         .await?
         .map(|m| SiteMetricOut::from_latest(&m));
+    let admin = match state
+        .db
+        .apps()
+        .version(&site.app_id, &site.app_version)
+        .await
+    {
+        Ok(v) => load_manifest(&v)
+            .ok()
+            .and_then(|m| admin_url(&site.domain, &m.app.admin_path)),
+        Err(e) if e.code == ErrorCode::NotFound => None,
+        Err(e) => return Err(e),
+    };
     Ok(Json(SiteDetailOut {
         site: SiteOut::from_row(&site),
         metrics,
+        admin_url: admin,
     }))
 }
 
@@ -1230,4 +1258,28 @@ pub async fn logs(
         ],
         Body::from_stream(rx),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::admin_url;
+
+    #[test]
+    fn admin_url_joins_domain_and_absolute_path() {
+        assert_eq!(
+            admin_url("blog.example.com", "/"),
+            Some("https://blog.example.com/".into())
+        );
+        assert_eq!(
+            admin_url("blog.example.com", "/admin/login"),
+            Some("https://blog.example.com/admin/login".into())
+        );
+    }
+
+    #[test]
+    fn admin_url_is_none_for_relative_or_odd_paths() {
+        for bad in ["", "admin", "//evil.example", "/a b", "/a\nb"] {
+            assert_eq!(admin_url("blog.example.com", bad), None, "{bad:?}");
+        }
+    }
 }

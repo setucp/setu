@@ -31,6 +31,10 @@ Follow-ups from the first release (spec
   query); Memory and Disk show `used / limit` with the Limits tab's
   bars (#3).
 
+- The site overview links the app's admin page next to the domain,
+  from the manifest's `admin_path` (`admin_url` on `GET /sites/{id}`,
+  `null` when the path is not absolute) (#4).
+
 ### Internal
 
 - Workspace lints: `clippy::pedantic`, `unwrap_used`, `expect_used` as

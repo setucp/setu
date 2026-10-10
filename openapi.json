@@ -4704,6 +4704,13 @@
           {
             "type": "object",
             "properties": {
+              "admin_url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "`https://<domain><app.admin_path>`, or `null` when the manifest\nnames no usable path (or the version row is missing)."
+              },
               "metrics": {
                 "oneOf": [
                   {
@@ -4717,7 +4724,7 @@
             }
           }
         ],
-        "description": "`GET /sites/{id}`: the site plus its latest metric sample."
+        "description": "`GET /sites/{id}`: the site plus its latest metric sample and admin page."
       },
       "SiteJobResponse": {
         "type": "object",

@@ -1362,8 +1362,13 @@ export interface components {
             /** @description The configured `public_url`, shown by the wizard. */
             public_url: string;
         };
-        /** @description `GET /sites/{id}`: the site plus its latest metric sample. */
+        /** @description `GET /sites/{id}`: the site plus its latest metric sample and admin page. */
         SiteDetailOut: components["schemas"]["SiteOut"] & {
+            /**
+             * @description `https://<domain><app.admin_path>`, or `null` when the manifest
+             *     names no usable path (or the version row is missing).
+             */
+            admin_url?: string | null;
             metrics?: null | components["schemas"]["SiteMetricOut"];
         };
         SiteJobResponse: {

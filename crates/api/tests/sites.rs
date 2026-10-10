@@ -1947,3 +1947,15 @@ async fn site_list_carries_latest_metrics() {
     assert_eq!(row["metrics"]["memory_bytes"], json!(184 << 20));
     assert_eq!(row["metrics"]["disk_bytes"], json!(9 << 20));
 }
+
+#[tokio::test]
+async fn get_site_includes_admin_url() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_id, _) = running_site(&srv, &owner, "admin").await;
+    let site = get_site(&srv, &owner, &site_id).await;
+    let domain = site["domain"].as_str().expect("domain");
+    // hello_toml declares admin_path = "/".
+    assert_eq!(site["admin_url"], json!(format!("https://{domain}/")));
+}
