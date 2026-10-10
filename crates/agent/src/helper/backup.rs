@@ -179,6 +179,69 @@ fn chown_tree(
     Ok(())
 }
 
+/// One `renameat` (injectable so the failure path is tested).
+type Rename<'r> = dyn FnMut(BorrowedFd<'_>, &OsStr, BorrowedFd<'_>, &OsStr) -> nix::Result<()> + 'r;
+
+/// Move each `data/<dir>` to `stage/.old-<dir>` and `stage/<dir>` to
+/// `data/<dir>`. On the first failure every step taken is undone in
+/// reverse (new dirs back to `stage/<dir>`, old ones back to
+/// `data/<dir>`), so the caller's removal of `stage` never deletes the
+/// site's current data.
+fn swap_in(
+    data: BorrowedFd<'_>,
+    stage: BorrowedFd<'_>,
+    dirs: &[String],
+    rename: &mut Rename<'_>,
+) -> Result<(), HelperError> {
+    // (dir, its old copy is in stage, its new copy is in data)
+    let mut done: Vec<(&str, bool, bool)> = Vec::new();
+    let mut failure = None;
+    for dir in dirs {
+        let name = OsStr::new(dir);
+        let old = OsString::from(format!(".old-{dir}"));
+        let had_old = match kind_at(data, name) {
+            Ok(k) => k.is_some(),
+            Err(e) => {
+                failure = Some(e);
+                break;
+            }
+        };
+        if had_old {
+            if let Err(e) = rename(data, name, stage, old.as_os_str()) {
+                failure = Some(HelperError::io(format!("data/{dir}"), e));
+                break;
+            }
+        }
+        done.push((dir, had_old, false));
+        if let Err(e) = rename(stage, name, data, name) {
+            failure = Some(HelperError::io(format!("data/{dir}"), e));
+            break;
+        }
+        if let Some(last) = done.last_mut() {
+            last.2 = true;
+        }
+    }
+    let Some(failure) = failure else {
+        return Ok(());
+    };
+    for (dir, old_staged, new_in) in done.into_iter().rev() {
+        let name = OsStr::new(dir);
+        if new_in {
+            if let Err(e) = rename(data, name, stage, name) {
+                eprintln!("setu helper restore: cannot move data/{dir} back out: {e}");
+                continue;
+            }
+        }
+        if old_staged {
+            let old = OsString::from(format!(".old-{dir}"));
+            if let Err(e) = rename(stage, old.as_os_str(), data, name) {
+                eprintln!("setu helper restore: cannot put the old data/{dir} back: {e}");
+            }
+        }
+    }
+    Err(failure)
+}
+
 pub fn restore(
     ctx: &Ctx,
     short: &str,
@@ -216,22 +279,78 @@ pub fn restore(
     }
     // Swap each dir in: the old one moves into staging (rename never
     // follows a link, so a planted symlink is just moved), then the new
-    // one into data/, then staging (old data) is removed.
-    let swap = (|| {
-        for dir in &input.dirs {
-            let name = OsStr::new(dir);
-            let old: OsString = OsString::from(format!(".old-{dir}"));
-            if kind_at(data.as_fd(), name)?.is_some() {
-                renameat(data.as_fd(), name, stage.as_fd(), old.as_os_str())
-                    .map_err(|e| HelperError::io(format!("data/{dir}"), e))?;
-            }
-            renameat(stage.as_fd(), name, data.as_fd(), name)
-                .map_err(|e| HelperError::io(format!("data/{dir}"), e))?;
-        }
-        Ok::<(), HelperError>(())
-    })();
+    // one into data/, then staging (old data) is removed. A failed rename
+    // first puts every old dir back (M5).
+    let swap = swap_in(
+        data.as_fd(),
+        stage.as_fd(),
+        &input.dirs,
+        &mut |a, b, c, d| renameat(a, b, c, d),
+    );
     let cleanup = remove_tree_at(site.as_fd(), &staging);
     swap?;
     cleanup.map_err(|e| HelperError::io(stage_path.display(), e))?;
     Ok(json!({ "dirs": input.dirs }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tree(root: &Path, files: &[(&str, &str)]) {
+        for (rel, body) in files {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+            std::fs::write(p, body).expect("write");
+        }
+    }
+
+    fn read(p: &Path) -> String {
+        std::fs::read_to_string(p).expect("read")
+    }
+
+    /// A rename failing mid-swap puts every old dir back in `data/`
+    /// before the staging dir (which held them) is removed (M5).
+    #[test]
+    fn restore_swap_failure_restores_old_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let data_path = tmp.path().join("data");
+        let stage_path = tmp.path().join("stage");
+        tree(
+            &data_path,
+            &[("media/a.txt", "old-a"), ("uploads/u.txt", "old-u")],
+        );
+        tree(
+            &stage_path,
+            &[("media/a.txt", "new-a"), ("uploads/u.txt", "new-u")],
+        );
+        let data = open_root(&data_path).expect("data");
+        let stage = open_root(&stage_path).expect("stage");
+        let dirs = vec!["media".to_string(), "uploads".to_string()];
+
+        // Calls: media out, media in, uploads out, uploads in (fails).
+        let mut calls = 0;
+        let mut flaky = |from: BorrowedFd<'_>, a: &OsStr, to: BorrowedFd<'_>, b: &OsStr| {
+            calls += 1;
+            if calls == 4 {
+                return Err(nix::errno::Errno::EIO);
+            }
+            renameat(from, a, to, b)
+        };
+        let err = swap_in(data.as_fd(), stage.as_fd(), &dirs, &mut flaky);
+        assert!(err.is_err(), "the failed rename is reported");
+        assert_eq!(read(&data_path.join("media/a.txt")), "old-a");
+        assert_eq!(read(&data_path.join("uploads/u.txt")), "old-u");
+        assert!(!stage_path.join(".old-media").exists());
+        assert!(!stage_path.join(".old-uploads").exists());
+
+        // Without a failure every new dir is in place, the old ones staged.
+        let mut real = |from: BorrowedFd<'_>, a: &OsStr, to: BorrowedFd<'_>, b: &OsStr| {
+            renameat(from, a, to, b)
+        };
+        swap_in(data.as_fd(), stage.as_fd(), &dirs, &mut real).expect("swap");
+        assert_eq!(read(&data_path.join("media/a.txt")), "new-a");
+        assert_eq!(read(&data_path.join("uploads/u.txt")), "new-u");
+        assert_eq!(read(&stage_path.join(".old-media/a.txt")), "old-a");
+    }
 }
