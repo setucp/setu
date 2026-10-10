@@ -476,6 +476,9 @@ async fn ensure_packages(
     // The tools the repository steps and the keyring fetch rely on come
     // first (0.1.2 M2): CA certificates for HTTPS, curl and gnupg for the
     // Caddy steps.
+    sys.run("apt-get", &["update"])
+        .await
+        .map_err(step("apt update"))?;
     sys.run(
         "apt-get",
         &["install", "-y", "ca-certificates", "curl", "gnupg"],
@@ -991,6 +994,33 @@ mod tests {
             .position(|c| c == &format!("fetch {}", plan.repos[0].keyring_url))
             .expect("pgdg keyring fetched");
         assert!(certs < key, "{calls:?}");
+    }
+
+    /// A box with empty apt lists (the e2e image clears them) must refresh
+    /// the index before the first install (0.1.2 I2 fix of M2).
+    #[tokio::test]
+    async fn packages_install_after_an_index_refresh() {
+        let sys = crate::install_system::RecordingCommands::new();
+        let plan = plan_on(
+            &Distro {
+                id: "debian".into(),
+                version_id: "12".into(),
+                codename: Some("bookworm".into()),
+            },
+            false,
+        )
+        .expect("supported");
+        let fetch = LoggingFetch {
+            sys: sys.clone(),
+            bytes: Vec::new(),
+        };
+        assert!(ensure_packages(&sys, &plan, &fetch).await.is_err());
+        let calls = sys.calls();
+        assert_eq!(calls[0], "apt-get update", "{calls:?}");
+        assert_eq!(
+            calls[1], "apt-get install -y ca-certificates curl gnupg",
+            "{calls:?}"
+        );
     }
 
     #[tokio::test]
