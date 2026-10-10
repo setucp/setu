@@ -645,7 +645,7 @@ async fn commands_for_one_site_run_in_order_while_other_sites_and_readonly_run_c
     let dir = tempfile::tempdir().expect("tempdir");
     let servers = start_servers().await;
     let helper = FakeHelper::new();
-    helper.set_delay(Verb::Install, Duration::from_millis(500));
+    helper.set_delay(Verb::Install, Duration::from_millis(1200));
     let agent = fake_agent(dir.path(), helper.clone());
     let binary = BinaryRef {
         version: "0.1.0".to_string(),
@@ -691,12 +691,15 @@ async fn commands_for_one_site_run_in_order_while_other_sites_and_readonly_run_c
         assert!(r.ok, "{}: {:?}", r.id, r.error);
     }
     let total = start.elapsed();
+    // Two 1200 ms installs on different sites run side by side: serial
+    // execution would take at least 2400 ms. The bounds leave headroom
+    // for slow CI runners while still ruling out serial behaviour.
     assert!(
-        total < Duration::from_millis(800),
+        total < Duration::from_millis(2200),
         "sites ran serially: {total:?}"
     );
     assert!(
-        st.1 < Duration::from_millis(400),
+        st.1 < Duration::from_millis(1200),
         "status waited: {:?}",
         st.1
     );

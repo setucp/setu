@@ -182,6 +182,14 @@ pub fn caddy_base_config(
     if let Some(panel) = panel {
         let route = route_json(PANEL_ROUTE_ID, &panel.host, &panel.upstream)?;
         config["apps"]["http"]["servers"]["setu"]["routes"] = serde_json::json!([route]);
+        // Clients send no SNI when the host is an IP literal (a `--tls
+        // internal` install without a DNS name), so Caddy has nothing
+        // to pick a certificate by and the handshake fails. A default
+        // SNI makes the panel's certificate the fallback.
+        if panel.host.parse::<std::net::IpAddr>().is_ok() {
+            config["apps"]["http"]["servers"]["setu"]["tls_connection_policies"] =
+                serde_json::json!([{ "default_sni": panel.host }]);
+        }
     }
     Ok(config)
 }
