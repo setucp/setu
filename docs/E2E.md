@@ -23,8 +23,8 @@ TAP: `1..14`, `ok N - name` / `not ok N - name` per assertion, then
   `$HOSTIP:55441`. Nothing binds `0.0.0.0` on the host and port 5432 is
   never used.
 - The agent box `setu-e2e` is the image `scripts/e2e/Dockerfile`
-  (`jrei/systemd-ubuntu:24.04` + `curl ca-certificates sudo python3
-  iproute2`; no Caddy, Postgres or nftables: `setu agent install`
+  (`ubuntu:24.04`, multi-arch, + `systemd dbus curl ca-certificates sudo
+  python3 iproute2`; no Caddy, Postgres or nftables: `setu agent install`
   installs them) run with `--privileged --cgroupns=private --network
   setu-e2e-net`: no host network, no host cgroup bind mount.
 - Cleanup (trap) stops only what the script started: the PIDs it saved

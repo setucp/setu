@@ -21,10 +21,9 @@
 # the container, the network and the PID saved under $SETU_INSTALL_DIR.
 # SETU_INSTALL_KEEP=1 leaves them for debugging.
 #
-# SETU_TEST_IMAGE selects the systemd base image (default
-# jrei/systemd-ubuntu:24.04; CI also runs jrei/systemd-ubuntu:22.04,
-# jrei/systemd-debian:12 and jrei/systemd-debian:13). One at a time: each
-# run owns the fixed container and network names below.
+# SETU_TEST_IMAGE selects the base image (default ubuntu:24.04, multi-arch;
+# CI also runs ubuntu:22.04, debian:12 without sudo and debian:13, 0.1.2 I2).
+# One at a time: each run owns the fixed container and network names below.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -34,7 +33,7 @@ SETU_INSTALL_DIR=$(cd "$SETU_INSTALL_DIR" && pwd)
 
 NET=setu-install-net
 CTN=setu-install-test
-BASE_IMAGE=${SETU_TEST_IMAGE:-jrei/systemd-ubuntu:24.04}
+BASE_IMAGE=${SETU_TEST_IMAGE:-ubuntu:24.04}
 IMAGE="setu-install-test-image:$(printf '%s' "$BASE_IMAGE" | tr -c 'A-Za-z0-9._-' '_')"
 ART_PORT=8124
 TARGET=x86_64-unknown-linux-musl
