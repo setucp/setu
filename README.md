@@ -55,7 +55,7 @@ service.
 
 You need a fresh Ubuntu 22.04 or 24.04, or Debian 12 or 13, server (x86_64 or aarch64), root, ports 80 and 443
 open, and a DNS name pointing at the server. The installer brings
-PostgreSQL 16 and Caddy itself.
+PostgreSQL 16 or 17 depending on the distribution, and Caddy itself.
 
 ```sh
 curl -fsSLO https://github.com/setucp/setu/releases/latest/download/install.sh && sudo bash install.sh --panel-host panel.example.com

@@ -110,7 +110,6 @@ pub fn helper_is_safe(file: Option<FileMeta>, parent: Option<FileMeta>) -> bool 
     file_ok && parent_ok
 }
 
-/// Every check, in table order.
 /// The `distro` check: this host's `os-release` names a supported
 /// distribution (spec 0.1.2 §2).
 fn distro_check(probe: &dyn Probe) -> (bool, String) {
@@ -127,6 +126,7 @@ fn distro_check(probe: &dyn Probe) -> (bool, String) {
     }
 }
 
+/// Every check, in table order.
 pub async fn doctor_rows(
     config: &AgentConfig,
     sys: &dyn SystemCommands,

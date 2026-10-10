@@ -20,7 +20,8 @@ nothing about how Setu works changes.
   Debian 13. Other distributions are refused unless `--force-distro`,
   which uses the Debian 12 plan and says so.
 - Provisioning and updates refuse a manifest that has no binary for the
-  server's architecture (a `validation` error naming both targets);
+  server's architecture (a `validation` error that names the app and
+  the server's target);
   the site create request is refused early with a 400.
 
 ### Upgrading

@@ -510,6 +510,9 @@ pub fn target_for_arch(arch: &str) -> Result<Target, AppError> {
     match arch {
         "x86_64" => Ok(Target::X86_64Linux),
         "aarch64" => Ok(Target::Aarch64Linux),
+        "" => Err(AppError::validation(
+            "server has not reported its architecture (join first)",
+        )),
         other => Err(AppError::validation(format!(
             "unsupported server architecture {other}"
         ))),
@@ -818,5 +821,23 @@ mod secrets_tests {
         assert_eq!(ctx.redact("x hunter2-secret"), "x ***");
         ctx.add_secret("another-secret");
         assert_eq!(ctx.redact("another-secret"), "***");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test module (R146)
+mod arch_tests {
+    use super::*;
+
+    /// An empty architecture means the agent has not reported one yet
+    /// (0.1.2 M6): the message says what to do about it.
+    #[test]
+    fn target_for_arch_says_the_server_has_not_reported() {
+        let err = target_for_arch("").expect_err("no architecture reported");
+        assert!(
+            err.message
+                .contains("server has not reported its architecture (join first)"),
+            "{err}"
+        );
     }
 }
