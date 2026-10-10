@@ -3,7 +3,9 @@
 //!
 //! - every site with a recorded domain gets `setu-site-<short>` →
 //!   `127.0.0.1:<port>` (upsert: PATCH when present, POST when not), and
-//!   the panel route from `agent.toml` gets `setu-panel`;
+//!   the panel route from `agent.toml` gets `setu-panel`, upserted first
+//!   and moved to the front of the routes array when it is not there
+//!   (Caddy routes are first-match);
 //! - `setu-site-*` routes whose site is not in state (or has no domain)
 //!   are removed; routes Setu did not write are never touched;
 //! - unknown site trees and `site_*` databases are **reported** (logged
@@ -38,6 +40,16 @@ where
     C: CaddyAdmin + ?Sized,
     P: PostgresAdmin + ?Sized,
 {
+    // The panel first, and kept first: Caddy routes are first-match, so
+    // no site route may precede it (R130).
+    if let Some(panel) = &config.panel {
+        if let Err(e) = caddy
+            .upsert_route(PANEL_ROUTE_ID, &panel.host, &panel.upstream)
+            .await
+        {
+            tracing::warn!(error = %e, "reconcile: cannot upsert the panel route");
+        }
+    }
     let mut wanted = BTreeSet::new();
     for (short, site) in &state.sites {
         let (Some(domain), Ok(id)) = (&site.domain, site_route_id(short)) else {
@@ -54,13 +66,8 @@ where
             tracing::warn!(route = %id, error = %e, "reconcile: cannot upsert route");
         }
     }
-    if let Some(panel) = &config.panel {
-        if let Err(e) = caddy
-            .upsert_route(PANEL_ROUTE_ID, &panel.host, &panel.upstream)
-            .await
-        {
-            tracing::warn!(error = %e, "reconcile: cannot upsert the panel route");
-        }
+    if let Err(e) = caddy.move_route_first(PANEL_ROUTE_ID).await {
+        tracing::warn!(error = %e, "reconcile: cannot move the panel route first");
     }
     for id in caddy.list_route_ids().await? {
         if id.starts_with("setu-site-") && !wanted.contains(&id) {

@@ -122,3 +122,65 @@ async fn reconcile_restores_missing_routes_including_panel_and_removes_stale() {
         .iter()
         .all(|c| c.verb == setu_agent::helper::Verb::Unit && c.input["op"] == "show"));
 }
+
+/// Caddy routes are first-match: after a pass the panel route is the
+/// first route of server `setu`, whether it was missing (re-added by
+/// `POST`, i.e. appended) or present behind site routes (R130).
+#[tokio::test]
+async fn reconcile_keeps_panel_route_first() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = Paths::new(Some(dir.path().to_path_buf()));
+    let config = AgentConfig {
+        sites_root: p.sites(),
+        state_path: p.state(),
+        panel: Some(PanelRoute {
+            host: "panel.example.test".into(),
+            upstream: "unix//run/setu/http.sock".into(),
+        }),
+        ..AgentConfig::default()
+    };
+    let mut state = State::default();
+    state
+        .sites
+        .insert("aaaaaaaa".into(), record(Some("a.example.test"), 20001));
+    state
+        .sites
+        .insert("bbbbbbbb".into(), record(Some("b.example.test"), 20002));
+    let caddy = FakeCaddy::new();
+    let postgres = FakePostgres::new();
+    let helper = FakeHelper::new();
+
+    // Missing panel: a pass must not leave it appended behind the sites.
+    caddy
+        .upsert_route("setu-site-aaaaaaaa", "a.example.test", "127.0.0.1:20001")
+        .await
+        .expect("seed a");
+    setu_agent::reconcile::run(&state, &config, &helper, &caddy, &postgres)
+        .await
+        .expect("reconcile");
+    let ids: Vec<String> = caddy.list_route_ids().await.expect("ids");
+    assert_eq!(
+        ids.first().map(String::as_str),
+        Some("setu-panel"),
+        "{ids:?}"
+    );
+    assert_eq!(ids.len(), 3, "{ids:?}");
+
+    // Panel present but behind a site route: moved to the front, nothing lost.
+    let routes = caddy.admin().routes();
+    let mut reordered: Vec<serde_json::Value> = routes[1..].to_vec();
+    reordered.push(routes[0].clone());
+    let mut cfg = caddy.admin().config();
+    cfg["apps"]["http"]["servers"]["setu"]["routes"] = serde_json::Value::Array(reordered);
+    caddy.load(&cfg).await.expect("load reordered");
+    assert_ne!(caddy.list_route_ids().await.expect("ids")[0], "setu-panel");
+    setu_agent::reconcile::run(&state, &config, &helper, &caddy, &postgres)
+        .await
+        .expect("reconcile");
+    let ids: Vec<String> = caddy.list_route_ids().await.expect("ids");
+    assert_eq!(
+        ids,
+        vec!["setu-panel", "setu-site-aaaaaaaa", "setu-site-bbbbbbbb"],
+        "panel first, sites kept in order"
+    );
+}

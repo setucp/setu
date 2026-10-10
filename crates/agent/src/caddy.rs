@@ -138,6 +138,11 @@ pub trait CaddyAdmin: Send + Sync {
     }
     /// The full routes array of server `setu` (`[]` when null/missing).
     async fn routes(&self) -> anyhow::Result<Vec<serde_json::Value>>;
+    /// Make route `id` the first route of server `setu` (Caddy routes
+    /// are first-match): when it exists and is not already first, the
+    /// array is rebuilt with it in front and written back with one
+    /// `PATCH` of the routes path (replace). A missing route is a no-op.
+    async fn move_route_first(&self, id: &str) -> anyhow::Result<()>;
     /// `POST /load` a whole config.
     async fn load(&self, config: &serde_json::Value) -> anyhow::Result<()>;
     /// True when something accepts TCP connections on the admin port.
@@ -277,6 +282,26 @@ impl<T: AdminTransport> CaddyAdmin for CaddyClient<T> {
         let routes: Option<Vec<serde_json::Value>> =
             serde_json::from_slice(&body).context("caddy list routes: bad json")?;
         Ok(routes.unwrap_or_default())
+    }
+
+    async fn move_route_first(&self, id: &str) -> anyhow::Result<()> {
+        if !valid_route_id(id) {
+            anyhow::bail!("invalid route id {id:?}");
+        }
+        let mut routes = self.routes().await?;
+        let is_id = |r: &serde_json::Value| r.get("@id").and_then(|v| v.as_str()) == Some(id);
+        let Some(pos) = routes.iter().position(is_id) else {
+            return Ok(());
+        };
+        if pos == 0 {
+            return Ok(());
+        }
+        let route = routes.remove(pos);
+        routes.insert(0, route);
+        let body = serde_json::to_vec(&serde_json::Value::Array(routes))?;
+        self.expect_ok("reorder routes", "PATCH", ROUTES_PATH, Some(body))
+            .await?;
+        Ok(())
     }
 
     async fn load(&self, config: &serde_json::Value) -> anyhow::Result<()> {
@@ -543,6 +568,21 @@ impl FakeAdmin {
                 routes.push(route);
                 if has_duplicate_ids(cfg) {
                     routes_mut(cfg).expect("routes").pop();
+                    return (400, err_body("duplicate ID"));
+                }
+                (200, Vec::new())
+            }
+            // PATCH replaces an existing value (Caddy's semantics).
+            ("PATCH", ROUTES_PATH) => {
+                let Some(serde_json::Value::Array(new)) = parsed else {
+                    return (400, err_body("routes must be an array"));
+                };
+                let Some(routes) = routes_mut(cfg) else {
+                    return (404, err_body("no routes array"));
+                };
+                let old = std::mem::replace(routes, new);
+                if has_duplicate_ids(cfg) {
+                    *routes_mut(cfg).expect("routes") = old;
                     return (400, err_body("duplicate ID"));
                 }
                 (200, Vec::new())

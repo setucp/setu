@@ -208,13 +208,13 @@ async fn install_system_rerun_merges_existing_routes() {
     assert_eq!(
         routes,
         vec![
-            route_json(&site_id, "a.example.test", "127.0.0.1:20001").expect("site"),
             route_json(
                 PANEL_ROUTE_ID,
                 "panel.example.test",
                 "unix//run/setu/http.sock"
             )
             .expect("panel"),
+            route_json(&site_id, "a.example.test", "127.0.0.1:20001").expect("site"),
         ],
         "site route survives, the panel route takes the new host once"
     );
@@ -225,7 +225,7 @@ async fn install_system_rerun_merges_existing_routes() {
     // The running config now is that merge.
     assert_eq!(
         caddy.list_route_ids().await.expect("ids"),
-        vec![site_id, PANEL_ROUTE_ID.to_string()]
+        vec![PANEL_ROUTE_ID.to_string(), site_id]
     );
 }
 
