@@ -261,6 +261,25 @@ impl<'a> Jobs<'a> {
         }
     }
 
+    /// Null the sealed payload fields (`changes`, `prompts`, `old_env`,
+    /// `old_spec`) of every job of `site_id`, so a deleted site leaves no
+    /// sealed values behind in the job rows that outlive it (M1). Returns
+    /// how many rows were scrubbed. Must run before the site row goes:
+    /// the FK then unlinks the rows and `site_id` no longer matches.
+    pub async fn scrub_payload_secrets_for_site(&self, site_id: &str) -> Result<u64, AppError> {
+        Ok(sqlx::query!(
+            "UPDATE jobs SET payload = payload || jsonb_build_object(
+                 'changes', NULL::jsonb, 'prompts', NULL::jsonb,
+                 'old_env', NULL::jsonb, 'old_spec', NULL::jsonb)
+             WHERE site_id = $1",
+            site_id
+        )
+        .execute(self.pool)
+        .await
+        .map_err(map_db_error)?
+        .rows_affected())
+    }
+
     /// Put `running` jobs whose lease expired back to `queued` (boot
     /// recovery). Returns how many.
     pub async fn reset_expired_running(&self) -> Result<u64, AppError> {

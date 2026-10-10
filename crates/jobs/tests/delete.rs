@@ -8,7 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{
-    ctx_with_logs, exec, lease_to_test_worker, manifest_toml, setup, test_sealer, wait_job,
+    ctx_with_logs, exec, finish_job, job_ctx, lease_to_test_worker, manifest_toml, setup,
+    test_sealer, wait_job,
 };
 use setu_jobs::{
     backup, delete, delete_backup, provision, testing::FakeAgent, Runner, RunnerConfig, SystemClock,
@@ -206,4 +207,58 @@ async fn reclaimed_delete_job_after_the_row_is_gone_ends_done() {
     runner.abort();
     assert_eq!(done.status, "done", "error: {:?}", done.error);
     assert!(agent.transcript().is_empty(), "nothing re-run on the agent");
+}
+
+/// M1: a deleted site's kept job rows hold no sealed values: the
+/// `changes`, `prompts`, `old_env` and `old_spec` payload fields are nulled
+/// before the site row goes (the FK then unlinks the rows).
+#[tokio::test]
+async fn delete_scrubs_sealed_payloads_of_the_sites_jobs() {
+    let (_test_db, fx) = setup(&manifest_toml("0.1.0")).await;
+    let agent = FakeAgent::new();
+    let (ctx, _logs) = ctx_with_logs(fx.db.clone(), &agent);
+    provision::run(&ctx, &fx.site_id).await.expect("provision");
+
+    let server_id = fx.server_id.clone();
+    let update = fx
+        .db
+        .jobs()
+        .enqueue(
+            "update_site",
+            Some(&fx.site_id),
+            Some(&server_id),
+            Some(&serde_json::json!({
+                "changes": {"HELLO_PASSWORD": "v1:sealed-password"},
+                "prompts": {"ADMIN_TOKEN": "v1:sealed-token"},
+                "old_env": [{"name": "HELLO_PASSWORD", "value": "v1:sealed-old"}],
+                "old_spec": "v1:sealed-spec",
+                "step": "write_env"
+            })),
+        )
+        .await
+        .unwrap();
+    lease_to_test_worker(&fx.db, &update.id).await;
+    finish_job(&fx.db, &update.id, true).await;
+
+    let (ctx, _job, _logs) = job_ctx(
+        &fx.db,
+        &agent,
+        "delete_site",
+        &fx.site_id,
+        serde_json::json!({}),
+    )
+    .await;
+    delete::run(&ctx, &fx.site_id).await.expect("delete");
+
+    let kept = fx.db.jobs().get(&update.id).await.unwrap();
+    assert_eq!(kept.site_id, None, "the job outlives the site");
+    for key in ["changes", "prompts", "old_env", "old_spec"] {
+        assert!(
+            kept.payload
+                .get(key)
+                .map_or(true, serde_json::Value::is_null),
+            "{key} must not survive the site"
+        );
+    }
+    assert_eq!(kept.payload["step"], "write_env", "non-secret cursor kept");
 }

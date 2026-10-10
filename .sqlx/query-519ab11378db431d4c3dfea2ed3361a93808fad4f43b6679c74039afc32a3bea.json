@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE jobs SET payload = payload || jsonb_build_object(\n                 'changes', NULL::jsonb, 'prompts', NULL::jsonb,\n                 'old_env', NULL::jsonb, 'old_spec', NULL::jsonb)\n             WHERE site_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "519ab11378db431d4c3dfea2ed3361a93808fad4f43b6679c74039afc32a3bea"
+}
