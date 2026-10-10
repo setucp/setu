@@ -35,6 +35,12 @@ Follow-ups from the first release (spec
   from the manifest's `admin_path` (`admin_url` on `GET /sites/{id}`,
   `null` when the path is not absolute) (#4).
 
+### Agent
+
+- Heartbeats measure each site's data directory (`du`) at most every
+  ten minutes; memory and CPU are still read every beat. The helper's
+  `unit show` takes `data_bytes: false` to skip the walk (#5).
+
 ### Internal
 
 - Workspace lints: `clippy::pedantic`, `unwrap_used`, `expect_used` as

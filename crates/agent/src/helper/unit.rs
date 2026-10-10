@@ -66,6 +66,14 @@ impl UnitOp {
 #[serde(deny_unknown_fields)]
 pub struct UnitOpInput {
     pub op: UnitOp,
+    /// `show` only: measure `data_bytes` (`du -sb data/` as root).
+    /// `false` skips the walk; the agent reuses its cached figure (#5).
+    #[serde(default = "measure_data_bytes")]
+    pub data_bytes: bool,
+}
+
+fn measure_data_bytes() -> bool {
+    true
 }
 
 /// Properties `unit show` returns (spec §4), plus `data_bytes`.
@@ -212,7 +220,9 @@ pub fn unit_op(
                 let v = props.get(key).cloned().unwrap_or_default();
                 out.insert(key.to_string(), serde_json::Value::String(v));
             }
-            out.insert("data_bytes".to_string(), json!(data_bytes(ctx, short)));
+            if input.data_bytes {
+                out.insert("data_bytes".to_string(), json!(data_bytes(ctx, short)));
+            }
             Ok(serde_json::Value::Object(out))
         }
         op => {

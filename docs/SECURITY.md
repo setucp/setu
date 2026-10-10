@@ -68,7 +68,7 @@ agent doctor` checks both). The agent calls it only as `sudo -n
 | `write-env [{name, value}]` | `/srv/setu/sites/<short>/env`, root:root 0600 |
 | `install {version, sha256[, format, exec]}` | verify `/var/lib/setu/downloads/<sha256>.tar.gz` (the name is kept for a raw binary too), then extract it to `bin/<version>/`, or with `format: "binary"` copy it to `bin/<version>/<exec>` (`exec` one file name), 0755 |
 | `switch-version {version}` | atomic swap of the `bin/current` symlink |
-| `unit {op}` | `start` = `systemctl enable --now`, `stop` = `disable --now`, `restart` = `enable` + `restart`, `show` = unit properties + `du -sb data/` (R118) |
+| `unit {op}` | `start` = `systemctl enable --now`, `stop` = `disable --now`, `restart` = `enable` + `restart`, `show` = unit properties + `du -sb data/` (R118); `data_bytes: false` (bool, default true) skips the `du` walk (#5) |
 | `backup {dirs}` | `tar.zst` of `data/<dir>`… to stdout |
 | `restore {dirs}` + stream | unit must be inactive; staging, chown to the site user, swap into `data/` |
 | `site-remove {}` | `disable --now`, remove the drop-in, `userdel`, remove the tree |

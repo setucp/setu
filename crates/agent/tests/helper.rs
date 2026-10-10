@@ -1371,3 +1371,21 @@ fn backup_skips_foreign_owned_and_hardlinked_files() {
         "foreign-owned files skipped"
     );
 }
+
+#[test]
+fn unit_show_skips_du_when_data_bytes_is_false() {
+    let t = setup();
+    t.create(&["media"]);
+    std::fs::write(t.site("data/media/a.bin"), vec![0u8; 4096]).expect("write");
+    t.run(Verb::Unit, S, json!({"op": "start"})).expect("start");
+    let show = t
+        .run(Verb::Unit, S, json!({"op": "show", "data_bytes": false}))
+        .expect("show");
+    assert_eq!(show["ActiveState"], "active");
+    assert!(show.get("data_bytes").is_none(), "no du walk: {show}");
+    let measured = t.run(Verb::Unit, S, json!({"op": "show"})).expect("show");
+    assert!(
+        measured["data_bytes"].as_u64().expect("bytes") >= 4096,
+        "default still measures"
+    );
+}

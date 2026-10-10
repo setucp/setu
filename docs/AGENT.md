@@ -114,7 +114,9 @@ by `***` in its log and error. Poll errors back off 1 s → 30 s.
 Heartbeat (its own task, every 15 s): `boot_id` (kernel boot id plus a
 per-process id, so an agent restart lets the control plane requeue
 commands it had delivered), load, free memory and disk, unit states,
-and per-site CPU, memory and data size from the helper's `unit show`.
+and per-site CPU and memory from the helper's `unit show` every beat.
+Per-site data size (`du -sb data/`) is measured at most every ten
+minutes and reused in between (`DATA_BYTES_TTL`, #5).
 
 ### `state.json`
 

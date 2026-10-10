@@ -215,6 +215,20 @@ impl<H: Helper, P, C> NativeRuntime<H, P, C> {
         Ok(RuntimeStatus::from_show(&self.unit(short, "show").await?))
     }
 
+    /// `unit show` without the `du` walk: `data_bytes` comes back 0 and
+    /// the heartbeat substitutes its cached figure (#5).
+    pub async fn status_without_data(&self, short: &str) -> anyhow::Result<RuntimeStatus> {
+        Ok(RuntimeStatus::from_show(
+            &self
+                .call(
+                    Verb::Unit,
+                    short,
+                    json!({ "op": "show", "data_bytes": false }),
+                )
+                .await?,
+        ))
+    }
+
     /// Journal lines after `cursor` (agent user, not the helper).
     pub async fn logs_inner(
         &self,

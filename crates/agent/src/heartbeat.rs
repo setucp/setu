@@ -3,13 +3,15 @@
 //!
 //! Metrics come from the helper's `unit show` (`MemoryCurrent`,
 //! `CPUUsageNSec`, and `data_bytes`, which the helper measures as root);
-//! the agent never runs `du` itself. Host figures: `/proc/loadavg`
+//! the agent never runs `du` itself. `data_bytes` is measured at most once
+//! per [`DATA_BYTES_TTL`] per site; memory and CPU are read every beat. Host figures: `/proc/loadavg`
 //! (load1), `/proc/meminfo` (`MemAvailable`, fallback `MemFree`) and
 //! `df -m` for disk.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use setu_proto::{Heartbeat, SiteMetric};
 
@@ -115,20 +117,79 @@ fn boot_id_from(kernel: &Path, nonce: &str) -> String {
     }
 }
 
+/// How long a site's measured `data_bytes` is reused (#5).
+pub const DATA_BYTES_TTL: Duration = Duration::from_secs(600);
+
+/// Per-site `data_bytes` and when it was measured. Owned by the
+/// heartbeat loop (one beat at a time, so no lock).
+#[derive(Debug, Default)]
+pub struct DataBytesCache {
+    entries: HashMap<String, (Instant, u64)>,
+}
+
+impl DataBytesCache {
+    /// The cached figure when measured less than [`DATA_BYTES_TTL`] before `now`.
+    pub fn fresh(&self, short: &str, now: Instant) -> Option<u64> {
+        self.entries
+            .get(short)
+            .filter(|(at, _)| now.saturating_duration_since(*at) < DATA_BYTES_TTL)
+            .map(|(_, bytes)| *bytes)
+    }
+
+    pub fn store(&mut self, short: &str, now: Instant, bytes: u64) {
+        self.entries.insert(short.to_string(), (now, bytes));
+    }
+
+    /// Forget sites this host no longer has.
+    pub fn retain(&mut self, shorts: &[String]) {
+        self.entries.retain(|k, _| shorts.contains(k));
+    }
+}
+
 /// Collect one heartbeat for `rt`: unit state and metrics per site from
 /// the helper's `unit show` plus the unit's cgroup files.
-pub async fn collect_heartbeat<H, P, C>(rt: &NativeRuntime<H, P, C>) -> Heartbeat
+pub async fn collect_heartbeat<H, P, C>(
+    rt: &NativeRuntime<H, P, C>,
+    cache: &mut DataBytesCache,
+) -> Heartbeat
+where
+    H: Helper,
+    P: crate::postgres::PostgresAdmin + Send + Sync,
+    C: crate::caddy::CaddyAdmin,
+{
+    collect_heartbeat_at(rt, cache, Instant::now()).await
+}
+
+/// One heartbeat as of `now`: memory and CPU every beat, `data_bytes`
+/// from `cache` while fresh (the helper skips `du`), else measured.
+pub async fn collect_heartbeat_at<H, P, C>(
+    rt: &NativeRuntime<H, P, C>,
+    cache: &mut DataBytesCache,
+    now: Instant,
+) -> Heartbeat
 where
     H: Helper,
     P: crate::postgres::PostgresAdmin + Send + Sync,
     C: crate::caddy::CaddyAdmin,
 {
     let shorts: Vec<String> = rt.state().read(|st| st.sites.keys().cloned().collect());
+    cache.retain(&shorts);
     let mut units = Vec::new();
     let mut metrics = Vec::new();
     for short in &shorts {
-        let status = match rt.status_inner(short).await {
-            Ok(st) => st,
+        let cached = cache.fresh(short, now);
+        let shown = match cached {
+            Some(_) => rt.status_without_data(short).await,
+            None => rt.status_inner(short).await,
+        };
+        let status = match shown {
+            Ok(mut st) => {
+                match cached {
+                    Some(bytes) => st.data_bytes = bytes,
+                    None => cache.store(short, now, st.data_bytes),
+                }
+                st
+            }
             Err(_) => crate::runtime::RuntimeStatus {
                 sub: "unknown".to_string(),
                 ..Default::default()
@@ -168,8 +229,9 @@ where
     P: PostgresAdmin + Send + Sync,
     C: CaddyAdmin,
 {
+    let mut cache = DataBytesCache::default();
     loop {
-        let hb = collect_heartbeat(agent.runtime()).await;
+        let hb = collect_heartbeat(agent.runtime(), &mut cache).await;
         if let Err(e) = cp.heartbeat(&hb).await {
             tracing::warn!(error = %e, "heartbeat failed");
         }
