@@ -1,7 +1,8 @@
 //! Delete state machine (spec §6), named steps resumed from the job's
 //! cursor: `backup` (`pre_delete`, kept 30 days), `remove_route`, `stop`,
-//! `drop_database`, `site_remove`, `finish` (the row is deleted; its
-//! backups keep `site_name` and `domain`, `site_id` becomes NULL).
+//! `drop_database`, `site_remove`, `finish` (the row is deleted; this
+//! job keeps its row with `site_id` NULL, so it ends `done` with its log;
+//! its backups keep `site_name` and `domain`, `site_id` becomes NULL).
 //!
 //! A failed `pre_delete` backup aborts the delete with the site
 //! untouched, except for a `failed` site, which may never have had a

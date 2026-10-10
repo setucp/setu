@@ -459,8 +459,8 @@ impl<'a> Sites<'a> {
         .ok_or_else(|| AppError::not_found("site not found"))
     }
 
-    /// Delete the row; jobs and metrics cascade, backups keep their
-    /// rows with `site_id` nulled.
+    /// Delete the row; metrics cascade, jobs and backups keep their rows
+    /// with `site_id` nulled (0002, R142).
     pub async fn delete(&self, id: &str) -> Result<(), AppError> {
         let n = sqlx::query!("DELETE FROM sites WHERE id = $1", id)
             .execute(self.pool)

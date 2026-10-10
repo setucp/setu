@@ -41,6 +41,12 @@ Follow-ups from the first release (spec
   ten minutes; memory and CPU are still read every beat. The helper's
   `unit show` takes `data_bytes: false` to skip the walk (#5).
 
+### Control plane
+
+- A deleted site's jobs keep their rows (`jobs.site_id` becomes NULL,
+  migration `0002`), so the delete job ends `done` with its log in Jobs
+  and the runner no longer logs `not_found` after a delete (#6).
+
 ### Internal
 
 - Workspace lints: `clippy::pedantic`, `unwrap_used`, `expect_used` as

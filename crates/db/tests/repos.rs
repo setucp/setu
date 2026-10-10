@@ -1172,3 +1172,40 @@ async fn latest_for_sites_returns_the_newest_sample_per_site() {
     assert_eq!(map[&s.id].memory_bytes, 3 << 20, "the newest sample");
     assert!(db.metrics().latest_for_sites(&[]).await.unwrap().is_empty());
 }
+
+/// Review Focus 3: NULL site ids never collide in the partial unique
+/// index; a site's own active-job guard still holds.
+#[tokio::test]
+async fn jobs_without_a_site_never_collide_in_the_active_index() {
+    let (_test, db) = test_db().await;
+    let s = site(&db).await;
+    for _ in 0..3 {
+        db.jobs()
+            .enqueue("delete_backup", None, Some(&s.server_id), None)
+            .await
+            .expect("site-less jobs coexist");
+    }
+    db.jobs()
+        .enqueue("backup_site", Some(&s.id), Some(&s.server_id), None)
+        .await
+        .expect("first");
+    let err = db
+        .jobs()
+        .enqueue("backup_site", Some(&s.id), Some(&s.server_id), None)
+        .await
+        .expect_err("second active job for the site");
+    assert_eq!(err.code, ErrorCode::Conflict);
+    let job = db
+        .jobs()
+        .active_for_site(&s.id)
+        .await
+        .unwrap()
+        .expect("active");
+    db.sites().delete(&s.id).await.expect("delete site");
+    let kept = db
+        .jobs()
+        .get(&job.id)
+        .await
+        .expect("job row survives its site");
+    assert_eq!(kept.site_id, None);
+}

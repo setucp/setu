@@ -4,8 +4,15 @@
 
 mod common;
 
-use common::{ctx_with_logs, manifest_toml, setup};
-use setu_jobs::{backup, delete, delete_backup, provision, testing::FakeAgent};
+use std::sync::Arc;
+use std::time::Duration;
+
+use common::{
+    ctx_with_logs, exec, lease_to_test_worker, manifest_toml, setup, test_sealer, wait_job,
+};
+use setu_jobs::{
+    backup, delete, delete_backup, provision, testing::FakeAgent, Runner, RunnerConfig, SystemClock,
+};
 
 #[tokio::test]
 async fn delete_backs_up_then_removes_everything_and_the_row() {
@@ -113,4 +120,90 @@ async fn delete_backup_issues_command_and_marks_row() {
     // Already deleted: no second command, still a success.
     delete_backup::run(&ctx, &id).await.expect("idempotent");
     assert_eq!(agent.commands_of("delete_backup").len(), 1);
+}
+
+fn fast() -> RunnerConfig {
+    RunnerConfig {
+        concurrency: 1,
+        lease: Duration::from_secs(1),
+        renew_every: Duration::from_millis(200),
+        installs_per_server: 2,
+        idle_poll: Duration::from_millis(50),
+        verify_delay: Duration::ZERO,
+    }
+}
+
+#[tokio::test]
+async fn delete_job_through_the_runner_ends_done_and_keeps_its_log() {
+    let (_test_db, fx) = setup(&manifest_toml("0.1.0")).await;
+    let agent = FakeAgent::new();
+    let (ctx, _logs) = ctx_with_logs(fx.db.clone(), &agent);
+    provision::run(&ctx, &fx.site_id).await.expect("provision");
+    let job = fx
+        .db
+        .jobs()
+        .enqueue("delete_site", Some(&fx.site_id), Some(&fx.server_id), None)
+        .await
+        .unwrap();
+    let runner = Runner::spawn(
+        fx.db.clone(),
+        Arc::new(agent.clone()),
+        test_sealer(),
+        Arc::new(SystemClock),
+        fast(),
+    );
+
+    let done = wait_job(&fx.db, &job.id, Duration::from_secs(20)).await;
+    runner.abort();
+    assert_eq!(done.status, "done", "error: {:?}", done.error);
+    assert_eq!(done.site_id, None, "SET NULL kept the row");
+    assert!(done.log.contains("step finish: ok"), "{}", done.log);
+    assert!(
+        fx.db.sites().get(&fx.site_id).await.is_err(),
+        "site row gone"
+    );
+}
+
+/// Review Focus 3: a delete job reclaimed after `finish` removed the row
+/// arrives with `site_id = NULL` and must end `done`.
+#[tokio::test]
+async fn reclaimed_delete_job_after_the_row_is_gone_ends_done() {
+    let (test_db, fx) = setup(&manifest_toml("0.1.0")).await;
+    let agent = FakeAgent::new();
+    let job = fx
+        .db
+        .jobs()
+        .enqueue("delete_site", Some(&fx.site_id), Some(&fx.server_id), None)
+        .await
+        .unwrap();
+    lease_to_test_worker(&fx.db, &job.id).await;
+    exec(
+        &test_db,
+        "UPDATE jobs SET payload = jsonb_set(payload, '{step}', '\"finish\"') WHERE id = $1",
+        &job.id,
+    )
+    .await;
+    fx.db
+        .sites()
+        .delete(&fx.site_id)
+        .await
+        .expect("row removed by finish");
+    exec(
+        &test_db,
+        "UPDATE jobs SET locked_until = now() - interval '1 second' WHERE id = $1",
+        &job.id,
+    )
+    .await;
+    let runner = Runner::spawn(
+        fx.db.clone(),
+        Arc::new(agent.clone()),
+        test_sealer(),
+        Arc::new(SystemClock),
+        fast(),
+    );
+
+    let done = wait_job(&fx.db, &job.id, Duration::from_secs(20)).await;
+    runner.abort();
+    assert_eq!(done.status, "done", "error: {:?}", done.error);
+    assert!(agent.transcript().is_empty(), "nothing re-run on the agent");
 }

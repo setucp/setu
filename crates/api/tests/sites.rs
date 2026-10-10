@@ -623,9 +623,13 @@ async fn delete_site_runs_delete_job_and_removes_row() {
     let del_body: Value = del.json().await.expect("delete body is json");
     let del_job = del_body["job"]["id"].as_str().expect("job id").to_string();
 
-    // The delete job removes the site row (cascading its own job row);
-    // poll until the job row is gone, then the site must 404 too.
-    poll_job(&srv, &owner, &del_job).await;
+    // The delete job removes the site row; its job row stays (site_id
+    // NULL, migration 0002) and ends done. The site must 404 too.
+    let finished = poll_job(&srv, &owner, &del_job)
+        .await
+        .expect("delete job row kept");
+    assert_eq!(finished["status"], json!("done"), "{finished}");
+    assert_eq!(finished["site_id"], Value::Null);
     for _ in 0..40 {
         let got = owner
             .get(srv.url(&format!("/api/v1/sites/{site_id}")))
