@@ -9,6 +9,10 @@ or .NET single-file): no PHP stack, no Docker required. Each site is a
 native systemd service with its own system user, its own Postgres
 database and a Caddy route with automatic HTTPS.
 
+<p align="center"><img src="docs/brand/setu-demo.gif" alt="Installing Setu, creating a site from the panel, and the site serving over HTTPS" width="900"></p>
+
+*A real run: the installer, the panel, a Vyasa site provisioned in about ten seconds, live over HTTPS.*
+
 <p>
   <a href="https://github.com/setucp/setu/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/release-v0.1.0-4F46E5" alt="Release v0.1.0"></a>
   <a href="https://github.com/setucp/setu/actions/workflows/ci.yml"><img src="https://github.com/setucp/setu/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
