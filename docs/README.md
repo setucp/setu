@@ -20,11 +20,10 @@ own. One binary (`setu`), one Ubuntu 24.04 box to start.
 - Cutting a release: [RELEASING.md](RELEASING.md).
 - End-to-end and installer tests: [E2E.md](E2E.md).
 - Design: [spec](specs/2026-10-09-setu-design.md) (revision 4, as
-  built), its [review record](specs/2026-10-09-setu-review.md), the
-  [phase 1 plan](plans/2026-10-09-setu-mvp.md) and its
-  [ledger](plans/2026-10-09-setu-mvp.ledger.md) of rulings.
-- Later phases: [ROADMAP.md](ROADMAP.md). Session handoff:
-  [HANDOFF.md](HANDOFF.md).
+  built) and its [review record](specs/2026-10-09-setu-review.md). The
+  phase 1 plan and its ledger of rulings (the "R70"-style ids) live in
+  the private planning repository.
+- Later phases: [ROADMAP.md](ROADMAP.md).
 
 ## How it works
 

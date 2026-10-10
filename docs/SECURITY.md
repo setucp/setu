@@ -2,7 +2,8 @@
 
 What Setu protects, from whom, and what it leaves to you. The design is
 spec §4 and §7 ([spec](specs/2026-10-09-setu-design.md)); ruling ids
-like (R70) point into the [ledger](plans/2026-10-09-setu-mvp.ledger.md).
+like (R70) point into the phase 1 ledger of rulings (kept in the private
+planning repository).
 
 ## Trust model
 
