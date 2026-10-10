@@ -3,6 +3,24 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
+## 0.1.1 — Unreleased
+
+Follow-ups from the first release (spec
+`docs/specs/2026-10-10-setu-0.1.1-design.md`, issues #2–#10).
+
+### Manifests
+
+- Raw single-binary releases: a `run.binary` target may say
+  `format = "binary"`; the helper verifies the download and installs it
+  as `bin/<version>/<exec>` mode 0755 (`exec` is one file name). The
+  sample manifests (Miniflux, hello-axum) use it.
+
+### Upgrading
+
+- On a panel box: `install.sh --version 0.1.1` with the original flags;
+  the installer restarts `setu` and the local agent only when the binary
+  changed. Re-running `setu agent install` is not needed.
+
 ## 0.1.0 — 2026-10-10
 
 First release (MVP): a control panel for single-binary web apps on
