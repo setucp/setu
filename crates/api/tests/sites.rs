@@ -1963,3 +1963,38 @@ async fn get_site_includes_admin_url() {
     // hello_toml declares admin_path = "/".
     assert_eq!(site["admin_url"], json!(format!("https://{domain}/")));
 }
+
+/// Review Focus 4: only `prompt` rules, never a value of any rule.
+#[tokio::test]
+async fn version_prompts_lists_only_prompt_rules_and_no_values() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let viewer = srv.login_as("viewer").await;
+    publish(&srv, &owner, &hello_toml("0.1.0")).await;
+
+    let resp = viewer
+        .get(srv.url("/api/v1/apps/hello/versions/0.1.0/prompts"))
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let text = resp.text().await.expect("body");
+    let body: Value = serde_json::from_str(&text).expect("json");
+    assert_eq!(
+        body,
+        json!({"prompts": [{"name": "HELLO_NAME", "label": "Display name", "secret": true}]})
+    );
+    assert!(
+        !text.contains("hello-world"),
+        "a literal value leaked: {text}"
+    );
+    assert!(!text.contains("\"value\""), "{text}");
+
+    let missing = viewer
+        .get(srv.url("/api/v1/apps/hello/versions/9.9.9/prompts"))
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
+}

@@ -43,6 +43,10 @@ Follow-ups from the first release (spec
 
 ### Control plane
 
+- `GET /api/v1/apps/{id}/versions/{version}/prompts` lists a version's
+  prompt variables (`name`, `label`, `secret`; never a value). The update
+  dialog asks one labelled field per prompt instead of `NAME=value`
+  lines (#7).
 - A deleted site's jobs keep their rows (`jobs.site_id` becomes NULL,
   migration `0002`), so the delete job ends `done` with its log in Jobs
   and the runner no longer logs `not_found` after a delete (#6).

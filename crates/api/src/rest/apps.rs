@@ -444,3 +444,64 @@ mod tests {
         assert_eq!(body, "name = \"pinned\"");
     }
 }
+
+/// One `prompt` env rule of an app version: what an operator is asked
+/// for. Carries no value, ever (#7).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PromptOut {
+    pub name: String,
+    pub label: String,
+    pub secret: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PromptListOut {
+    pub prompts: Vec<PromptOut>,
+}
+
+/// The `prompt` rules of one version, by name (viewer and above). Other
+/// rules (`value`, `generate`, `from`) are never included, and neither
+/// is any stored answer.
+#[utoipa::path(
+    get,
+    path = "/api/v1/apps/{id}/versions/{version}/prompts",
+    params(
+        ("id" = String, Path, description = "App id"),
+        ("version" = String, Path, description = "App version"),
+    ),
+    responses(
+        (status = 200, body = PromptListOut),
+        (status = 401, body = super::ErrorBody),
+        (status = 404, body = super::ErrorBody),
+    )
+)]
+pub async fn version_prompts(
+    State(state): State<AppState>,
+    session: Session,
+    Path((id, version)): Path<(String, String)>,
+) -> Result<impl IntoResponse, AppError> {
+    require_role(&session, Role::Viewer).await?;
+    let row = state.db.apps().version(&id, &version).await?;
+    let manifest: setu_manifest::Manifest = serde_json::from_value(row.manifest).map_err(|e| {
+        tracing::error!(error = %e, "stored manifest is corrupt");
+        AppError::internal()
+    })?;
+    Ok(Json(PromptListOut {
+        prompts: prompt_rules(&manifest),
+    }))
+}
+
+fn prompt_rules(manifest: &setu_manifest::Manifest) -> Vec<PromptOut> {
+    manifest
+        .env
+        .iter()
+        .filter_map(|(name, spec)| match spec {
+            setu_manifest::EnvSpec::Prompt(p) => Some(PromptOut {
+                name: name.clone(),
+                label: p.label.clone(),
+                secret: p.secret,
+            }),
+            _ => None,
+        })
+        .collect()
+}

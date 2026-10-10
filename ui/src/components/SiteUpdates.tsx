@@ -1,9 +1,9 @@
 import * as React from "react";
 import { ArrowUpCircle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
-import { useAppVersions, useJobs, useUpdateSite } from "@/lib/api";
+import { useAppVersions, useJobs, useUpdateSite, useVersionPrompts } from "@/lib/api";
 import { ApiError, type AppVersion, type Job } from "@/lib/client";
-import { compareVersions, parseAssignments } from "@/lib/format";
+import { compareVersions } from "@/lib/format";
 import { AppLink } from "./AppLink";
 import { ErrorText } from "./ErrorText";
 import { RelativeTime } from "./RelativeTime";
@@ -13,8 +13,8 @@ import { Button } from "./ui/button";
 import { Card } from "./ui/card";
 import { Field } from "./ui/field";
 import { Modal } from "./ui/dialog";
+import { Input } from "./ui/input";
 import { SkeletonRows } from "./ui/skeleton";
-import { Textarea } from "./ui/textarea";
 
 /**
  * Updates tab: the running version (marked current) and the versions
@@ -113,6 +113,7 @@ export function SiteUpdates({
       ) : null}
       <UpdateDialog
         siteId={siteId}
+        appId={appId}
         currentVersion={currentVersion}
         target={target}
         onClose={() => setTarget(null)}
@@ -153,39 +154,32 @@ function UpdateOutcome({ job }: { job: Job }) {
 
 function UpdateDialog({
   siteId,
+  appId,
   currentVersion,
   target,
   onClose,
   onJob,
 }: {
   siteId: string;
+  appId: string;
   currentVersion: string;
   target: AppVersion | null;
   onClose: () => void;
   onJob?: (jobId: string) => void;
 }) {
   const update = useUpdateSite(siteId);
-  const [answers, setAnswers] = React.useState("");
-  const [localError, setLocalError] = React.useState<string | null>(null);
+  const version = target?.version ?? "";
+  const prompts = useVersionPrompts(appId, target?.version ?? null);
+  const [answers, setAnswers] = React.useState<Record<string, string>>({});
   const reset = update.reset;
 
   React.useEffect(() => {
-    setAnswers("");
-    setLocalError(null);
+    setAnswers({});
     reset();
   }, [target, reset]);
 
-  const version = target?.version ?? "";
-
   function submit() {
-    const { values, badLines } = parseAssignments(answers);
-    if (badLines.length > 0) {
-      setLocalError(
-        `Expected NAME=value on line ${badLines.join(", ")} (names are upper case, digits and _).`,
-      );
-      return;
-    }
-    setLocalError(null);
+    const values = Object.fromEntries(Object.entries(answers).filter(([, v]) => v !== ""));
     update.mutate(
       { version, prompts: values },
       {
@@ -198,13 +192,11 @@ function UpdateDialog({
     );
   }
 
-  const error =
-    localError ??
-    (update.isError
-      ? update.error instanceof ApiError
-        ? update.error.message
-        : "Update failed"
-      : null);
+  const error = update.isError
+    ? update.error instanceof ApiError
+      ? update.error.message
+      : "Update failed"
+    : null;
 
   return (
     <Modal
@@ -224,25 +216,30 @@ function UpdateDialog({
       }
     >
       <div className="flex flex-col gap-3">
-        <Field
-          label="New prompt answers"
-          hint={
-            <>
-              If {version} adds <code>prompt</code> variables, answer them here, one{" "}
-              <code>NAME=value</code> per line. Existing answers are kept; leave this empty when
-              nothing new is asked.
-            </>
-          }
-        >
-          <Textarea
-            value={answers}
-            onChange={(e) => setAnswers(e.target.value)}
-            rows={4}
-            spellCheck={false}
-            className="font-mono text-xs"
-            placeholder="SMTP_HOST=mail.example.com"
-          />
-        </Field>
+        {prompts.isPending ? <SkeletonRows rows={1} label="Loading prompts…" /> : null}
+        <ErrorText error={prompts.error} />
+        {prompts.data !== undefined && prompts.data.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{version} asks for nothing new.</p>
+        ) : null}
+        {(prompts.data ?? []).map((p) => (
+          <Field
+            key={p.name}
+            label={p.label}
+            hint={
+              <>
+                Sets <code>{p.name}</code>. Leave empty to keep the current answer.
+              </>
+            }
+          >
+            <Input
+              type={p.secret ? "password" : "text"}
+              autoComplete="off"
+              spellCheck={false}
+              value={answers[p.name] ?? ""}
+              onChange={(e) => setAnswers((a) => ({ ...a, [p.name]: e.target.value }))}
+            />
+          </Field>
+        ))}
         {error !== null ? <Alert variant="destructive">{error}</Alert> : null}
       </div>
     </Modal>

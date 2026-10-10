@@ -23,6 +23,9 @@ describe("updates", () => {
     let jobs = [jobFixture({ id: "j-old", kind: "update_site", status: "done", site_id: "other" })];
     const calls = stubFetch((url, method) => {
       if (url.endsWith("/api/v1/apps/hello/versions")) return json(versionsBody);
+      if (url.endsWith("/api/v1/apps/hello/versions/0.2.0/prompts")) {
+        return json({ prompts: [{ name: "SMTP_HOST", label: "Mail server", secret: false }] });
+      }
       if (url.includes("/api/v1/jobs")) return json({ jobs });
       if (url.endsWith("/api/v1/sites/s1/update") && method === "POST") {
         return json(
@@ -50,7 +53,7 @@ describe("updates", () => {
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent(/update blog|update to 0\.2\.0/i);
     // Answers for prompt variables the new version adds.
-    await user.type(within(dialog).getByLabelText(/new prompt answers/i), "SMTP_HOST=mail.example.com");
+    await user.type(await within(dialog).findByLabelText("Mail server"), "mail.example.com");
     expect(calls.some((c) => c.method === "POST")).toBe(false);
     await user.click(within(dialog).getByTestId("confirm-accept"));
     await waitFor(() => expect(onJob).toHaveBeenCalledWith("job-update"));
@@ -86,19 +89,38 @@ describe("updates", () => {
     );
   }, 20000);
 
-  it("rejects malformed prompt lines before posting", async () => {
-    const calls = stubFetch((url) => {
+  it("update dialog asks one labelled field per prompt of the target version", async () => {
+    const calls = stubFetch((url, method) => {
       if (url.endsWith("/api/v1/apps/hello/versions")) return json(versionsBody);
+      if (url.endsWith("/api/v1/apps/hello/versions/0.10.0/prompts")) {
+        return json({
+          prompts: [
+            { name: "SMTP_HOST", label: "Mail server", secret: false },
+            { name: "SMTP_PASSWORD", label: "Mail password", secret: true },
+          ],
+        });
+      }
       if (url.includes("/api/v1/jobs")) return json({ jobs: [] });
+      if (url.endsWith("/api/v1/sites/s1/update") && method === "POST") {
+        return json({ site: { id: "s1" }, job: jobFixture({ id: "j9", kind: "update_site" }) }, 202);
+      }
       return notFound();
     });
     const user = userEvent.setup();
     renderWithClient(<SiteUpdates siteId="s1" appId="hello" currentVersion="0.1.0" />);
     await user.click(await screen.findByRole("button", { name: /update to 0\.10\.0/i }));
     const dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByLabelText(/new prompt answers/i), "oops");
+    const host = await within(dialog).findByLabelText("Mail server");
+    const pw = within(dialog).getByLabelText("Mail password");
+    expect(pw).toHaveAttribute("type", "password");
+    expect(within(dialog).queryByLabelText(/new prompt answers/i)).not.toBeInTheDocument();
+    await user.type(host, "mail.example.com");
+    await user.type(pw, "pw-secret-1");
     await user.click(within(dialog).getByTestId("confirm-accept"));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent(/line 1/i);
-    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
+    expect(calls.find((c) => c.method === "POST")?.body).toEqual({
+      version: "0.10.0",
+      prompts: { SMTP_HOST: "mail.example.com", SMTP_PASSWORD: "pw-secret-1" },
+    });
   });
 });

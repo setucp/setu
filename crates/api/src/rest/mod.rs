@@ -81,6 +81,10 @@ pub fn router(state: AppState) -> Router {
         .route("/apps", get(apps::list).post(apps::publish))
         .route("/apps/validate", post(apps::validate))
         .route("/apps/{id}/versions", get(apps::versions))
+        .route(
+            "/apps/{id}/versions/{version}/prompts",
+            get(apps::version_prompts),
+        )
         .route("/plans", get(plans::list).post(plans::create))
         .route("/plans/{id}", get(plans::get).put(plans::update))
         .route("/sites", get(sites::list).post(sites::create))

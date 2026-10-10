@@ -394,6 +394,16 @@ async fn route_matrix() {
     .await;
     ctx.row(
         "GET",
+        "/api/v1/apps/does-not-exist/versions/0.0.0/prompts",
+        None,
+        401,
+        404,
+        404,
+        404,
+    )
+    .await;
+    ctx.row(
+        "GET",
         "/api/v1/apps/nope/versions",
         None,
         401,

@@ -428,6 +428,67 @@
         }
       }
     },
+    "/api/v1/apps/{id}/versions/{version}/prompts": {
+      "get": {
+        "tags": [
+          "super::apps"
+        ],
+        "summary": "The `prompt` rules of one version, by name (viewer and above). Other\nrules (`value`, `generate`, `from`) are never included, and neither\nis any stored answer.",
+        "operationId": "version_prompts",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "App id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "App version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptListOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/audit": {
       "get": {
         "tags": [
@@ -4433,6 +4494,40 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "PromptListOut": {
+        "type": "object",
+        "required": [
+          "prompts"
+        ],
+        "properties": {
+          "prompts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptOut"
+            }
+          }
+        }
+      },
+      "PromptOut": {
+        "type": "object",
+        "description": "One `prompt` env rule of an app version: what an operator is asked\nfor. Carries no value, ever (#7).",
+        "required": [
+          "name",
+          "label",
+          "secret"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
           }
         }
       },

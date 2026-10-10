@@ -5,6 +5,7 @@ export type Site = components["schemas"]["SiteOut"];
 export type SiteDetail = components["schemas"]["SiteDetailOut"];
 export type SiteListItem = components["schemas"]["SiteListItemOut"];
 export type SiteMetric = components["schemas"]["SiteMetricOut"];
+export type Prompt = components["schemas"]["PromptOut"];
 export type RevealOut = components["schemas"]["RevealOut"];
 export type Server = components["schemas"]["ServerOut"];
 export type AppInfo = components["schemas"]["AppOut"];
@@ -152,6 +153,14 @@ export const api = {
   async listApps(): Promise<AppInfo[]> {
     const body = await request<{ apps: AppInfo[] }>("/api/v1/apps");
     return body.apps;
+  },
+
+  /** The `prompt` rules of one version: name, label, secret. Never a value. */
+  async versionPrompts(appId: string, version: string): Promise<Prompt[]> {
+    const body = await request<{ prompts: Prompt[] }>(
+      `/api/v1/apps/${encodeURIComponent(appId)}/versions/${encodeURIComponent(version)}/prompts`,
+    );
+    return body.prompts;
   },
 
   async appVersions(appId: string): Promise<AppVersion[]> {

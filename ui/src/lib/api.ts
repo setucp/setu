@@ -53,6 +53,14 @@ export function useApps() {
   return useQuery({ queryKey: ["apps"], queryFn: () => api.listApps() });
 }
 
+export function useVersionPrompts(appId: string, version: string | null) {
+  return useQuery({
+    queryKey: ["apps", appId, "versions", version, "prompts"],
+    queryFn: () => api.versionPrompts(appId, version ?? ""),
+    enabled: version !== null && version !== "",
+  });
+}
+
 export function useAppVersions(appId: string | null) {
   return useQuery({
     queryKey: ["apps", appId, "versions"],

@@ -150,6 +150,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/apps/{id}/versions/{version}/prompts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The `prompt` rules of one version, by name (viewer and above). Other
+         *     rules (`value`, `generate`, `from`) are never included, and neither
+         *     is any stored answer.
+         */
+        get: operations["version_prompts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit": {
         parameters: {
             query?: never;
@@ -1281,6 +1302,18 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        PromptListOut: {
+            prompts: components["schemas"]["PromptOut"][];
+        };
+        /**
+         * @description One `prompt` env rule of an app version: what an operator is asked
+         *     for. Carries no value, ever (#7).
+         */
+        PromptOut: {
+            label: string;
+            name: string;
+            secret: boolean;
+        };
         PublishRequest: {
             /** @description Pasted manifest TOML. Exactly one of `toml` / `url` is required. */
             toml?: string | null;
@@ -1808,6 +1841,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AppVersionListOut"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    version_prompts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description App id */
+                id: string;
+                /** @description App version */
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptListOut"];
                 };
             };
             401: {
