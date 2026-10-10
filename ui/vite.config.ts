@@ -20,6 +20,11 @@ export default defineConfig({
         // dev a 403.
         changeOrigin: false,
       },
+      // The top bar's control-plane status pill polls this.
+      "/healthz": {
+        target: process.env.SETU_API_URL ?? "http://127.0.0.1:7000",
+        changeOrigin: false,
+      },
     },
   },
 });

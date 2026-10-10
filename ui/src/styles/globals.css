@@ -1,5 +1,7 @@
 @import 'tailwindcss';
 
+/* Dark mode is a class on <html>, set before first paint by the inline
+   script in index.html and kept in sync by `src/lib/theme.ts`. */
 @custom-variant dark (&:is(.dark *));
 
 @theme {
@@ -8,10 +10,14 @@
   --color-ring: hsl(var(--ring));
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
+  --color-surface: hsl(var(--surface));
 
   --color-primary: hsl(var(--primary));
+  --color-primary-hover: hsl(var(--primary-hover));
   --color-primary-foreground: hsl(var(--primary-foreground));
   --color-primary-subtle: hsl(var(--primary-subtle));
+  /* Accent used on text (links, active nav): lighter in dark mode. */
+  --color-link: hsl(var(--link));
 
   --color-secondary: hsl(var(--secondary));
   --color-secondary-foreground: hsl(var(--secondary-foreground));
@@ -40,18 +46,32 @@
   --color-popover: hsl(var(--popover));
   --color-popover-foreground: hsl(var(--popover-foreground));
 
-  --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-sm: calc(var(--radius) - 4px);
+  /* Log panels stay dark in both themes. */
+  --color-terminal: hsl(var(--terminal));
+  --color-terminal-foreground: hsl(var(--terminal-foreground));
+  --color-terminal-muted: hsl(var(--terminal-muted));
+
+  /* Radii: 6 (controls), 10 (cards), 14 (dialogs, sheets). */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
 
   --font-sans:
-    -apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif;
+    'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono:
-    ui-monospace, SF Mono, JetBrains Mono, Menlo, Consolas, monospace;
+    'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --shadow-card: 0 1px 2px 0 rgb(15 23 42 / 0.04), 0 1px 3px 0 rgb(15 23 42 / 0.04);
+  --shadow-overlay: 0 16px 48px -12px rgb(15 23 42 / 0.25), 0 4px 12px -4px rgb(15 23 42 / 0.1);
 
   --animate-fade-in: fade-in 0.15s ease-out;
-  --animate-scale-in: scale-in 0.15s ease-out;
-  --animate-slide-in-left: slide-in-left 0.2s ease-out;
+  --animate-scale-in: scale-in 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-slide-in-left: slide-in-left 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-slide-in-up: slide-in-up 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-shimmer: shimmer 1.6s ease-in-out infinite;
+  --animate-pulse-dot: pulse-dot 2s ease-in-out infinite;
 
   @keyframes fade-in {
     from {
@@ -79,39 +99,44 @@
       transform: translateX(0);
     }
   }
+  @keyframes slide-in-up {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
   @keyframes shimmer {
+    0% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.55;
+    }
     100% {
-      transform: translateX(100%);
+      opacity: 1;
+    }
+  }
+  @keyframes pulse-dot {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 currentColor;
+    }
+    50% {
+      box-shadow: 0 0 0 3px transparent;
     }
   }
 }
 
-/*
-  The default border color has changed to `currentcolor` in Tailwind CSS v4,
-  so we've added these compatibility styles to make sure everything still
-  looks the same as it did with Tailwind CSS v3.
-
-  If we ever want to remove these styles, we need to add an explicit border
-  color utility to any element that depends on these defaults.
-*/
-@layer base {
-  *,
-  ::after,
-  ::before,
-  ::backdrop,
-  ::file-selector-button {
-    border-color: var(--color-gray-200, currentcolor);
-  }
-}
-
 @utility touch-target {
+  /* Comfortable 44 px tap targets on coarse pointers without bloating desktop. */
   @media (pointer: coarse) {
     min-height: 44px;
   }
 }
 
 @utility scrollbar-thin {
-  /* Comfortable touch target on coarse pointers without bloating desktop. */
   scrollbar-width: thin;
   &::-webkit-scrollbar {
     height: 8px;
@@ -124,103 +149,105 @@
 }
 
 /*
- * Palette: iron-oxide primary on neutral grounds.
- *
- * Two constraints shape the choices here.
- *
- * 1. The primary is a vermilion red (hue 6-8, the brand: warm enough that the
- *    lighter dark-mode value stays red rather than drifting pink), and red is also the universal
- *    destructive signal. Destructive therefore sits at hue ~352, a cooler
- *    crimson, darker in light mode and paired with the warning icon, so
- *    Publish and Delete never read as the same button.
- * 2. The usual warning amber (~38) reads close to a red primary, so warning
- *    stays a distinctly yellow gold (~45).
- *
- * Dark mode is true black — #000, not a tinted near-black — with strictly
- * neutral greys (0% saturation). Structure comes from borders rather than
- * from lifting the background.
+ * Palette (docs/brand/README.md): indigo #4F46E5 accent, ink #0F172A text
+ * on white/zinc surfaces; navy #0B1020 base in dark mode with #11162B and
+ * #161C36 raised surfaces. Status colours: emerald success, amber warning,
+ * red reserved for destructive actions and failures. Values are HSL
+ * triplets so Tailwind's `/opacity` modifiers work on every token.
  */
 @layer base {
   :root {
-    /* Warm-neutral grounds, so the light theme agrees with the rust accent
-       instead of fighting it with a blue-grey. */
-    --background: 30 25% 99%;
-    --foreground: 24 14% 10%;
+    color-scheme: light;
+
+    --background: 0 0% 100%;
+    --surface: 0 0% 98%;
+    --foreground: 222 47% 11%;
     --card: 0 0% 100%;
-    --card-foreground: 24 14% 10%;
+    --card-foreground: 222 47% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 24 14% 10%;
+    --popover-foreground: 222 47% 11%;
 
-    --primary: 6 72% 46%;
+    --primary: 243 75% 59%;
+    --primary-hover: 245 58% 51%;
     --primary-foreground: 0 0% 100%;
+    --primary-subtle: 226 100% 97%;
+    --link: 243 75% 59%;
 
-    --secondary: 30 16% 95%;
-    --secondary-foreground: 24 12% 24%;
+    --secondary: 240 5% 96%;
+    --secondary-foreground: 222 47% 11%;
 
-    --muted: 30 16% 95%;
-    --muted-foreground: 25 8% 44%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 4% 42%;
 
-    --accent: 28 20% 93%;
-    --accent-foreground: 24 14% 14%;
+    --accent: 240 5% 95%;
+    --accent-foreground: 222 47% 11%;
 
-    --destructive: 352 72% 42%;
+    --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
+    --destructive-subtle: 0 86% 97%;
 
-    --success: 152 55% 30%;
+    --success: 161 94% 26%;
     --success-foreground: 0 0% 100%;
-    --warning: 45 93% 33%;
+    --success-subtle: 152 81% 96%;
+
+    --warning: 26 90% 37%;
     --warning-foreground: 0 0% 100%;
+    --warning-subtle: 48 100% 96%;
 
-    /* Tinted surfaces for chips and callouts. */
-    --primary-subtle: 6 80% 95%;
-    --success-subtle: 150 42% 93%;
-    --warning-subtle: 46 80% 91%;
-    --destructive-subtle: 6 72% 95%;
+    --border: 240 6% 90%;
+    --input: 240 5% 84%;
+    --ring: 243 75% 59%;
 
-    --border: 28 15% 89%;
-    --input: 28 14% 85%;
-    --ring: 6 72% 46%;
-    --radius: 0.5rem;
+    --terminal: 226 49% 8%;
+    --terminal-foreground: 220 14% 86%;
+    --terminal-muted: 222 16% 55%;
   }
 
-  .dark {
-    /* True black. Cards and popovers lift by a few percent so panels remain
-       readable as distinct surfaces; the greys carry no hue at all. */
-    --background: 0 0% 0%;
-    --foreground: 0 0% 93%;
-    --card: 0 0% 5%;
-    --card-foreground: 0 0% 93%;
-    --popover: 0 0% 7%;
-    --popover-foreground: 0 0% 93%;
+  :root.dark {
+    color-scheme: dark;
 
-    --primary: 8 80% 60%;
-    --primary-foreground: 0 40% 8%;
+    --background: 226 49% 8%;
+    --surface: 228 47% 9%;
+    --foreground: 240 5% 96%;
+    --card: 229 44% 12%;
+    --card-foreground: 240 5% 96%;
+    --popover: 229 42% 15%;
+    --popover-foreground: 240 5% 96%;
 
-    --secondary: 0 0% 12%;
-    --secondary-foreground: 0 0% 88%;
+    --primary: 239 84% 67%;
+    --primary-hover: 243 75% 59%;
+    --primary-foreground: 0 0% 100%;
+    --primary-subtle: 239 45% 18%;
+    --link: 234 89% 74%;
 
-    --muted: 0 0% 9%;
-    --muted-foreground: 0 0% 62%;
+    --secondary: 229 42% 15%;
+    --secondary-foreground: 240 5% 96%;
 
-    --accent: 0 0% 14%;
-    --accent-foreground: 0 0% 93%;
+    --muted: 229 42% 15%;
+    --muted-foreground: 220 14% 66%;
 
-    --destructive: 4 85% 72%;
-    --destructive-foreground: 0 0% 8%;
+    --accent: 229 36% 18%;
+    --accent-foreground: 240 5% 96%;
 
-    --success: 152 50% 55%;
-    --success-foreground: 0 0% 8%;
-    --warning: 45 85% 60%;
-    --warning-foreground: 0 0% 8%;
+    --destructive: 358 75% 59%;
+    --destructive-foreground: 0 0% 100%;
+    --destructive-subtle: 358 45% 14%;
 
-    --primary-subtle: 8 40% 13%;
-    --success-subtle: 155 32% 11%;
-    --warning-subtle: 44 34% 12%;
-    --destructive-subtle: 6 40% 13%;
+    --success: 158 64% 52%;
+    --success-foreground: 226 49% 8%;
+    --success-subtle: 160 55% 11%;
 
-    --border: 0 0% 16%;
-    --input: 0 0% 22%;
-    --ring: 8 80% 60%;
+    --warning: 43 96% 56%;
+    --warning-foreground: 226 49% 8%;
+    --warning-subtle: 38 55% 12%;
+
+    --border: 229 30% 19%;
+    --input: 229 26% 26%;
+    --ring: 234 89% 74%;
+
+    --terminal: 228 52% 5%;
+    --terminal-foreground: 220 14% 86%;
+    --terminal-muted: 222 16% 55%;
   }
 }
 
@@ -232,10 +259,13 @@
   html {
     /* Prevent iOS auto-zoom on focus without shrinking desktop type. */
     -webkit-text-size-adjust: 100%;
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background font-sans text-foreground;
     /* No page-level sideways scroll on narrow screens; wide content scrolls
        inside its own container instead. */
     overflow-x: hidden;
@@ -247,8 +277,14 @@
   }
 
   ::selection {
-    background: hsl(var(--primary-subtle));
-    color: hsl(var(--foreground));
+    background: hsl(var(--primary) / 0.2);
+  }
+
+  code,
+  kbd,
+  pre,
+  samp {
+    @apply font-mono;
   }
 }
 
@@ -259,5 +295,6 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
