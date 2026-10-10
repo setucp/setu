@@ -44,6 +44,7 @@ fn binary(url: String, sha256: String, version: &str) -> BinaryRef {
         version: version.to_string(),
         url,
         sha256,
+        format: setu_proto::BinaryFormat::TarGz,
         exec: "app".to_string(),
     }
 }

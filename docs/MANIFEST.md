@@ -25,9 +25,10 @@ holding `ok` or the one expected error line). `POST
 | `[run] kind` | yes | `"binary"`; `"image"` validates (with `[run.image] image`) but is refused at provisioning until phase 2 |
 | `[run] workdir` | no | `"exec_dir"` (default), `"bin"` or `"data"`, see below |
 | `[run] args` | no | list of strings, each non-empty, no control characters; systemd-quoted into `ExecStart=` |
-| `[run.binary."<target>"] url` | yes | archive URL (`.tar.gz`), downloaded by the agent over https |
+| `[run.binary."<target>"] url` | yes | download URL (a `.tar.gz` archive, or the bare executable with `format = "binary"`), fetched by the agent over https |
 | `[run.binary."<target>"] sha256` | yes | 64 hex characters, checked by the agent and again by the root helper |
-| `[run.binary."<target>"] exec` | yes | path of the executable inside the archive, `^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$`, no `..` |
+| `[run.binary."<target>"] format` | no | `"tar.gz"` (default) or `"binary"`: what the download is, see below |
+| `[run.binary."<target>"] exec` | yes | `tar.gz`: path of the executable inside the archive, `^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$`, no `..`; `binary`: the file name the executable is installed under, a single such segment (no `/`) |
 | `[needs]` | yes (may be empty) | |
 | `[needs] postgres` | no | e.g. `">=16"`: one database and role per site |
 | `[needs] dirs` | no | persistent dirs under `data/`, each `^[a-z][a-z0-9-]{0,31}$` |
@@ -41,6 +42,27 @@ Targets: `x86_64-linux` is mandatory; `aarch64-linux` is accepted
 (Setu ships no aarch64 build until phase 2). Archives may not contain
 symlinks, hard links, devices, absolute names, `..` or
 setuid/setgid/sticky bits: the helper refuses the whole install.
+
+### `format`
+
+Many projects (most Go ones) publish a bare executable per platform,
+e.g. `miniflux-linux-amd64`, rather than an archive. `format =
+"binary"` says the download *is* the executable: the root helper
+verifies its sha256, refuses anything that is not a regular file (a
+symlink, fifo or directory in the downloads dir), and copies it to
+`bin/<version>/<exec>`, mode `0755`, root-owned, with no special bits
+whatever the download had. `exec` then names that file (`exec =
+"miniflux"`) and must be one path component. The format comes from the
+manifest, never from sniffing the bytes. With the default `"tar.gz"`
+the archive is extracted under the rules below.
+
+```toml
+[run.binary."x86_64-linux"]
+url = "https://github.com/miniflux/v2/releases/download/2.3.3/miniflux-linux-amd64"
+sha256 = "237bf0aed05e86c235b6bcfbad843bfc7bcdd6a628ece672eae3d1e013ddd244"
+format = "binary"
+exec = "miniflux"
+```
 
 ### `workdir`
 
@@ -235,6 +257,8 @@ The corpus also holds a smaller `hello.toml` (with a `prompt` and a
 | `bad_id.toml` | `error: app.id must match [a-z][a-z0-9-]{1,31} line 4` |
 | `bad_semver.toml` | `error: app.version must be valid semver line 6` |
 | `bad_sha.toml` | `error: run.binary.x86_64-linux.sha256 must be 64 hex chars line 19` |
+| `binary_format.toml` | `ok` |
+| `binary_format_bad_exec.toml` | `error: run.binary.x86_64-linux.exec must be a single file name when format = "binary" line 21` |
 | `command_strategy.toml` | `error: update.strategy "command" is not supported in this version line 43` |
 | `dir_bad_name.toml` | `error: needs.dirs entry "Media_Files" must match [a-z][a-z0-9-]{0,31} line 24` |
 | `env_dir_not_declared.toml` | `error: env.HELLO_NOTES_DIR references dir "media" not in needs.dirs line 29` |
@@ -248,3 +272,21 @@ The corpus also holds a smaller `hello.toml` (with a `prompt` and a
 | `unknown_key.toml` | `error: unknown field 'colour' at [app] line 11` |
 | `vyasa_0_2_0.toml` | `ok` |
 | `workdir_bad.toml` | ``error: unknown variant `home`, expected one of `exec_dir`, `bin`, `data` line 14`` |
+
+## Examples
+
+Complete, provisioned-and-checked manifests live in
+[github.com/setucp/manifests](https://github.com/setucp/manifests):
+
+- [`miniflux/manifest.toml`](https://github.com/setucp/manifests/blob/main/miniflux/manifest.toml):
+  Miniflux, a Go feed reader shipped as a bare executable (`format =
+  "binary"`), configured entirely by environment (`LISTEN_ADDR`,
+  `DATABASE_URL`, `BASE_URL`), migrating and creating its admin on first
+  boot from a `once` password, everything kept in PostgreSQL (no `dirs`).
+- [`hello-axum/manifest.toml`](https://github.com/setucp/manifests/blob/main/hello-axum/manifest.toml):
+  the Rust sample above (`apps/hello`) as a `tar.gz` release with a
+  top-level folder, published in that repository's
+  [`hello-axum-0.1.0`](https://github.com/setucp/manifests/releases/tag/hello-axum-0.1.0)
+  release.
+
+The repository's README explains how to add one.

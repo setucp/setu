@@ -26,6 +26,12 @@ pub fn exec(s: &str) -> bool {
     EXEC.is_match(s) && s.split('/').all(|c| c != ".." && c != ".")
 }
 
+/// Executable file name for a raw binary download (`format = "binary"`):
+/// an [`exec`] path of exactly one component.
+pub fn exec_file(s: &str) -> bool {
+    exec(s) && !s.contains('/')
+}
+
 /// Persistent data dir name: `^[a-z][a-z0-9-]{0,31}$`.
 pub fn dir(s: &str) -> bool {
     DIR.is_match(s)

@@ -31,6 +31,18 @@ pub fn exec(e: &str) -> Result<(), HelperError> {
     }
 }
 
+/// File name of a raw `binary` download in `bin/<version>/`: an
+/// [`exec`] of exactly one component.
+pub fn exec_file(e: &str) -> Result<(), HelperError> {
+    if setu_common::validate::exec_file(e) {
+        Ok(())
+    } else {
+        Err(HelperError::Invalid(
+            "exec (must be a single file name)".to_string(),
+        ))
+    }
+}
+
 /// One `ExecStart` argument: no control characters (newline, tab, …).
 pub fn arg(a: &str) -> Result<(), HelperError> {
     if setu_common::validate::no_control(a) {

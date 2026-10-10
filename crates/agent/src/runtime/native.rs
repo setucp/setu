@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::json;
-use setu_proto::{BinaryRef, EnvVar, SiteSpec};
+use setu_proto::{BinaryFormat, BinaryRef, EnvVar, SiteSpec};
 
 use crate::caddy::CaddyAdmin;
 use crate::config::AgentConfig;
@@ -135,7 +135,8 @@ impl<H: Helper, P, C> NativeRuntime<H, P, C> {
     }
 
     /// Download + verify as the agent, then helper `install {version,
-    /// sha256}` into `bin/<version>`. Never touches `bin/current`: the
+    /// sha256}` (plus `format`, `exec` for a raw binary) into
+    /// `bin/<version>`. Never touches `bin/current`: the
     /// explicit `SwitchVersion` moves it, so a bad update never stops the
     /// running site.
     pub async fn install_version(&self, short: &str, binary: &BinaryRef) -> anyhow::Result<String> {
@@ -149,12 +150,16 @@ impl<H: Helper, P, C> NativeRuntime<H, P, C> {
         )
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-        self.call(
-            Verb::Install,
-            short,
-            json!({ "version": binary.version, "sha256": sha }),
-        )
-        .await?;
+        let input = match binary.format {
+            BinaryFormat::TarGz => json!({ "version": binary.version, "sha256": sha }),
+            BinaryFormat::Binary => json!({
+                "version": binary.version,
+                "sha256": sha,
+                "format": binary.format,
+                "exec": binary.exec,
+            }),
+        };
+        self.call(Verb::Install, short, input).await?;
         Ok(binary.version.clone())
     }
 

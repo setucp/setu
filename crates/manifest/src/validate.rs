@@ -2,7 +2,7 @@
 
 use setu_common::validate;
 
-use crate::schema::{EnvSource, EnvSpec, Manifest, ManifestError, RunKind, Target};
+use crate::schema::{BinaryFormat, EnvSource, EnvSpec, Manifest, ManifestError, RunKind, Target};
 
 /// Parse a `[section]` header from a trimmed line.
 fn parse_section_header(trimmed: &str) -> Option<String> {
@@ -250,6 +250,18 @@ pub fn validate(manifest: &Manifest, src: &str) -> Vec<ManifestError> {
                         target_lines(src, &t, "exec"),
                         format!(
                             "run.binary.{t}.exec must be a relative path of [A-Za-z0-9._-] segments without \"..\""
+                        ),
+                    );
+                }
+                if entry.format == BinaryFormat::Binary
+                    && validate::exec(&entry.exec)
+                    && !validate::exec_file(&entry.exec)
+                {
+                    push(
+                        format!("run.binary.{t}.exec"),
+                        target_lines(src, &t, "exec"),
+                        format!(
+                            "run.binary.{t}.exec must be a single file name when format = \"binary\""
                         ),
                     );
                 }

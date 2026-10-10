@@ -853,6 +853,121 @@ fn install_requires_regular_download_file() {
     assert!(t.site("bin/0.1.0/app").is_file());
 }
 
+/// `format = "binary"`: the verified download is the executable; it
+/// lands at `bin/<version>/<exec>`, 0755, root-owned dir, no special
+/// bits even when the download had them, and the bytes are not sniffed
+/// (a gzip file is copied as-is).
+#[test]
+fn install_binary_format_places_executable() {
+    let t = setup();
+    t.create(&[]);
+    let bytes = b"\x7fELF pretend executable".to_vec();
+    let sha = t.put_download(&bytes);
+    let dl = t
+        .root()
+        .join(format!("var/lib/setu/downloads/{sha}.tar.gz"));
+    std::fs::set_permissions(&dl, std::fs::Permissions::from_mode(0o6755)).expect("chmod");
+    let input = json!({"version": "2.2.0", "sha256": sha, "format": "binary", "exec": "miniflux"});
+    let out = t.run(Verb::Install, S, input.clone()).expect("install");
+    assert_eq!(out["changed"], true);
+    let vdir = t.site("bin/2.2.0");
+    assert_eq!(names(&vdir), ["miniflux"]);
+    let exe = vdir.join("miniflux");
+    assert_eq!(std::fs::read(&exe).expect("exe"), bytes);
+    assert_eq!(mode(&exe), 0o755, "exactly 0755, no special bits");
+    assert_eq!(mode(&vdir), 0o755);
+    assert_eq!(t.own.owner_of(&vdir), Some((0, 0)));
+    assert_eq!(
+        t.run(Verb::Install, S, input).expect("again")["changed"],
+        false
+    );
+
+    // Not sniffed: a real tar.gz requested as `binary` is copied, not
+    // extracted.
+    let tgz = gz(&tar_of(&[file("app", 0o755, b"v")]));
+    let sha2 = t.put_download(&tgz);
+    t.run(
+        Verb::Install,
+        S,
+        json!({"version": "2.3.0", "sha256": sha2, "format": "binary", "exec": "app"}),
+    )
+    .expect("install");
+    assert_eq!(std::fs::read(t.site("bin/2.3.0/app")).expect("app"), tgz);
+
+    // The same refusals as an archive: wrong hash, non-regular file.
+    let sha3 = sha256(b"other");
+    let name = t
+        .root()
+        .join(format!("var/lib/setu/downloads/{sha3}.tar.gz"));
+    std::fs::write(&name, b"not other").expect("write");
+    let err = t
+        .run(
+            Verb::Install,
+            S,
+            json!({"version": "2.4.0", "sha256": sha3, "format": "binary", "exec": "x"}),
+        )
+        .expect_err("hash");
+    assert!(matches!(err, HelperError::Refused(_)), "{err:?}");
+    std::fs::remove_file(&name).expect("rm");
+    std::os::unix::fs::symlink(&exe, &name).expect("symlink");
+    let err = t
+        .run(
+            Verb::Install,
+            S,
+            json!({"version": "2.4.0", "sha256": sha3, "format": "binary", "exec": "x"}),
+        )
+        .expect_err("symlink");
+    assert!(matches!(err, HelperError::Refused(_)), "{err:?}");
+    assert!(!t.site("bin/2.4.0").exists());
+}
+
+/// `exec` for a raw binary is one file name, required, and only allowed
+/// with `format = "binary"`; nothing is created on refusal.
+#[test]
+fn install_binary_format_rejects_nested_exec() {
+    let t = setup();
+    t.create(&[]);
+    let sha = t.put_download(b"exe");
+    for (case, input) in [
+        (
+            "nested",
+            json!({"version": "1.0.0", "sha256": sha, "format": "binary", "exec": "bin/app"}),
+        ),
+        (
+            "traversal",
+            json!({"version": "1.0.0", "sha256": sha, "format": "binary", "exec": "../app"}),
+        ),
+        (
+            "dotdot",
+            json!({"version": "1.0.0", "sha256": sha, "format": "binary", "exec": ".."}),
+        ),
+        (
+            "absolute",
+            json!({"version": "1.0.0", "sha256": sha, "format": "binary", "exec": "/usr/bin/app"}),
+        ),
+        (
+            "empty",
+            json!({"version": "1.0.0", "sha256": sha, "format": "binary", "exec": ""}),
+        ),
+        (
+            "missing",
+            json!({"version": "1.0.0", "sha256": sha, "format": "binary"}),
+        ),
+        (
+            "tar.gz with exec",
+            json!({"version": "1.0.0", "sha256": sha, "format": "tar.gz", "exec": "app"}),
+        ),
+        (
+            "unknown format",
+            json!({"version": "1.0.0", "sha256": sha, "format": "zip", "exec": "app"}),
+        ),
+    ] {
+        let err = t.run(Verb::Install, S, input).expect_err(case);
+        assert!(matches!(err, HelperError::Invalid(_)), "{case}: {err:?}");
+        assert!(names(&t.site("bin")).is_empty(), "{case}: nothing in bin/");
+    }
+}
+
 #[test]
 fn install_extracts_and_switch_version_is_atomic() {
     let t = setup();

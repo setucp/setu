@@ -898,10 +898,23 @@ export interface components {
             /** Format: date-time */
             taken_at: string;
         };
+        /**
+         * @description What a [`BinaryRef`] download is.
+         * @enum {string}
+         */
+        BinaryFormat: "tar.gz" | "binary";
         /** @description One downloadable binary release. */
         BinaryRef: {
-            /** @description Path of the executable inside the archive (relative). */
+            /**
+             * @description Path of the executable inside the archive (relative), or the file
+             *     name a `binary` download is installed under.
+             */
             exec: string;
+            /**
+             * @description What the download is (mirrors the manifest's `format`); absent in
+             *     commands from older control planes, which means `tar.gz`.
+             */
+            format?: components["schemas"]["BinaryFormat"];
             sha256: string;
             url: string;
             version: string;

@@ -7,9 +7,9 @@ pub mod validate;
 pub use resolve::{merge, resolve_env, EnvVar, ResolveError, ResolveInput};
 pub use schema::Manifest;
 pub use schema::{
-    App, Backup, BinaryRun, BinaryTarget, EnvSource, EnvSpec, FromSpec, GenerateKind, GenerateSpec,
-    ImageRun, Limits, LimitsSection, ManifestError, Needs, PromptSpec, Run, RunKind, Strategy,
-    Target, Update, ValueSpec, Workdir,
+    App, Backup, BinaryFormat, BinaryRun, BinaryTarget, EnvSource, EnvSpec, FromSpec, GenerateKind,
+    GenerateSpec, ImageRun, Limits, LimitsSection, ManifestError, Needs, PromptSpec, Run, RunKind,
+    Strategy, Target, Update, ValueSpec, Workdir,
 };
 
 impl Manifest {
