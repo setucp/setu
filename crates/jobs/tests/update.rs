@@ -243,7 +243,7 @@ async fn update_resumes_from_cursor() {
     // A new runner picks the job up: it resumes at the cursor.
     let resumed_from = agent.transcript().len();
     let (ctx, _) = ctx_with_logs(fx.db.clone(), &agent);
-    let ctx = ctx.with_job(&job_id);
+    let ctx = ctx.with_job(&job_id, common::TEST_WORKER);
     update::run(&ctx, &fx.site_id, "0.1.1")
         .await
         .expect("resumed update succeeds");

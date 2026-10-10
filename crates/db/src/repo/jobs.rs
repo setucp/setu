@@ -146,12 +146,14 @@ impl<'a> Jobs<'a> {
         Ok(n == 1)
     }
 
-    /// Store the step cursor (`payload.step`).
-    pub async fn set_step(&self, id: &str, step: &str) -> Result<(), AppError> {
+    /// Store the step cursor (`payload.step`). Only the lease holder
+    /// may: `conflict` when `worker` lost the lease (M2).
+    pub async fn set_step(&self, id: &str, worker: &str, step: &str) -> Result<(), AppError> {
         let n = sqlx::query!(
-            "UPDATE jobs SET payload = jsonb_set(payload, '{step}', to_jsonb($2::text))
-             WHERE id = $1",
+            "UPDATE jobs SET payload = jsonb_set(payload, '{step}', to_jsonb($3::text))
+             WHERE id = $1 AND locked_by = $2 AND status = 'running'",
             id,
+            worker,
             step,
         )
         .execute(self.pool)
@@ -159,7 +161,7 @@ impl<'a> Jobs<'a> {
         .map_err(map_db_error)?
         .rows_affected();
         if n == 0 {
-            return Err(AppError::not_found("job not found"));
+            return Err(self.not_held(id).await);
         }
         Ok(())
     }
@@ -176,49 +178,86 @@ impl<'a> Jobs<'a> {
         .ok_or_else(|| AppError::not_found("job not found"))
     }
 
-    /// Replace the payload.
-    pub async fn set_payload(&self, id: &str, payload: &Value) -> Result<(), AppError> {
-        let n = sqlx::query!("UPDATE jobs SET payload = $2 WHERE id = $1", id, payload)
-            .execute(self.pool)
-            .await
-            .map_err(map_db_error)?
-            .rows_affected();
+    /// Replace the payload (lease holder only, as [`Self::set_step`]).
+    pub async fn set_payload(
+        &self,
+        id: &str,
+        worker: &str,
+        payload: &Value,
+    ) -> Result<(), AppError> {
+        let n = sqlx::query!(
+            "UPDATE jobs SET payload = $3
+             WHERE id = $1 AND locked_by = $2 AND status = 'running'",
+            id,
+            worker,
+            payload
+        )
+        .execute(self.pool)
+        .await
+        .map_err(map_db_error)?
+        .rows_affected();
         if n == 0 {
-            return Err(AppError::not_found("job not found"));
+            return Err(self.not_held(id).await);
         }
         Ok(())
     }
 
-    pub async fn append_log(&self, id: &str, chunk: &str) -> Result<(), AppError> {
-        let n = sqlx::query!("UPDATE jobs SET log = log || $2 WHERE id = $1", id, chunk)
-            .execute(self.pool)
-            .await
-            .map_err(map_db_error)?
-            .rows_affected();
-        if n == 0 {
-            return Err(AppError::not_found("job not found"));
-        }
-        Ok(())
+    /// Append to the log while `worker` holds the lease; `false` (and
+    /// nothing written) when it does not, or the job is gone.
+    pub async fn append_log(&self, id: &str, worker: &str, chunk: &str) -> Result<bool, AppError> {
+        let n = sqlx::query!(
+            "UPDATE jobs SET log = log || $3
+             WHERE id = $1 AND locked_by = $2 AND status = 'running'",
+            id,
+            worker,
+            chunk
+        )
+        .execute(self.pool)
+        .await
+        .map_err(map_db_error)?
+        .rows_affected();
+        Ok(n == 1)
     }
 
-    /// End the job `done` or `failed` and release the lease.
-    pub async fn finish(&self, id: &str, ok: bool, error: Option<&str>) -> Result<Job, AppError> {
+    /// End the job `done` or `failed` and release the lease. Only the
+    /// lease holder may: `conflict` when `worker` lost it, `not_found`
+    /// when the row is gone.
+    pub async fn finish(
+        &self,
+        id: &str,
+        worker: &str,
+        ok: bool,
+        error: Option<&str>,
+    ) -> Result<Job, AppError> {
         let status = if ok { "done" } else { "failed" };
-        sqlx::query_as!(
+        let row = sqlx::query_as!(
             Job,
-            "UPDATE jobs SET status = $2, finished_at = now(), error = $3,
+            "UPDATE jobs SET status = $3, finished_at = now(), error = $4,
                              locked_by = NULL, locked_until = NULL
-             WHERE id = $1
+             WHERE id = $1 AND locked_by = $2 AND status = 'running'
              RETURNING id, kind, site_id, server_id, status, payload, attempts, locked_by,
                        locked_until, log, error, created_at, started_at, finished_at",
             id,
+            worker,
             status,
             error,
         )
         .fetch_optional(self.pool)
         .await
-        .map_err(map_db_error)?
-        .ok_or_else(|| AppError::not_found("job not found"))
+        .map_err(map_db_error)?;
+        match row {
+            Some(job) => Ok(job),
+            None => Err(self.not_held(id).await),
+        }
+    }
+
+    /// Why a lease-holder write matched no row: the job is gone
+    /// (`not_found`) or `worker` does not hold it (`conflict`).
+    async fn not_held(&self, id: &str) -> AppError {
+        match self.get(id).await {
+            Ok(_) => AppError::conflict("job lease lost: another runner owns it"),
+            Err(e) => e,
+        }
     }
 
     /// Put `running` jobs whose lease expired back to `queued` (boot

@@ -1814,15 +1814,18 @@ async fn job_log_sse_tails_until_done_and_escapes_lines() {
     let writer = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(1)).await;
         db.jobs()
-            .append_log(&id, "first\rinjected: x\n")
+            .append_log(&id, "w-sse", "first\rinjected: x\n")
             .await
             .expect("append");
         tokio::time::sleep(Duration::from_secs(1)).await;
         db.jobs()
-            .append_log(&id, "second line\n")
+            .append_log(&id, "w-sse", "second line\n")
             .await
             .expect("append");
-        db.jobs().finish(&id, true, None).await.expect("finish");
+        db.jobs()
+            .finish(&id, "w-sse", true, None)
+            .await
+            .expect("finish");
     });
     let mut acc = String::new();
     let ended = loop {

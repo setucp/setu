@@ -43,6 +43,7 @@ async fn scheduler_enqueues_nightly_backup_once() {
         .await
         .unwrap()
         .expect("job");
+    common::lease_to_test_worker(&fx.db, &job.id).await;
     assert_eq!(job.kind, "backup_site");
     assert_eq!(job.payload["kind"], "scheduled");
 
@@ -58,7 +59,7 @@ async fn scheduler_enqueues_nightly_backup_once() {
         &row.id,
     )
     .await;
-    fx.db.jobs().finish(&job.id, true, None).await.unwrap();
+    common::finish_job(&fx.db, &job.id, true).await;
     clock.set(Utc.with_ymd_and_hms(2026, 10, 9, 4, 0, 0).unwrap());
     let r = Scheduler::tick(&fx.db, &clock, &cfg).await.unwrap();
     assert!(r.backups.is_empty(), "{r:?}");

@@ -131,12 +131,19 @@ impl Worker {
         };
         tokio::select! {
             result = self.dispatch(job) => {
+                let jobs = self.db.jobs();
                 let finished = match result {
-                    Ok(()) => self.db.jobs().finish(&job.id, true, None).await,
-                    Err(e) => self.db.jobs().finish(&job.id, false, Some(&e.message)).await,
+                    Ok(()) => jobs.finish(&job.id, &self.name, true, None).await,
+                    Err(e) => jobs.finish(&job.id, &self.name, false, Some(&e.message)).await,
                 };
-                if let Err(e) = finished {
-                    tracing::error!(error = %e, job_id = %job.id, "finishing job failed");
+                match finished {
+                    Ok(_) => {}
+                    // A lost lease is fatal for this run: the new holder
+                    // finishes the job; this worker just stops.
+                    Err(e) if e.code == setu_common::ErrorCode::Conflict => {
+                        tracing::warn!(job_id = %job.id, "job lease lost; not finishing it");
+                    }
+                    Err(e) => tracing::error!(error = %e, job_id = %job.id, "finishing job failed"),
                 }
             }
             () = renew => {
@@ -157,7 +164,7 @@ impl Worker {
                 tracing::info!(job_id = %job_id, "{line}");
             }),
         )
-        .with_job(&job.id)
+        .with_job(&job.id, &self.name)
         .with_verify_delay(self.config.verify_delay);
         let payload_str = |key: &str| {
             job.payload

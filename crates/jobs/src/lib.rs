@@ -95,6 +95,12 @@ pub struct JobCtx {
     pub installs: InstallSlots,
     pub log: Box<dyn Fn(&str) + Send + Sync>,
     pub job_id: Option<String>,
+    /// The runner worker holding the job's lease; every job-row write
+    /// carries it, and the repo refuses writes from a lost lease (M2).
+    pub worker: Option<String>,
+    /// Set once a job-row write found the lease gone: every later step
+    /// fails at once with `conflict` (a lost lease is fatal for the run).
+    lease_lost: std::sync::atomic::AtomicBool,
     /// Pause before the provision `verify` step ([`VERIFY_DELAY`]).
     pub verify_delay: Duration,
     /// Plaintext secrets of this run, scrubbed from every log line and
@@ -138,14 +144,44 @@ impl JobCtx {
             installs,
             log,
             job_id: None,
+            worker: None,
+            lease_lost: std::sync::atomic::AtomicBool::new(false),
             verify_delay: VERIFY_DELAY,
             secrets: Mutex::new(Vec::new()),
         }
     }
 
-    pub fn with_job(mut self, job_id: &str) -> Self {
+    /// Bind the context to job `job_id`, leased to `worker`.
+    pub fn with_job(mut self, job_id: &str, worker: &str) -> Self {
         self.job_id = Some(job_id.to_string());
+        self.worker = Some(worker.to_string());
         self
+    }
+
+    /// True once a write found that this run no longer holds the lease.
+    pub fn lease_lost(&self) -> bool {
+        self.lease_lost.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn mark_lease_lost(&self) {
+        if !self
+            .lease_lost
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            tracing::warn!(job_id = ?self.job_id, "job lease lost: stopping this run");
+        }
+    }
+
+    /// `(job id, worker)` when the context drives a leased job.
+    fn leased(&self) -> Option<(&str, &str)> {
+        Some((
+            self.job_id.as_deref()?,
+            self.worker.as_deref().unwrap_or(""),
+        ))
+    }
+
+    fn lost_error() -> AppError {
+        AppError::conflict("job lease lost: another runner owns it")
     }
 
     pub fn with_verify_delay(mut self, delay: Duration) -> Self {
@@ -183,8 +219,17 @@ impl JobCtx {
     pub async fn log(&self, line: &str) {
         let line = self.redact(line);
         (self.log)(&line);
-        if let Some(id) = &self.job_id {
-            let _ = self.db.jobs().append_log(id, &format!("{line}\n")).await;
+        if let Some((id, worker)) = self.leased() {
+            match self
+                .db
+                .jobs()
+                .append_log(id, worker, &format!("{line}\n"))
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => self.mark_lease_lost(),
+                Err(e) => tracing::warn!(job_id = %id, error = %e, "job log append failed"),
+            }
         }
     }
 
@@ -211,7 +256,7 @@ impl JobCtx {
     /// Set one payload key (a no-op without a job: direct `run` callers
     /// never resume, so they keep their state in locals).
     pub async fn payload_set(&self, key: &str, value: serde_json::Value) -> Result<(), AppError> {
-        let Some(id) = &self.job_id else {
+        let Some((id, worker)) = self.leased() else {
             return Ok(());
         };
         let job = self.db.jobs().get(id).await?;
@@ -220,10 +265,15 @@ impl JobCtx {
             _ => serde_json::Map::new(),
         };
         payload.insert(key.to_string(), value);
-        self.db
+        let set = self
+            .db
             .jobs()
-            .set_payload(id, &serde_json::Value::Object(payload))
-            .await
+            .set_payload(id, worker, &serde_json::Value::Object(payload))
+            .await;
+        if set.as_ref().is_err_and(|e| e.code == ErrorCode::Conflict) {
+            self.mark_lease_lost();
+        }
+        set
     }
 
     /// Run one named step: store it as the job's cursor first (a resumed
@@ -234,8 +284,16 @@ impl JobCtx {
     where
         F: Future<Output = Result<T, AppError>>,
     {
-        if let Some(id) = &self.job_id {
-            self.db.jobs().set_step(id, name).await?;
+        if self.lease_lost() {
+            return Err(Self::lost_error());
+        }
+        if let Some((id, worker)) = self.leased() {
+            if let Err(e) = self.db.jobs().set_step(id, worker, name).await {
+                if e.code == ErrorCode::Conflict {
+                    self.mark_lease_lost();
+                }
+                return Err(e);
+            }
         }
         match fut.await {
             Ok(v) => {
@@ -278,6 +336,7 @@ impl std::fmt::Debug for JobCtx {
             .field("sealer", &"[redacted]")
             .field("secrets", &"[redacted]")
             .field("job_id", &self.job_id)
+            .field("worker", &self.worker)
             .finish()
     }
 }

@@ -267,13 +267,36 @@ pub async fn job_ctx(
         .enqueue(kind, Some(site_id), Some(&site.server_id), Some(&payload))
         .await
         .unwrap();
+    lease_to_test_worker(db, &job.id).await;
     let (ctx, logs) = ctx_with_logs(db.clone(), agent);
-    (ctx.with_job(&job.id), job.id, logs)
+    (ctx.with_job(&job.id, TEST_WORKER), job.id, logs)
+}
+
+/// The worker name hand-driven jobs are leased to.
+pub const TEST_WORKER: &str = "test-worker";
+
+/// Lease job `job_id` to [`TEST_WORKER`] for an hour, as a runner's
+/// claim would (job-row writes require the lease holder).
+pub async fn lease_to_test_worker(db: &Db, job_id: &str) {
+    sqlx::query(
+        "UPDATE jobs SET status = 'running', locked_by = $2,
+                         locked_until = now() + interval '1 hour',
+                         started_at = COALESCE(started_at, now())
+         WHERE id = $1",
+    )
+    .bind(job_id)
+    .bind(TEST_WORKER)
+    .execute(db.pool())
+    .await
+    .unwrap();
 }
 
 /// Finish a job driven by hand, so the site may take its next job.
 pub async fn finish_job(db: &Db, job_id: &str, ok: bool) {
-    db.jobs().finish(job_id, ok, None).await.unwrap();
+    db.jobs()
+        .finish(job_id, TEST_WORKER, ok, None)
+        .await
+        .unwrap();
 }
 
 /// Plaintext of the stored env: name → value.

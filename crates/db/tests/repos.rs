@@ -636,14 +636,90 @@ async fn claim_skips_locked_and_reclaims_expired_lease() {
     assert!(!db.jobs().renew(&j1.id, "w1", lease).await.unwrap());
     assert!(db.jobs().renew(&j1.id, "w2", lease).await.unwrap());
 
-    db.jobs().set_step(&j1.id, "install").await.unwrap();
+    db.jobs().set_step(&j1.id, "w2", "install").await.unwrap();
     assert_eq!(
         db.jobs().get_step(&j1.id).await.unwrap().as_deref(),
         Some("install")
     );
-    let done = db.jobs().finish(&j1.id, true, None).await.unwrap();
+    let done = db.jobs().finish(&j1.id, "w2", true, None).await.unwrap();
     assert_eq!(done.status, "done");
     assert!(done.locked_by.is_none());
+}
+
+/// Only the lease holder may write a job's log, step cursor, payload or
+/// final status: a runner that lost its lease (another runner reclaimed
+/// the job) must not overwrite the new owner's work (M2).
+#[tokio::test]
+async fn finish_requires_lease_holder() {
+    let (test, db) = test_db().await;
+    let lease = Duration::from_secs(60);
+    let job = db
+        .jobs()
+        .enqueue("delete_backup", None, None, None)
+        .await
+        .unwrap();
+    db.jobs()
+        .claim("w1", lease)
+        .await
+        .unwrap()
+        .expect("claimed");
+    exec(
+        &test,
+        "UPDATE jobs SET locked_until = now() - interval '1 second' WHERE id = $1",
+        &job.id,
+    )
+    .await;
+    db.jobs()
+        .claim("w2", lease)
+        .await
+        .unwrap()
+        .expect("reclaimed");
+
+    // w1 lost the lease: every write is refused and changes nothing.
+    assert!(!db
+        .jobs()
+        .append_log(&job.id, "w1", "stale\n")
+        .await
+        .unwrap());
+    let err = db.jobs().set_step(&job.id, "w1", "late").await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::Conflict);
+    let err = db
+        .jobs()
+        .set_payload(&job.id, "w1", &serde_json::json!({"x": 1}))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::Conflict);
+    let err = db
+        .jobs()
+        .finish(&job.id, "w1", false, Some("stale"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::Conflict);
+    let row = db.jobs().get(&job.id).await.unwrap();
+    assert_eq!(row.status, "running");
+    assert_eq!(row.locked_by.as_deref(), Some("w2"));
+    assert!(row.log.is_empty());
+    assert!(row.payload.get("step").is_none());
+
+    // w2 holds it: its writes land.
+    assert!(db.jobs().append_log(&job.id, "w2", "mine\n").await.unwrap());
+    db.jobs().set_step(&job.id, "w2", "go").await.unwrap();
+    let done = db.jobs().finish(&job.id, "w2", true, None).await.unwrap();
+    assert_eq!(done.status, "done");
+    assert_eq!(done.log, "mine\n");
+    // A finished job takes no further writes, even from its last holder.
+    assert!(!db
+        .jobs()
+        .append_log(&job.id, "w2", "after\n")
+        .await
+        .unwrap());
+    // A missing job is still not_found.
+    let err = db
+        .jobs()
+        .finish("nope", "w2", true, None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::NotFound);
 }
 
 #[tokio::test]
@@ -675,7 +751,12 @@ async fn enqueue_second_active_job_for_site_is_conflict() {
         Some(first.id.clone())
     );
     db.jobs()
-        .finish(&first.id, false, Some("boom"))
+        .claim("w1", Duration::from_secs(60))
+        .await
+        .unwrap()
+        .expect("claimed");
+    db.jobs()
+        .finish(&first.id, "w1", false, Some("boom"))
         .await
         .unwrap();
     db.jobs()
