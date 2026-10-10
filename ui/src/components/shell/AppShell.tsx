@@ -12,7 +12,6 @@ import { Breadcrumbs } from "./Breadcrumbs";
 import { NavList } from "./NavList";
 import { OperatorMenu } from "./OperatorMenu";
 import { StatusPill } from "./StatusPill";
-import { ThemeToggle } from "./ThemeToggle";
 
 /**
  * Signed-in layout. ≥1024 px: 240 px sidebar with labels. 768–1023 px:
@@ -79,7 +78,6 @@ export function AppShell({ operator }: { operator: Pick<Operator, "email" | "rol
             <Breadcrumbs className="hidden md:block" />
             <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
               <StatusPill />
-              <ThemeToggle />
               <OperatorMenu operator={operator} variant="avatar" className="md:hidden" />
             </div>
           </header>
