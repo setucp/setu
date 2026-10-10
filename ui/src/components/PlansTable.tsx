@@ -1,18 +1,17 @@
 import * as React from "react";
+import { Layers, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { useCreatePlan, useUpdatePlan } from "@/lib/api";
-import { ApiError, type Plan } from "@/lib/client";
+import type { Plan } from "@/lib/client";
+import { formatMb } from "@/lib/format";
+import { EmptyState } from "./EmptyState";
+import { ErrorText } from "./ErrorText";
+import { ResponsiveTable, type Column } from "./ResponsiveTable";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Modal } from "./ui/dialog";
+import { Field } from "./ui/field";
 import { Input } from "./ui/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "./ui/table";
 
 /** Parse a comma-separated app-id list, ignoring blanks. */
 export function parseAppIds(text: string): string[] {
@@ -25,46 +24,77 @@ export function parseAppIds(text: string): string[] {
 export function PlansTable({
   plans,
   onEdit,
+  onCreate,
 }: {
   plans: Plan[];
   onEdit: (plan: Plan) => void;
+  onCreate?: () => void;
 }) {
   if (plans.length === 0) {
-    return <p className="py-10 text-center text-sm text-muted-foreground">No plans yet.</p>;
+    return (
+      <EmptyState
+        icon={<Layers className="size-6 text-link" aria-hidden="true" />}
+        title="No plans yet."
+        description="A plan caps a site's memory, CPU and disk, and can limit which apps it may run."
+        action={onCreate !== undefined ? <Button onClick={onCreate}>New plan</Button> : undefined}
+      />
+    );
   }
+  const edit = (p: Plan) => (
+    <Button type="button" variant="outline" size="sm" onClick={() => onEdit(p)}>
+      <Pencil aria-hidden="true" />
+      Edit
+    </Button>
+  );
+  const columns: Column<Plan>[] = [
+    { id: "name", header: "Name", cell: (p) => <span className="font-semibold">{p.name}</span> },
+    {
+      id: "memory",
+      header: "Memory",
+      cell: (p) => <span className="tabular-nums">{formatMb(p.limits.memory_mb)}</span>,
+    },
+    {
+      id: "cpu",
+      header: "CPU",
+      cell: (p) => <span className="tabular-nums">{p.limits.cpu_percent ?? "—"}%</span>,
+    },
+    {
+      id: "disk",
+      header: "Disk",
+      cell: (p) => <span className="tabular-nums">{formatMb(p.limits.disk_mb)}</span>,
+    },
+    {
+      id: "apps",
+      header: "Allowed apps",
+      cell: (p) =>
+        p.allowed_app_ids.length === 0 ? (
+          <Badge variant="secondary">all apps</Badge>
+        ) : (
+          <span className="flex flex-wrap gap-1">
+            {p.allowed_app_ids.map((id) => (
+              <Badge key={id} variant="outline" className="font-mono">
+                {id}
+              </Badge>
+            ))}
+          </span>
+        ),
+    },
+    {
+      id: "actions",
+      header: <span className="sr-only">Actions</span>,
+      hideOnCard: true,
+      className: "text-right",
+      cell: edit,
+    },
+  ];
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Name</TableHead>
-          <TableHead>Memory</TableHead>
-          <TableHead>CPU</TableHead>
-          <TableHead>Disk</TableHead>
-          <TableHead>Allowed apps</TableHead>
-          <TableHead>
-            <span className="sr-only">Actions</span>
-          </TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {plans.map((p) => (
-          <TableRow key={p.id}>
-            <TableCell className="font-medium">{p.name}</TableCell>
-            <TableCell>{p.limits.memory_mb ?? "—"} MB</TableCell>
-            <TableCell>{p.limits.cpu_percent ?? "—"}%</TableCell>
-            <TableCell>{p.limits.disk_mb ?? "—"} MB</TableCell>
-            <TableCell className="max-w-56 truncate font-mono text-xs">
-              {p.allowed_app_ids.length === 0 ? "all" : p.allowed_app_ids.join(", ")}
-            </TableCell>
-            <TableCell>
-              <Button type="button" variant="outline" size="sm" onClick={() => onEdit(p)}>
-                Edit
-              </Button>
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <ResponsiveTable
+      label="Plans"
+      rows={plans}
+      columns={columns}
+      getKey={(p) => p.id}
+      cardActions={edit}
+    />
   );
 }
 
@@ -92,6 +122,8 @@ export function PlanDialog({
   const update = useUpdatePlan();
   const pending = create.isPending || update.isPending;
   const error = create.error ?? update.error;
+  const resetCreate = create.reset;
+  const resetUpdate = update.reset;
 
   React.useEffect(() => {
     if (open) {
@@ -100,20 +132,32 @@ export function PlanDialog({
       setCpu(String(plan?.limits.cpu_percent ?? 100));
       setDisk(String(plan?.limits.disk_mb ?? 5120));
       setAppIds((plan?.allowed_app_ids ?? []).join(", "));
-      create.reset();
-      update.reset();
+      resetCreate();
+      resetUpdate();
     }
-  }, [open ]);
+  }, [open, plan, resetCreate, resetUpdate]);
 
   return (
     <Modal
       open={open}
       onClose={onClose}
       title={plan === null ? "New plan" : `Edit ${plan.name}`}
+      description="Limits apply to every site on the plan; changes take effect on each site's next restart."
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" form="plan-form" loading={pending}>
+            {pending ? "Saving…" : plan === null ? "Create plan" : "Save plan"}
+          </Button>
+        </>
+      }
     >
       <form
+        id="plan-form"
         aria-label={plan === null ? "New plan" : "Edit plan"}
-        className="flex flex-col gap-3"
+        className="flex flex-col gap-4"
         onSubmit={(e) => {
           e.preventDefault();
           const input = {
@@ -145,55 +189,29 @@ export function PlanDialog({
           }
         }}
       >
-        <label className="flex flex-col gap-1.5 text-sm font-medium">
-          Name
-          <Input value={name} onChange={(e) => setName(e.target.value)} required />
-        </label>
-        <div className="grid grid-cols-3 gap-3">
-          <label className="flex flex-col gap-1.5 text-sm font-medium">
-            Memory (MB)
-            <Input
-              inputMode="numeric"
-              value={memory}
-              onChange={(e) => setMemory(e.target.value)}
-              required
-            />
-          </label>
-          <label className="flex flex-col gap-1.5 text-sm font-medium">
-            CPU (%)
-            <Input
-              inputMode="numeric"
-              value={cpu}
-              onChange={(e) => setCpu(e.target.value)}
-              required
-            />
-          </label>
-          <label className="flex flex-col gap-1.5 text-sm font-medium">
-            Disk (MB)
-            <Input
-              inputMode="numeric"
-              value={disk}
-              onChange={(e) => setDisk(e.target.value)}
-              required
-            />
-          </label>
+        <Field label="Name">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="standard" required />
+        </Field>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <Field label="Memory (MB)">
+            <Input inputMode="numeric" value={memory} onChange={(e) => setMemory(e.target.value)} required />
+          </Field>
+          <Field label="CPU (%)" hint="100 = one core">
+            <Input inputMode="numeric" value={cpu} onChange={(e) => setCpu(e.target.value)} required />
+          </Field>
+          <Field label="Disk (MB)">
+            <Input inputMode="numeric" value={disk} onChange={(e) => setDisk(e.target.value)} required />
+          </Field>
         </div>
-        <label className="flex flex-col gap-1.5 text-sm font-medium">
-          Allowed app ids (comma-separated, blank = all)
+        <Field label="Allowed app ids" hint="Comma-separated; leave blank to allow every app.">
           <Input
             value={appIds}
             onChange={(e) => setAppIds(e.target.value)}
             placeholder="hello, vyasa"
+            className="font-mono"
           />
-        </label>
-        {error instanceof ApiError ? (
-          <p role="alert" className="text-sm text-destructive">
-            {error.message}
-          </p>
-        ) : null}
-        <Button type="submit" disabled={pending} className="self-start">
-          {pending ? "Saving…" : plan === null ? "Create plan" : "Save plan"}
-        </Button>
+        </Field>
+        <ErrorText error={error} />
       </form>
     </Modal>
   );

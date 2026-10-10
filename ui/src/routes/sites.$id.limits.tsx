@@ -1,3 +1,5 @@
+import { SkeletonRows } from "@/components/ui/skeleton";
+import { ErrorText } from "@/components/ErrorText";
 import { createFileRoute } from "@tanstack/react-router";
 import { SiteLimits } from "@/components/SiteLimits";
 import { useSite } from "@/lib/api";
@@ -12,17 +14,13 @@ function SiteLimitsTab() {
   const site = useSite(id);
 
   if (site.isPending) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
+    return <SkeletonRows rows={3} />;
   }
   if (site.error instanceof ApiError) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {site.error.message}
-      </p>
-    );
+    return <ErrorText error={site.error} />;
   }
   if (site.data === undefined) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
+    return <SkeletonRows rows={3} />;
   }
   return <SiteLimits site={site.data} />;
 }

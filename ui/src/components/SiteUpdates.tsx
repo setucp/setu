@@ -1,26 +1,28 @@
 import * as React from "react";
+import { ArrowUpCircle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAppVersions, useJobs, useUpdateSite } from "@/lib/api";
 import { ApiError, type AppVersion, type Job } from "@/lib/client";
 import { compareVersions, parseAssignments } from "@/lib/format";
+import { AppLink } from "./AppLink";
+import { ErrorText } from "./ErrorText";
+import { RelativeTime } from "./RelativeTime";
+import { Alert } from "./ui/alert";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Card } from "./ui/card";
+import { Field } from "./ui/field";
 import { Modal } from "./ui/dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "./ui/table";
+import { SkeletonRows } from "./ui/skeleton";
+import { Textarea } from "./ui/textarea";
 
 /**
- * Updates tab: versions newer than the running one, an update dialog that
- * collects answers for `prompt` variables the target version adds
- * (`NAME=value` lines; the API exposes no per-version manifest, so the
- * server validates the names, R110), and the outcome of the site's latest
- * update job — including an automatic rollback, read from the job error
- * (`rollback: …` / `rollback failed: …`).
+ * Updates tab: the running version (marked current) and the versions
+ * newer than it, an update dialog that collects answers for `prompt`
+ * variables the target version adds (`NAME=value` lines; the API exposes
+ * no per-version manifest, so the server validates the names, R110), and
+ * the outcome of the site's latest update job — including an automatic
+ * rollback, read from the job error (`rollback: …` / `rollback failed: …`).
  */
 export function SiteUpdates({
   siteId,
@@ -37,57 +39,78 @@ export function SiteUpdates({
   const jobs = useJobs();
   const [target, setTarget] = React.useState<AppVersion | null>(null);
 
-  if (versions.isPending) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
-  }
-  if (versions.error instanceof ApiError) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {versions.error.message}
-      </p>
-    );
-  }
-  const newer = (versions.data ?? [])
+  if (versions.isPending) return <SkeletonRows rows={3} label="Loading versions…" />;
+  if (versions.error instanceof ApiError) return <ErrorText error={versions.error} />;
+  const all = versions.data ?? [];
+  const newer = all
     .filter((v) => compareVersions(v.version, currentVersion) > 0)
     .sort((a, b) => compareVersions(b.version, a.version));
+  const current = all.find((v) => v.version === currentVersion);
   const latest = (jobs.data ?? [])
     .filter((j) => j.kind === "update_site" && j.site_id === siteId)
     .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-sm">{`Running ${currentVersion}.`}</p>
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="text-sm font-medium">{`Running ${currentVersion}.`}</p>
+        {newer.length === 0 ? (
+          <Badge variant="success" dot>
+            Up to date
+          </Badge>
+        ) : (
+          <Badge variant="info" dot>
+            {newer.length} {newer.length === 1 ? "update" : "updates"} available
+          </Badge>
+        )}
+      </div>
       {latest !== undefined ? <UpdateOutcome job={latest} /> : null}
+      <Card>
+        <ul aria-label="Versions" className="divide-y">
+          {newer.map((v, i) => (
+            <li key={v.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center">
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                <ArrowUpCircle className="size-5 shrink-0 text-link" aria-hidden="true" />
+                <div className="min-w-0">
+                  <p className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-sm font-semibold">{v.version}</span>
+                    {i === 0 ? <Badge variant="info">latest</Badge> : null}
+                    <Badge variant="secondary">{v.channel}</Badge>
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Published <RelativeTime iso={v.published_at} />
+                  </p>
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant={i === 0 ? "default" : "outline"}
+                size="sm"
+                onClick={() => setTarget(v)}
+              >
+                Update to {v.version}
+              </Button>
+            </li>
+          ))}
+          <li className="flex items-center gap-3 bg-surface px-5 py-4">
+            <CheckCircle2 className="size-5 shrink-0 text-success" aria-hidden="true" />
+            <div className="min-w-0 flex-1">
+              <p className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-sm font-semibold">{currentVersion}</span>
+                <Badge variant="success">current</Badge>
+              </p>
+              {current !== undefined ? (
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Published <RelativeTime iso={current.published_at} />
+                </p>
+              ) : null}
+            </div>
+          </li>
+        </ul>
+      </Card>
       {newer.length === 0 ? (
         <p className="text-sm text-muted-foreground">No newer version published.</p>
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Version</TableHead>
-              <TableHead>Channel</TableHead>
-              <TableHead>Published</TableHead>
-              <TableHead>
-                <span className="sr-only">Actions</span>
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {newer.map((v) => (
-              <TableRow key={v.id}>
-                <TableCell className="font-mono">{v.version}</TableCell>
-                <TableCell>{v.channel}</TableCell>
-                <TableCell>{new Date(v.published_at).toLocaleDateString()}</TableCell>
-                <TableCell>
-                  <Button type="button" variant="outline" size="sm" onClick={() => setTarget(v)}>
-                    Update to {v.version}
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
+      ) : null}
       <UpdateDialog
         siteId={siteId}
         currentVersion={currentVersion}
@@ -101,32 +124,30 @@ export function SiteUpdates({
 
 function UpdateOutcome({ job }: { job: Job }) {
   const error = job.error ?? "";
-  let tone = "border-yellow-500/40 bg-yellow-500/10";
+  let variant: "info" | "success" | "warning" | "destructive" = "warning";
   let text: string;
   if (job.status === "queued" || job.status === "running") {
+    variant = "info";
     text = "An update is in progress.";
   } else if (job.status === "done") {
-    tone = "border-green-500/40 bg-green-500/10";
+    variant = "success";
     text = "The last update finished.";
   } else if (error.startsWith("rollback failed:")) {
-    tone = "border-destructive/50 bg-destructive/10";
+    variant = "destructive";
     text = `The last update failed and so did its rollback: ${error.slice("rollback failed:".length).trim()}. The site is failed; retry it from the Danger tab or restore a backup.`;
   } else if (error.startsWith("rollback:")) {
     text = `The last update was rolled back: ${error.slice("rollback:".length).trim()}.`;
   } else {
-    tone = "border-destructive/50 bg-destructive/10";
+    variant = "destructive";
     text = `The last update failed${error === "" ? "" : `: ${error}`}.`;
   }
   return (
-    <div data-testid="update-outcome" className={`rounded-md border p-3 text-sm ${tone}`}>
+    <Alert variant={variant} role="status" data-testid="update-outcome">
       <p>{text}</p>
-      <a
-        href={`/jobs/${job.id}`}
-        className="mt-1 inline-block text-xs text-primary underline-offset-2 hover:underline"
-      >
+      <AppLink href={`/jobs/${job.id}`} className="mt-1 inline-block text-xs">
         Open the update job
-      </a>
-    </div>
+      </AppLink>
+    </Alert>
   );
 }
 
@@ -155,7 +176,6 @@ function UpdateDialog({
   }, [target, reset]);
 
   const version = target?.version ?? "";
-  const promptsId = React.useId();
 
   function submit() {
     const { values, badLines } = parseAssignments(answers);
@@ -183,7 +203,7 @@ function UpdateDialog({
     (update.isError
       ? update.error instanceof ApiError
         ? update.error.message
-        : "update failed"
+        : "Update failed"
       : null);
 
   return (
@@ -197,35 +217,33 @@ function UpdateDialog({
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button data-testid="confirm-accept" disabled={update.isPending} onClick={submit}>
+          <Button data-testid="confirm-accept" loading={update.isPending} onClick={submit}>
             {update.isPending ? "Starting…" : `Update to ${version}`}
           </Button>
         </>
       }
     >
-      <div className="flex flex-col gap-2">
-        <label htmlFor={promptsId} className="text-sm font-medium">
-          New prompt answers
-        </label>
-        <p className="text-xs text-muted-foreground">
-          If {version} adds <code>prompt</code> variables, answer them here, one{" "}
-          <code>NAME=value</code> per line. Existing answers are kept; leave this empty
-          when nothing new is asked.
-        </p>
-        <textarea
-          id={promptsId}
-          value={answers}
-          onChange={(e) => setAnswers(e.target.value)}
-          rows={4}
-          spellCheck={false}
-          className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-          placeholder="SMTP_HOST=mail.example.com"
-        />
-        {error !== null ? (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        ) : null}
+      <div className="flex flex-col gap-3">
+        <Field
+          label="New prompt answers"
+          hint={
+            <>
+              If {version} adds <code>prompt</code> variables, answer them here, one{" "}
+              <code>NAME=value</code> per line. Existing answers are kept; leave this empty when
+              nothing new is asked.
+            </>
+          }
+        >
+          <Textarea
+            value={answers}
+            onChange={(e) => setAnswers(e.target.value)}
+            rows={4}
+            spellCheck={false}
+            className="font-mono text-xs"
+            placeholder="SMTP_HOST=mail.example.com"
+          />
+        </Field>
+        {error !== null ? <Alert variant="destructive">{error}</Alert> : null}
       </div>
     </Modal>
   );

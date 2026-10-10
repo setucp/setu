@@ -1,20 +1,29 @@
 import * as React from "react";
+import { Eye, Pencil, RefreshCw, X } from "lucide-react";
 import { toast } from "sonner";
 import { usePutSiteEnv, useRevealEnv, useSiteEnv } from "@/lib/api";
 import { ApiError, type EnvEntry } from "@/lib/client";
-import { CopyButton } from "./CopyButton";
+import { CopyField } from "./CopyButton";
+import { ErrorText } from "./ErrorText";
+import { ResponsiveTable, type Column } from "./ResponsiveTable";
+import { Alert } from "./ui/alert";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Field } from "./ui/field";
 import { Input } from "./ui/input";
 import { Modal } from "./ui/dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "./ui/table";
+import { SkeletonRows } from "./ui/skeleton";
+
+function Masked() {
+  return (
+    <span className="inline-flex items-center">
+      <span aria-hidden="true" className="tracking-[0.2em] text-muted-foreground">
+        ••••••••
+      </span>
+      <span className="sr-only">Masked value</span>
+    </span>
+  );
+}
 
 /**
  * Masked env table. The list never carries a secret (`[MASKED_VALUE]`);
@@ -35,126 +44,133 @@ export function SiteEnv({
   const [armed, setArmed] = React.useState<Record<string, string>>({});
   const [revealing, setRevealing] = React.useState<EnvEntry | null>(null);
 
-  if (env.isPending) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
-  }
-  if (env.error instanceof ApiError) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {env.error.message}
-      </p>
-    );
-  }
+  if (env.isPending) return <SkeletonRows rows={5} label="Loading environment…" />;
+  if (env.error instanceof ApiError) return <ErrorText error={env.error} />;
   const rows = env.data ?? [];
   const edited = Object.entries(armed).filter(([, v]) => v !== "");
 
   function arm(name: string) {
     setArmed((prev) => (prev[name] === undefined ? { ...prev, [name]: "" } : prev));
   }
+  function disarm(name: string) {
+    setArmed((prev) => {
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
+  }
 
-  return (
-    <div className="flex flex-col gap-3">
-      <p className="text-sm text-muted-foreground">
-        Secret values stay masked; Reveal asks for your password and is audited.{" "}
-        <code>once</code> values reached the app on its first boot only. Only{" "}
-        <code>value</code> and <code>prompt</code> variables can be changed — the
-        server rejects generated and derived ones.
-      </p>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Name</TableHead>
-            <TableHead>Value</TableHead>
-            <TableHead>Flags</TableHead>
-            <TableHead>
-              <span className="sr-only">Actions</span>
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => {
-            const isArmed = armed[row.name] !== undefined;
-            return (
-              <TableRow key={row.name}>
-                <TableCell className="font-mono">{row.name}</TableCell>
-                <TableCell className="font-mono">
-                  {isArmed ? (
-                    <Input
-                      aria-label={`New value for ${row.name}`}
-                      type={row.secret ? "password" : "text"}
-                      placeholder="Enter a new value"
-                      value={armed[row.name] ?? ""}
-                      onChange={(e) =>
-                        setArmed((prev) => ({ ...prev, [row.name]: e.target.value }))
-                      }
-                    />
-                  ) : (
-                    <span>{row.secret ? "[MASKED_VALUE]" : row.value}</span>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <span className="flex gap-1">
-                    {row.secret ? <Badge variant="secondary">secret</Badge> : null}
-                    {row.once ? <Badge variant="outline">once</Badge> : null}
-                  </span>
-                </TableCell>
-                <TableCell>
-                  {isArmed ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() =>
-                        setArmed((prev) => {
-                          const next = { ...prev };
-                          delete next[row.name];
-                          return next;
-                        })
-                      }
-                    >
-                      Cancel
-                    </Button>
-                  ) : row.secret ? (
-                    <span className="flex gap-1">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setRevealing(row)}
-                      >
-                        Reveal
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        aria-label={`Replace ${row.name}`}
-                        onClick={() => arm(row.name)}
-                      >
-                        Replace
-                      </Button>
-                    </span>
-                  ) : (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => arm(row.name)}
-                    >
-                      Edit
-                    </Button>
-                  )}
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-      {edited.length > 0 ? (
-        <div className="flex items-center gap-2">
+  const columns: Column<EnvEntry>[] = [
+    {
+      id: "name",
+      header: "Name",
+      cell: (row) => (
+        <span className="flex flex-wrap items-center gap-2">
+          <code className="text-xs font-medium">{row.name}</code>
+          {row.secret ? <Badge variant="secondary">secret</Badge> : null}
+          {row.once ? <Badge variant="warning">once</Badge> : null}
+        </span>
+      ),
+    },
+    {
+      id: "value",
+      header: "Value",
+      className: "w-full min-w-48 font-mono text-xs",
+      cell: (row) =>
+        armed[row.name] !== undefined ? (
+          <Input
+            aria-label={`New value for ${row.name}`}
+            type={row.secret ? "password" : "text"}
+            placeholder="Enter a new value"
+            className="h-9 font-mono text-xs"
+            autoFocus
+            value={armed[row.name] ?? ""}
+            onChange={(e) => setArmed((prev) => ({ ...prev, [row.name]: e.target.value }))}
+          />
+        ) : row.secret ? (
+          <Masked />
+        ) : (
+          <span className="break-all">{row.value}</span>
+        ),
+    },
+    {
+      id: "actions",
+      header: <span className="sr-only">Actions</span>,
+      hideOnCard: true,
+      className: "text-right",
+      cell: (row) => rowActions(row),
+    },
+  ];
+
+  function rowActions(row: EnvEntry) {
+    if (armed[row.name] !== undefined) {
+      return (
+        <Button type="button" variant="ghost" size="sm" onClick={() => disarm(row.name)}>
+          <X aria-hidden="true" />
+          Cancel
+        </Button>
+      );
+    }
+    if (row.secret) {
+      return (
+        <span className="flex justify-end gap-1">
+          <Button type="button" variant="outline" size="sm" onClick={() => setRevealing(row)}>
+            <Eye aria-hidden="true" />
+            Reveal
+          </Button>
           <Button
             type="button"
+            variant="ghost"
+            size="sm"
+            aria-label={`Replace ${row.name}`}
+            onClick={() => arm(row.name)}
+          >
+            <RefreshCw aria-hidden="true" />
+            Replace
+          </Button>
+        </span>
+      );
+    }
+    return (
+      <Button type="button" variant="outline" size="sm" onClick={() => arm(row.name)}>
+        <Pencil aria-hidden="true" />
+        Edit
+      </Button>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Alert title="Secrets stay masked">
+        Reveal asks for your password and every reveal is audited. <code>once</code> values
+        reached the app on its first boot only. Only <code>value</code> and <code>prompt</code>{" "}
+        variables can be changed — the server rejects generated and derived ones.
+      </Alert>
+      <ResponsiveTable
+        label="Environment"
+        rows={rows}
+        columns={columns}
+        getKey={(r) => r.name}
+        cardActions={(row) => rowActions(row)}
+      />
+      {edited.length > 0 ? (
+        <div className="sticky bottom-4 z-10 flex flex-col gap-3 rounded-lg border bg-popover p-3 shadow-overlay sm:flex-row sm:items-center">
+          <p className="flex-1 text-sm">
+            {edited.length} unsaved {edited.length === 1 ? "change" : "changes"}. Saving restarts
+            the site.
+          </p>
+          <ErrorText error={put.isError ? put.error : null} />
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setArmed({})}
             disabled={put.isPending}
+          >
+            Discard
+          </Button>
+          <Button
+            type="button"
+            loading={put.isPending}
             onClick={() => {
               put.mutate(Object.fromEntries(edited), {
                 onSuccess: (res) => {
@@ -163,25 +179,16 @@ export function SiteEnv({
                   onSubmitted?.(res.job.id);
                 },
                 onError: (err) => {
-                  toast.error(err instanceof ApiError ? err.message : "update failed");
+                  toast.error(err instanceof ApiError ? err.message : "Update failed");
                 },
               });
             }}
           >
             {put.isPending ? "Saving…" : `Save changes (${edited.length})`}
           </Button>
-          {put.isError && put.error instanceof ApiError ? (
-            <p role="alert" className="text-sm text-destructive">
-              {put.error.message}
-            </p>
-          ) : null}
         </div>
       ) : null}
-      <RevealDialog
-        siteId={siteId}
-        entry={revealing}
-        onClose={() => setRevealing(null)}
-      />
+      <RevealDialog siteId={siteId} entry={revealing} onClose={() => setRevealing(null)} />
     </div>
   );
 }
@@ -233,7 +240,8 @@ function RevealDialog({
             <Button
               type="submit"
               form="reveal-form"
-              disabled={password === "" || reveal.isPending}
+              disabled={password === ""}
+              loading={reveal.isPending}
             >
               {reveal.isPending ? "Checking…" : "Reveal"}
             </Button>
@@ -243,15 +251,14 @@ function RevealDialog({
         )
       }
     >
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-4">
         {entry?.once === true ? (
-          <p className="rounded-md border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm">
-            <span className="font-medium">{name}</span> is a <code>once</code> value:
-            the app received it on its first boot only, and it was removed from the
-            app's environment after the first successful health check. Setu keeps
-            it sealed so you can read it here — for example, an initial admin
-            password. Changing it in the app does not change it here.
-          </p>
+          <Alert variant="warning" title="A once value">
+            <span className="font-medium text-foreground">{name}</span> reached the app on its
+            first boot only, and was removed from the app&apos;s environment after the first
+            successful health check. Setu keeps it sealed so you can read it here — for example,
+            an initial admin password. Changing it in the app does not change it here.
+          </Alert>
         ) : null}
         {value === undefined ? (
           <form
@@ -260,14 +267,10 @@ function RevealDialog({
             onSubmit={(e) => {
               e.preventDefault();
               if (entry === null || password === "") return;
-              reveal.mutate(
-                { name: entry.name, password },
-                { onSettled: () => setPassword("") },
-              );
+              reveal.mutate({ name: entry.name, password }, { onSettled: () => setPassword("") });
             }}
           >
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
-              Your password
+            <Field label="Your password">
               <Input
                 type="password"
                 autoComplete="current-password"
@@ -275,25 +278,20 @@ function RevealDialog({
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
-            </label>
+            </Field>
             {reveal.isError ? (
-              <p role="alert" className="text-sm text-destructive">
-                {reveal.error instanceof ApiError ? reveal.error.message : "reveal failed"}
-              </p>
+              <Alert variant="destructive">
+                {reveal.error instanceof ApiError ? reveal.error.message : "Reveal failed"}
+              </Alert>
             ) : null}
           </form>
         ) : (
-          <>
-            <code className="block overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-sm break-all">
-              {value}
-            </code>
-            <div className="flex items-center gap-2">
-              <CopyButton text={value} label="Value" />
-              <span className="text-xs text-muted-foreground">
-                Shown once — closing this dialog forgets it.
-              </span>
-            </div>
-          </>
+          <div className="flex flex-col gap-2">
+            <CopyField value={value} label="Value" />
+            <p className="text-xs text-muted-foreground">
+              Shown once — closing this dialog forgets it.
+            </p>
+          </div>
         )}
       </div>
     </Modal>

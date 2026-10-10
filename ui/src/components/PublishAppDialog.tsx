@@ -1,11 +1,17 @@
 import * as React from "react";
+import { CheckCircle2, FileCode2, Link2 } from "lucide-react";
 import { toast } from "sonner";
 import { usePublishApp, useValidateManifest } from "@/lib/api";
 import { ApiError } from "@/lib/client";
+import { cn } from "@/lib/utils";
+import { ErrorText } from "./ErrorText";
 import { Button } from "./ui/button";
 import { Modal } from "./ui/dialog";
+import { Field } from "./ui/field";
 import { Input } from "./ui/input";
-import { Select } from "./ui/select";
+import { Textarea } from "./ui/textarea";
+
+type Mode = "toml" | "url";
 
 /**
  * Publish dialog: from a catalogue URL or pasted TOML. Pasted manifests must
@@ -21,23 +27,26 @@ export function PublishAppDialog({
   onClose: () => void;
   onPublished?: () => void;
 }) {
-  const [mode, setMode] = React.useState<"toml" | "url">("toml");
+  const [mode, setMode] = React.useState<Mode>("toml");
   const [text, setText] = React.useState("");
   const [validatedText, setValidatedText] = React.useState<string | null>(null);
   const validate = useValidateManifest();
   const publish = usePublishApp();
+  const resetValidate = validate.reset;
+  const resetPublish = publish.reset;
 
   React.useEffect(() => {
     if (open) {
       setText("");
       setValidatedText(null);
-      validate.reset();
-      publish.reset();
+      resetValidate();
+      resetPublish();
     }
-  }, [open ]);
+  }, [open, resetValidate, resetPublish]);
 
   const fresh = validatedText !== null && validatedText === text;
   const validation = validate.data;
+  const problems = validation !== undefined && !validation.ok ? validation.errors : [];
 
   function doPublish() {
     const payload = mode === "toml" ? { toml: text } : { url: text.trim() };
@@ -48,10 +57,16 @@ export function PublishAppDialog({
         onClose();
       },
       onError: (err) => {
-        toast.error(err instanceof ApiError ? err.message : "publish failed");
+        toast.error(err instanceof ApiError ? err.message : "Publish failed");
       },
     });
   }
+
+  const disabled =
+    text.trim() === "" ||
+    // Pasted manifests need a fresh validation; URLs are validated
+    // server-side at publish time.
+    (mode === "toml" && (!validation?.ok || !fresh));
 
   return (
     <Modal
@@ -60,55 +75,84 @@ export function PublishAppDialog({
       size="lg"
       title="Add app"
       description="Publish a version from a catalogue URL or pasted manifest TOML."
+      footer={
+        <>
+          {mode === "toml" && !fresh ? (
+            <span className="text-xs text-muted-foreground sm:mr-auto sm:self-center">
+              Validate the manifest before publishing.
+            </span>
+          ) : null}
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="button" disabled={disabled} loading={publish.isPending} onClick={doPublish}>
+            {publish.isPending ? "Publishing…" : "Publish"}
+          </Button>
+        </>
+      }
     >
-      <div className="flex flex-col gap-3">
-        <label className="flex flex-col gap-1.5 text-sm font-medium">
-          Source
-          <Select
-            aria-label="Source"
-            value={mode}
-            onChange={(e) => {
-              setMode(e.target.value as "toml" | "url");
-              setValidatedText(null);
-              validate.reset();
-            }}
-          >
-            <option value="toml">Paste manifest TOML</option>
-            <option value="url">Fetch from URL</option>
-          </Select>
-        </label>
+      <div className="flex flex-col gap-4">
+        <div role="radiogroup" aria-label="Source" className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
+          {(
+            [
+              { value: "toml", label: "Paste TOML", icon: FileCode2 },
+              { value: "url", label: "From URL", icon: Link2 },
+            ] as const
+          ).map(({ value, label, icon: Icon }) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={mode === value}
+              onClick={() => {
+                setMode(value);
+                setValidatedText(null);
+                resetValidate();
+              }}
+              className={cn(
+                "touch-target inline-flex h-8 items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors",
+                mode === value
+                  ? "bg-card text-foreground shadow-card"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Icon className="size-4" aria-hidden="true" />
+              {label}
+            </button>
+          ))}
+        </div>
         {mode === "toml" ? (
-          <label className="flex flex-col gap-1.5 text-sm font-medium">
-            Manifest TOML
-            <textarea
-              aria-label="Manifest TOML"
+          <Field label="Manifest TOML">
+            <Textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
-              rows={10}
+              rows={12}
               spellCheck={false}
               placeholder={'schema = 1\n\n[app]\nid = "hello"'}
-              className="flex w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm shadow-xs placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+              className="font-mono text-xs"
+              aria-invalid={problems.length > 0 || undefined}
             />
-          </label>
+          </Field>
         ) : (
-          <label className="flex flex-col gap-1.5 text-sm font-medium">
-            Manifest URL
+          <Field label="Manifest URL" hint="Fetched and validated by the panel when you publish.">
             <Input
-              aria-label="Manifest URL"
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder="https://example.com/manifest.toml"
               inputMode="url"
+              autoCapitalize="none"
+              spellCheck={false}
             />
-          </label>
+          </Field>
         )}
         {mode === "toml" ? (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
             <Button
               type="button"
               variant="outline"
               size="sm"
-              disabled={text.trim() === "" || validate.isPending}
+              disabled={text.trim() === ""}
+              loading={validate.isPending}
               onClick={() => {
                 validate.mutate(text, {
                   onSuccess: (res) => {
@@ -121,11 +165,12 @@ export function PublishAppDialog({
             </Button>
             {validation !== undefined && !validate.isPending ? (
               validation.ok ? (
-                <p className="text-sm text-green-700 dark:text-green-400">
+                <p className="inline-flex items-center gap-1.5 text-sm font-medium text-success">
+                  <CheckCircle2 className="size-4" aria-hidden="true" />
                   Manifest is valid.
                 </p>
               ) : (
-                <p className="text-sm text-destructive">
+                <p className="text-sm font-medium text-destructive">
                   {validation.errors.length} problem
                   {validation.errors.length === 1 ? "" : "s"} found.
                 </p>
@@ -133,47 +178,24 @@ export function PublishAppDialog({
             ) : null}
           </div>
         ) : null}
-        {validation !== undefined && !validation.ok ? (
-          <ul className="flex flex-col gap-1 rounded-md border border-destructive/40 p-3 text-sm">
-            {validation.errors.map((e, i) => (
-              <li key={i} className="font-mono text-xs text-destructive">
-                {e.path}
-                {e.line !== null && e.line !== undefined ? `:${e.line}` : ""} —{" "}
-                {e.message}
+        {problems.length > 0 ? (
+          <ul
+            aria-label="Manifest problems"
+            className="flex flex-col divide-y divide-destructive/15 overflow-hidden rounded-md border border-destructive/30 bg-destructive-subtle text-xs"
+          >
+            {problems.map((e, i) => (
+              <li key={i} className="flex gap-3 px-3 py-2">
+                <span className="shrink-0 font-mono font-medium text-destructive">
+                  {e.line !== null && e.line !== undefined ? `line ${e.line}` : "—"}
+                </span>
+                <span className="font-mono text-muted-foreground">{e.path}</span>
+                <span className="min-w-0 flex-1 break-words text-foreground">{e.message}</span>
               </li>
             ))}
           </ul>
         ) : null}
-        {validate.isError && validate.error instanceof ApiError ? (
-          <p role="alert" className="text-sm text-destructive">
-            {validate.error.message}
-          </p>
-        ) : null}
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            disabled={
-              publish.isPending ||
-              text.trim() === "" ||
-              // Pasted manifests need a fresh validation; URLs are validated
-              // server-side at publish time.
-              (mode === "toml" && (!validation?.ok || !fresh))
-            }
-            onClick={doPublish}
-          >
-            {publish.isPending ? "Publishing…" : "Publish"}
-          </Button>
-          {mode === "toml" && !fresh ? (
-            <span className="self-center text-xs text-muted-foreground">
-              Validate the manifest before publishing.
-            </span>
-          ) : null}
-        </div>
-        {publish.isError && publish.error instanceof ApiError ? (
-          <p role="alert" className="text-sm text-destructive">
-            {publish.error.message}
-          </p>
-        ) : null}
+        <ErrorText error={validate.isError ? validate.error : null} />
+        <ErrorText error={publish.isError ? publish.error : null} />
       </div>
     </Modal>
   );

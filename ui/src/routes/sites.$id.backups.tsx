@@ -1,3 +1,4 @@
+import { SkeletonRows } from "@/components/ui/skeleton";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { SiteBackups } from "@/components/SiteBackups";
 import { useSite } from "@/lib/api";
@@ -11,7 +12,7 @@ function SiteBackupsTab() {
   const navigate = useNavigate({ from: Route.fullPath });
   const site = useSite(id);
   if (site.data === undefined) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
+    return <SkeletonRows rows={3} />;
   }
   return (
     <SiteBackups

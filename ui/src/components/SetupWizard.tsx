@@ -1,9 +1,13 @@
 import * as React from "react";
+import { ArrowRight, Check, CheckCircle2, Loader2 } from "lucide-react";
 import { api, ApiError, type LocalServerResponse } from "@/lib/client";
-import { InstallInstructions } from "./CopyButton";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
 import { cn } from "@/lib/utils";
+import { AuthLayout } from "./AuthLayout";
+import { CopyField, InstallInstructions } from "./CopyButton";
+import { Alert } from "./ui/alert";
+import { Button } from "./ui/button";
+import { Field } from "./ui/field";
+import { Input } from "./ui/input";
 
 type Phase =
   | { name: "checking" }
@@ -13,12 +17,63 @@ type Phase =
   | { name: "done" }
   | { name: "complete" };
 
-const STEPS: Partial<Record<Phase["name"], { n: number; title: string }>> = {
-  token: { n: 1, title: "Setup token" },
-  owner: { n: 2, title: "Owner account" },
-  server: { n: 3, title: "This server" },
-  done: { n: 4, title: "Done" },
-};
+const STEPS = [
+  { key: "token", title: "Token", long: "Setup token" },
+  { key: "owner", title: "Owner", long: "Owner account" },
+  { key: "server", title: "Server", long: "This server" },
+  { key: "done", title: "Done", long: "Done" },
+] as const;
+
+/** Numbered progress for the four setup steps; the current one is `aria-current="step"`. */
+export function SetupStepper({ current }: { current: number }) {
+  return (
+    <ol aria-label="Setup progress" className="flex items-center">
+      {STEPS.map((step, i) => {
+        const n = i + 1;
+        const state = n < current ? "complete" : n === current ? "current" : "upcoming";
+        return (
+          <li
+            key={step.key}
+            aria-current={state === "current" ? "step" : undefined}
+            data-state={state}
+            className="flex flex-1 items-center last:flex-none"
+          >
+            <span className="flex items-center gap-2">
+              <span
+                className={cn(
+                  "flex size-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition-colors",
+                  state === "complete" && "border-primary bg-primary text-primary-foreground",
+                  state === "current" && "border-primary bg-primary-subtle text-link ring-4 ring-primary/10",
+                  state === "upcoming" && "bg-card text-muted-foreground",
+                )}
+              >
+                {state === "complete" ? <Check className="size-3.5" aria-hidden="true" /> : n}
+              </span>
+              <span
+                className={cn(
+                  "text-xs font-medium max-sm:sr-only",
+                  state === "upcoming" ? "text-muted-foreground" : "text-foreground",
+                )}
+              >
+                {step.title}
+                {state === "complete" ? <span className="sr-only"> (done)</span> : null}
+              </span>
+            </span>
+            {n < STEPS.length ? (
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "mx-2 h-px flex-1 sm:mx-3",
+                  n < current ? "bg-primary" : "bg-border",
+                )}
+              />
+            ) : null}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
 
 /**
  * First-run wizard (spec §7): setup token → owner → local server → done.
@@ -32,11 +87,9 @@ const STEPS: Partial<Record<Phase["name"], { n: number; title: string }>> = {
 export function SetupWizard({
   onDone,
   pollMs = 2000,
-  className,
 }: {
   onDone?: () => void;
   pollMs?: number;
-  className?: string;
 }) {
   const [phase, setPhase] = React.useState<Phase>({ name: "checking" });
   const [token, setToken] = React.useState("");
@@ -54,7 +107,7 @@ export function SetupWizard({
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(err instanceof ApiError ? err.message : "setup check failed");
+          setError(err instanceof ApiError ? err.message : "Setup check failed");
         }
       });
     return () => {
@@ -75,7 +128,7 @@ export function SetupWizard({
         setToken("");
         setPhase({ name: "token" });
       }
-      setError(err instanceof ApiError ? err.message : "setup failed");
+      setError(err instanceof ApiError ? err.message : "Setup failed");
       return;
     }
     try {
@@ -86,7 +139,7 @@ export function SetupWizard({
       const status = await api.setupStatus();
       setPhase({ name: "server", publicUrl: status.public_url, install: null });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "sign-in failed");
+      setError(err instanceof ApiError ? err.message : "Sign-in failed");
     } finally {
       setBusy(false);
     }
@@ -99,7 +152,7 @@ export function SetupWizard({
       const install = await api.setupLocalServer();
       setPhase({ name: "server", publicUrl, install });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "server registration failed");
+      setError(err instanceof ApiError ? err.message : "Server registration failed");
     } finally {
       setBusy(false);
     }
@@ -135,169 +188,195 @@ export function SetupWizard({
     };
   }, [waitingFor, pollMs]);
 
-  const step = STEPS[phase.name];
+  const stepIndex = STEPS.findIndex((s) => s.key === phase.name);
+  const step = stepIndex >= 0 ? STEPS[stepIndex] : undefined;
 
   return (
-    <div className={cn("flex min-h-dvh items-center justify-center px-5 py-10", className)}>
-      <div className="w-full max-w-lg">
-        <h1 className="text-xl font-semibold tracking-tight">Set up Setu</h1>
-        {step !== undefined ? (
+    <AuthLayout wide>
+      <div className="rounded-xl border bg-card shadow-overlay">
+        <div className="border-b px-6 pb-5 pt-6 sm:px-8">
+          <h1 className="text-xl font-semibold tracking-tight">Set up Setu</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Step {step.n} of 4: {step.title}
+            {step !== undefined
+              ? `Step ${stepIndex + 1} of 4: ${step.long}`
+              : "Four short steps to a running control panel."}
           </p>
-        ) : null}
-        {phase.name === "checking" && error === null ? (
-          <p className="mt-4 text-sm text-muted-foreground">Checking setup status…</p>
-        ) : null}
-        {error !== null ? (
-          <p role="alert" className="mt-4 text-sm text-destructive">
-            {error}
-          </p>
-        ) : null}
-
-        {phase.name === "token" ? (
-          <form
-            aria-label="Token"
-            className="mt-4 flex flex-col gap-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (token.trim() === "") return;
-              setError(null);
-              setPhase({ name: "owner" });
-            }}
-          >
-            <p className="text-sm text-muted-foreground">
-              The installer printed a one-time setup token. It is also in{" "}
-              <span className="font-mono">/var/lib/setu/setup-token</span> on the
-              panel host (readable by root and the <span className="font-mono">setu</span>{" "}
-              user only).
-            </p>
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
-              Setup token
-              <Input
-                type="password"
-                autoComplete="off"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                required
-              />
-            </label>
-            <Button type="submit" className="self-start">
-              Continue
-            </Button>
-          </form>
-        ) : null}
-
-        {phase.name === "owner" ? (
-          <form
-            aria-label="Create owner"
-            className="mt-4 flex flex-col gap-4"
-            onSubmit={(e) => void createOwner(e)}
-          >
-            <p className="text-sm text-muted-foreground">
-              Create the first operator: the owner, who can do everything. This
-              step works exactly once.
-            </p>
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
-              Email
-              <Input
-                type="email"
-                autoComplete="username"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
-              Password
-              <Input
-                type="password"
-                autoComplete="new-password"
-                minLength={8}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </label>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setError(null);
-                  setPhase({ name: "token" });
-                }}
-              >
-                Back
-              </Button>
-              <Button type="submit" disabled={busy}>
-                {busy ? "Creating…" : "Create owner"}
-              </Button>
+          {step !== undefined ? (
+            <div className="mt-5">
+              <SetupStepper current={stepIndex + 1} />
             </div>
-          </form>
-        ) : null}
+          ) : null}
+        </div>
 
-        {phase.name === "server" ? (
-          <div className="mt-4 flex flex-col gap-4">
-            <p className="text-sm">Owner created and signed in. The panel lives at:</p>
-            <code className="block overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs break-all">
-              {phase.publicUrl}
-            </code>
-            {phase.install === null ? (
-              <>
-                <p className="text-sm text-muted-foreground">
-                  Register this machine as the first server; its agent joins the
-                  panel like any other server.
-                </p>
+        <div className="flex flex-col gap-5 px-6 py-6 sm:px-8">
+          {phase.name === "checking" && error === null ? (
+            <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              Checking setup status…
+            </p>
+          ) : null}
+          {error !== null ? <Alert variant="destructive">{error}</Alert> : null}
+
+          {phase.name === "token" ? (
+            <form
+              aria-label="Token"
+              className="flex flex-col gap-5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (token.trim() === "") return;
+                setError(null);
+                setPhase({ name: "owner" });
+              }}
+            >
+              <p className="text-sm text-muted-foreground">
+                The installer printed a one-time setup token. It is also in{" "}
+                <code className="text-foreground">/var/lib/setu/setup-token</code> on the panel
+                host (readable by root and the <code className="text-foreground">setu</code> user
+                only).
+              </p>
+              <Field label="Setup token">
+                <Input
+                  type="password"
+                  autoComplete="off"
+                  autoFocus
+                  className="font-mono"
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  required
+                />
+              </Field>
+              <Button type="submit" className="self-stretch sm:self-end">
+                Continue
+                <ArrowRight aria-hidden="true" />
+              </Button>
+            </form>
+          ) : null}
+
+          {phase.name === "owner" ? (
+            <form
+              aria-label="Create owner"
+              className="flex flex-col gap-5"
+              onSubmit={(e) => void createOwner(e)}
+            >
+              <p className="text-sm text-muted-foreground">
+                Create the first operator: the owner, who can do everything. This step works
+                exactly once.
+              </p>
+              <Field label="Email">
+                <Input
+                  type="email"
+                  autoComplete="username"
+                  autoFocus
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
+              </Field>
+              <Field label="Password" hint="At least 8 characters.">
+                <Input
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={8}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+              </Field>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                 <Button
                   type="button"
-                  disabled={busy}
-                  onClick={() => void registerServer(phase.publicUrl)}
-                  className="self-start"
+                  variant="outline"
+                  onClick={() => {
+                    setError(null);
+                    setPhase({ name: "token" });
+                  }}
                 >
-                  {busy ? "Registering…" : "Register this server"}
+                  Back
                 </Button>
-              </>
-            ) : (
-              <>
-                <p className="text-sm">
-                  Server <span className="font-medium">{phase.install.server.name}</span>{" "}
-                  registered.
-                </p>
-                <InstallInstructions
-                  command={phase.install.install_command}
-                  joinToken={phase.install.join_token}
-                />
-                <p className="text-xs text-muted-foreground" aria-live="polite">
-                  Waiting for the agent to join — this page continues on its own
-                  once the server is online.
-                </p>
-              </>
-            )}
-          </div>
-        ) : null}
+                <Button type="submit" loading={busy}>
+                  {busy ? "Creating…" : "Create owner"}
+                </Button>
+              </div>
+            </form>
+          ) : null}
 
-        {phase.name === "done" ? (
-          <div className="mt-4 flex flex-col gap-2">
-            <p className="text-sm text-green-700 dark:text-green-400">
-              Server is online. Setup is finished.
-            </p>
-            <a href="/sites" className="text-sm underline underline-offset-2">
-              Go to sites
-            </a>
-          </div>
-        ) : null}
+          {phase.name === "server" ? (
+            <div className="flex flex-col gap-5">
+              <Alert variant="success" role="status" title="Owner created and signed in">
+                The panel lives at the address below.
+              </Alert>
+              <CopyField value={phase.publicUrl} label="Panel URL" />
+              {phase.install === null ? (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Register this machine as the first server; its agent joins the panel like
+                    any other server.
+                  </p>
+                  <Button
+                    type="button"
+                    loading={busy}
+                    onClick={() => void registerServer(phase.publicUrl)}
+                    className="self-stretch sm:self-end"
+                  >
+                    {busy ? "Registering…" : "Register this server"}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm">
+                    Server <span className="font-medium">{phase.install.server.name}</span>{" "}
+                    registered.
+                  </p>
+                  <InstallInstructions
+                    command={phase.install.install_command}
+                    joinToken={phase.install.join_token}
+                  />
+                  <p
+                    className="flex items-center gap-2 rounded-md border border-dashed px-3 py-2.5 text-xs text-muted-foreground"
+                    aria-live="polite"
+                  >
+                    <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                    Waiting for the agent to join — this page continues on its own once the
+                    server is online.
+                  </p>
+                </>
+              )}
+            </div>
+          ) : null}
 
-        {phase.name === "complete" ? (
-          <p className="mt-4 text-sm text-muted-foreground">
-            Setup is already complete.{" "}
-            <a href="/sites" className="underline underline-offset-2">
-              Go to sites
-            </a>
-            .
-          </p>
-        ) : null}
+          {phase.name === "done" ? (
+            <div className="flex flex-col items-center gap-3 py-4 text-center">
+              <CheckCircle2 className="size-10 text-success" aria-hidden="true" />
+              <p className="text-base font-semibold">Server is online. Setup is finished.</p>
+              <p className="text-sm text-muted-foreground">
+                Publish an app and create your first site.
+              </p>
+              <a
+                href="/sites"
+                className="mt-2 inline-flex h-10 items-center gap-2 rounded-md bg-primary px-5 text-sm font-medium text-primary-foreground hover:bg-primary-hover"
+              >
+                Go to sites
+                <ArrowRight className="size-4" aria-hidden="true" />
+              </a>
+            </div>
+          ) : null}
+
+          {phase.name === "complete" ? (
+            <div className="flex flex-col items-center gap-3 py-4 text-center">
+              <CheckCircle2 className="size-10 text-success" aria-hidden="true" />
+              <p className="text-sm text-muted-foreground">Setup is already complete.</p>
+              <a
+                href="/sites"
+                className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-5 text-sm font-medium text-primary-foreground hover:bg-primary-hover"
+              >
+                Go to sites
+                <ArrowRight className="size-4" aria-hidden="true" />
+              </a>
+            </div>
+          ) : null}
+        </div>
       </div>
-    </div>
+    </AuthLayout>
   );
 }

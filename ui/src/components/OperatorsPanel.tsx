@@ -1,21 +1,28 @@
 import * as React from "react";
+import { KeyRound, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { useCreateOperator, useMe, useOperators, useSetOperatorPassword } from "@/lib/api";
 import { ApiError, type AuditEntry, type Operator } from "@/lib/client";
+import { ErrorText } from "./ErrorText";
+import { RelativeTime } from "./RelativeTime";
+import { ResponsiveTable, type Column } from "./ResponsiveTable";
+import { Alert } from "./ui/alert";
+import { Avatar } from "./ui/avatar";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Modal } from "./ui/dialog";
+import { Field } from "./ui/field";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "./ui/table";
+import { SkeletonRows } from "./ui/skeleton";
 
 const ROLES = ["owner", "operator", "viewer"] as const;
+
+const roleVariant: Record<string, "info" | "secondary" | "outline"> = {
+  owner: "info",
+  operator: "secondary",
+  viewer: "outline",
+};
 
 /**
  * Operators: list, create, and a password change per row. The API has no
@@ -29,65 +36,68 @@ export function OperatorsPanel() {
   const [open, setOpen] = React.useState(false);
   const [passwordFor, setPasswordFor] = React.useState<Operator | null>(null);
 
-  if (operators.isPending) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
-  }
-  if (operators.error instanceof ApiError) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {operators.error.message}
-      </p>
-    );
-  }
+  if (operators.isPending) return <SkeletonRows rows={2} label="Loading operators…" />;
+  if (operators.error instanceof ApiError) return <ErrorText error={operators.error} />;
   const rows: Operator[] = operators.data ?? [];
 
+  const action = (o: Operator) =>
+    me.data?.id === o.id || me.data?.role === "owner" ? (
+      <Button type="button" variant="ghost" size="sm" onClick={() => setPasswordFor(o)}>
+        <KeyRound aria-hidden="true" />
+        Change password
+      </Button>
+    ) : null;
+
+  const columns: Column<Operator>[] = [
+    {
+      id: "email",
+      header: "Email",
+      cell: (o) => (
+        <span className="flex min-w-0 items-center gap-3">
+          <Avatar name={o.email} className="size-7 text-[11px]" />
+          <span className="truncate font-medium">{o.email}</span>
+          {me.data?.id === o.id ? <Badge variant="outline">you</Badge> : null}
+        </span>
+      ),
+    },
+    {
+      id: "role",
+      header: "Role",
+      cell: (o) => <Badge variant={roleVariant[o.role] ?? "secondary"}>{o.role}</Badge>,
+    },
+    {
+      id: "created",
+      header: "Added",
+      cell: (o) => <RelativeTime iso={o.created_at} className="text-muted-foreground" />,
+    },
+    {
+      id: "actions",
+      header: <span className="sr-only">Actions</span>,
+      className: "text-right",
+      hideOnCard: true,
+      cell: action,
+    },
+  ];
+
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center">
-        <h2 className="text-sm font-semibold">Operators ({rows.length})</h2>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="ml-auto"
-          onClick={() => setOpen(true)}
-        >
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <p className="flex-1 text-sm text-muted-foreground">
+          {rows.length} {rows.length === 1 ? "operator" : "operators"} can sign in to this panel.
+        </p>
+        <Button type="button" variant="outline" onClick={() => setOpen(true)}>
+          <UserPlus aria-hidden="true" />
           Add operator
         </Button>
       </div>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Email</TableHead>
-            <TableHead>Role</TableHead>
-            <TableHead>Created</TableHead>
-            <TableHead>
-              <span className="sr-only">Actions</span>
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((o) => (
-            <TableRow key={o.id}>
-              <TableCell className="font-medium">{o.email}</TableCell>
-              <TableCell>{o.role}</TableCell>
-              <TableCell>{new Date(o.created_at).toLocaleDateString()}</TableCell>
-              <TableCell className="text-right">
-                {me.data?.id === o.id || me.data?.role === "owner" ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setPasswordFor(o)}
-                  >
-                    Change password
-                  </Button>
-                ) : null}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+      <ResponsiveTable
+        label="Operators"
+        rows={rows}
+        columns={columns}
+        getKey={(o) => o.id}
+        cardTitle={(o) => columns[0]!.cell(o)}
+        cardActions={action}
+      />
       <CreateOperatorDialog open={open} onClose={() => setOpen(false)} />
       <PasswordDialog
         operator={passwordFor}
@@ -98,7 +108,7 @@ export function OperatorsPanel() {
   );
 }
 
-function PasswordDialog({
+export function PasswordDialog({
   operator,
   self,
   onClose,
@@ -127,7 +137,7 @@ function PasswordDialog({
     (change.isError
       ? change.error instanceof ApiError
         ? change.error.message
-        : "password change failed"
+        : "Password change failed"
       : null);
 
   return (
@@ -140,10 +150,21 @@ function PasswordDialog({
           ? "Your other sessions are signed out; this browser stays signed in."
           : "Every session of this operator is signed out."
       }
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" form="password-form" loading={change.isPending}>
+            {change.isPending ? "Saving…" : "Set password"}
+          </Button>
+        </>
+      }
     >
       <form
+        id="password-form"
         aria-label="Change password"
-        className="flex flex-col gap-3"
+        className="flex flex-col gap-4"
         onSubmit={(e) => {
           e.preventDefault();
           if (operator === null) return;
@@ -164,8 +185,7 @@ function PasswordDialog({
         }}
       >
         {self ? (
-          <label className="flex flex-col gap-1.5 text-sm font-medium">
-            Current password
+          <Field label="Current password">
             <Input
               type="password"
               autoComplete="current-password"
@@ -173,10 +193,9 @@ function PasswordDialog({
               onChange={(e) => setCurrent(e.target.value)}
               required
             />
-          </label>
+          </Field>
         ) : null}
-        <label className="flex flex-col gap-1.5 text-sm font-medium">
-          New password
+        <Field label="New password" hint="At least 8 characters.">
           <Input
             type="password"
             autoComplete="new-password"
@@ -185,9 +204,8 @@ function PasswordDialog({
             onChange={(e) => setPassword(e.target.value)}
             required
           />
-        </label>
-        <label className="flex flex-col gap-1.5 text-sm font-medium">
-          Confirm new password
+        </Field>
+        <Field label="Confirm new password">
           <Input
             type="password"
             autoComplete="new-password"
@@ -196,15 +214,8 @@ function PasswordDialog({
             onChange={(e) => setAgain(e.target.value)}
             required
           />
-        </label>
-        {error !== null ? (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        ) : null}
-        <Button type="submit" disabled={change.isPending} className="self-start">
-          {change.isPending ? "Saving…" : "Set password"}
-        </Button>
+        </Field>
+        {error !== null ? <Alert variant="destructive">{error}</Alert> : null}
       </form>
     </Modal>
   );
@@ -227,10 +238,26 @@ function CreateOperatorDialog({ open, onClose }: { open: boolean; onClose: () =>
   }, [open, reset]);
 
   return (
-    <Modal open={open} onClose={onClose} title="Add operator">
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Add operator"
+      description="Operators sign in with this email and password. Owners can do everything; viewers can only look."
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" form="operator-form" loading={create.isPending}>
+            {create.isPending ? "Creating…" : "Create operator"}
+          </Button>
+        </>
+      }
+    >
       <form
+        id="operator-form"
         aria-label="Add operator"
-        className="flex flex-col gap-3"
+        className="flex flex-col gap-4"
         onSubmit={(e) => {
           e.preventDefault();
           create.mutate(
@@ -241,23 +268,16 @@ function CreateOperatorDialog({ open, onClose }: { open: boolean; onClose: () =>
                 onClose();
               },
               onError: (err) => {
-                toast.error(err instanceof ApiError ? err.message : "create failed");
+                toast.error(err instanceof ApiError ? err.message : "Create failed");
               },
             },
           );
         }}
       >
-        <label className="flex flex-col gap-1.5 text-sm font-medium">
-          Email
-          <Input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-        </label>
-        <label className="flex flex-col gap-1.5 text-sm font-medium">
-          Password
+        <Field label="Email">
+          <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        </Field>
+        <Field label="Password" hint="At least 8 characters.">
           <Input
             type="password"
             autoComplete="new-password"
@@ -266,65 +286,65 @@ function CreateOperatorDialog({ open, onClose }: { open: boolean; onClose: () =>
             required
             minLength={8}
           />
-        </label>
-        <label className="flex flex-col gap-1.5 text-sm font-medium">
-          Role
-          <Select
-            aria-label="Role"
-            value={role}
-            onChange={(e) => setRole(e.target.value)}
-          >
+        </Field>
+        <Field label="Role">
+          <Select value={role} onChange={(e) => setRole(e.target.value)}>
             {ROLES.map((r) => (
               <option key={r} value={r}>
                 {r}
               </option>
             ))}
           </Select>
-        </label>
-        {create.isError && create.error instanceof ApiError ? (
-          <p role="alert" className="text-sm text-destructive">
-            {create.error.message}
-          </p>
-        ) : null}
-        <Button type="submit" disabled={create.isPending} className="self-start">
-          {create.isPending ? "Creating…" : "Create operator"}
-        </Button>
+        </Field>
+        <ErrorText error={create.isError ? create.error : null} />
       </form>
     </Modal>
   );
 }
 
 /** Recent audit rows, newest first from the API. */
-export function AuditTable({ entries }: { entries: AuditEntry[] }) {
+export function AuditTable({
+  entries,
+  operators = [],
+}: {
+  entries: AuditEntry[];
+  operators?: Operator[];
+}) {
   if (entries.length === 0) {
     return <p className="text-sm text-muted-foreground">No audit entries yet.</p>;
   }
+  const emailById = new Map(operators.map((o) => [o.id, o.email]));
+  const columns: Column<AuditEntry>[] = [
+    {
+      id: "when",
+      header: "When",
+      cell: (e) => <RelativeTime iso={e.at} className="whitespace-nowrap text-muted-foreground" />,
+    },
+    { id: "action", header: "Action", cell: (e) => <code className="text-xs font-medium">{e.action}</code> },
+    {
+      id: "target",
+      header: "Target",
+      className: "max-w-56 truncate font-mono text-xs",
+      cell: (e) => e.target ?? "—",
+    },
+    {
+      id: "operator",
+      header: "Operator",
+      className: "max-w-48 truncate text-xs",
+      cell: (e) =>
+        e.operator_id === null || e.operator_id === undefined
+          ? "—"
+          : (emailById.get(e.operator_id) ?? <span className="font-mono">{e.operator_id}</span>),
+    },
+    { id: "ip", header: "IP", cell: (e) => <span className="font-mono text-xs">{e.ip ?? "—"}</span> },
+  ];
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>When</TableHead>
-          <TableHead>Action</TableHead>
-          <TableHead>Target</TableHead>
-          <TableHead>Operator</TableHead>
-          <TableHead>IP</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {entries.map((e) => (
-          <TableRow key={e.id}>
-            <TableCell>{new Date(e.at).toLocaleString()}</TableCell>
-            <TableCell className="font-mono">{e.action}</TableCell>
-            <TableCell className="max-w-56 truncate font-mono text-xs">
-              {e.target ?? "—"}
-            </TableCell>
-            <TableCell className="max-w-40 truncate font-mono text-xs">
-              {e.operator_id ?? "—"}
-            </TableCell>
-            <TableCell className="font-mono text-xs">{e.ip ?? "—"}</TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <ResponsiveTable
+      label="Audit log"
+      rows={entries}
+      columns={columns}
+      getKey={(e) => String(e.id)}
+      density="compact"
+    />
   );
 }

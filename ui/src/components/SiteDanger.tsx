@@ -1,10 +1,23 @@
 import * as React from "react";
+import { Play, RotateCw, RefreshCcw, Square, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useDeleteSite, useSiteAction } from "@/lib/api";
 import { ApiError, type Site } from "@/lib/client";
+import { ErrorText } from "./ErrorText";
 import { Button } from "./ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { Field } from "./ui/field";
 import { Input } from "./ui/input";
 import { Modal, useConfirm } from "./ui/dialog";
+
+type Kind = "start" | "stop" | "restart" | "retry";
+
+const VERB: Record<Kind, string> = {
+  start: "starts",
+  stop: "stops",
+  restart: "restarts",
+  retry: "retries the failed job for",
+};
 
 /**
  * Stop / start / restart / retry / delete. Every action confirms and names the
@@ -34,11 +47,11 @@ export function SiteDanger({
         ? destroy.error
         : null;
 
-  function run(kind: "start" | "stop" | "restart" | "retry", label: string) {
+  function run(kind: Kind, label: string) {
     void (async () => {
       const ok = await confirm({
         title: `${label} ${site.name}?`,
-        description: `This ${label.toLowerCase()}s the site ${site.name} (${site.domain}).`,
+        description: `This ${VERB[kind]} the site ${site.name} (${site.domain}).`,
         confirmLabel: label,
         destructive: kind === "stop",
       });
@@ -56,57 +69,65 @@ export function SiteDanger({
   }
 
   return (
-    <div className="flex max-w-xl flex-col gap-4">
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" disabled={busy} onClick={() => run("start", "Start")}>
-          Start
-        </Button>
-        <Button type="button" variant="outline" disabled={busy} onClick={() => run("stop", "Stop")}>
-          Stop
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={busy}
-          onClick={() => run("restart", "Restart")}
-        >
-          Restart
-        </Button>
-        {site.status === "failed" ? (
+    <div className="flex flex-col gap-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Lifecycle</CardTitle>
+          <CardDescription>
+            Start, stop or restart the site&apos;s service. Each action runs as a job.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+          <Button type="button" variant="outline" disabled={busy} onClick={() => run("start", "Start")}>
+            <Play aria-hidden="true" />
+            Start
+          </Button>
+          <Button type="button" variant="outline" disabled={busy} onClick={() => run("stop", "Stop")}>
+            <Square aria-hidden="true" />
+            Stop
+          </Button>
+          <Button type="button" variant="outline" disabled={busy} onClick={() => run("restart", "Restart")}>
+            <RotateCw aria-hidden="true" />
+            Restart
+          </Button>
+          {site.status === "failed" ? (
+            <Button type="button" variant="outline" disabled={busy} onClick={() => run("retry", "Retry")}>
+              <RefreshCcw aria-hidden="true" />
+              Retry from failed
+            </Button>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <section
+        aria-labelledby="delete-site-title"
+        className="overflow-hidden rounded-lg border border-destructive/40 bg-card shadow-card"
+      >
+        <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:p-6">
+          <div className="min-w-0 flex-1">
+            <h2 id="delete-site-title" className="text-base font-semibold text-destructive">
+              Delete this site
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Stops {site.name}, removes its route, database, user and directory after a final
+              backup, and deletes the row. This cannot be undone.
+            </p>
+          </div>
           <Button
             type="button"
-            variant="outline"
+            variant="destructive"
             disabled={busy}
-            onClick={() => run("retry", "Retry")}
+            onClick={() => {
+              setTyped("");
+              setDeleteOpen(true);
+            }}
           >
-            Retry from failed
+            <Trash2 aria-hidden="true" />
+            Delete {site.name}
           </Button>
-        ) : null}
-      </div>
-      <div className="rounded-md border border-destructive/40 p-4">
-        <h2 className="text-sm font-semibold text-destructive">Delete this site</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Stops {site.name}, removes its route, database, user and directory after
-          a final backup, and deletes the row. This cannot be undone.
-        </p>
-        <Button
-          type="button"
-          variant="destructive"
-          className="mt-3"
-          disabled={busy}
-          onClick={() => {
-            setTyped("");
-            setDeleteOpen(true);
-          }}
-        >
-          Delete {site.name}
-        </Button>
-      </div>
-      {error !== null ? (
-        <p role="alert" className="text-sm text-destructive">
-          {error.message}
-        </p>
-      ) : null}
+        </div>
+      </section>
+      <ErrorText error={error} />
       <Modal
         open={deleteOpen}
         onClose={() => setDeleteOpen(false)}
@@ -120,7 +141,8 @@ export function SiteDanger({
             <Button
               variant="destructive"
               data-testid="confirm-accept"
-              disabled={typed.trim() !== site.name || destroy.isPending}
+              disabled={typed.trim() !== site.name}
+              loading={destroy.isPending}
               onClick={() => {
                 destroy.mutate(undefined, {
                   onSuccess: (res) => {
@@ -129,9 +151,7 @@ export function SiteDanger({
                     onDeleted?.(res.job.id);
                   },
                   onError: (err) => {
-                    toast.error(
-                      err instanceof ApiError ? err.message : "delete failed",
-                    );
+                    toast.error(err instanceof ApiError ? err.message : "Delete failed");
                   },
                 });
               }}
@@ -141,12 +161,15 @@ export function SiteDanger({
           </>
         }
       >
-        <Input
-          aria-label={`Type ${site.name} to confirm`}
-          value={typed}
-          onChange={(e) => setTyped(e.target.value)}
-          placeholder={site.name}
-        />
+        <Field label={`Type ${site.name} to confirm`}>
+          <Input
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={site.name}
+            autoComplete="off"
+            autoFocus
+          />
+        </Field>
       </Modal>
     </div>
   );

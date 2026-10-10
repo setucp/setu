@@ -1,10 +1,13 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { Plus } from "lucide-react";
 import { AddServerDialog } from "@/components/AddServerDialog";
+import { ErrorText } from "@/components/ErrorText";
+import { PageHeader } from "@/components/PageHeader";
 import { ServersTable } from "@/components/ServersTable";
 import { Button } from "@/components/ui/button";
+import { SkeletonRows } from "@/components/ui/skeleton";
 import { usePlans, useServers, useSites } from "@/lib/api";
-import { ApiError } from "@/lib/client";
 
 export const Route = createFileRoute("/servers/")({
   component: ServersPage,
@@ -16,26 +19,29 @@ function ServersPage() {
   const plans = usePlans();
   const [adding, setAdding] = React.useState(false);
   const error = servers.error ?? sites.error ?? plans.error;
+  const online = (servers.data ?? []).filter((s) => s.status === "online").length;
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center">
-        <h1 className="text-xl font-semibold tracking-tight">Servers</h1>
-        <Button type="button" className="ml-auto" onClick={() => setAdding(true)}>
-          Add server
-        </Button>
-      </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        title="Servers"
+        description={
+          servers.data === undefined
+            ? "Machines whose agents run your sites."
+            : `${servers.data.length} ${servers.data.length === 1 ? "server" : "servers"}, ${online} online`
+        }
+        actions={
+          <Button type="button" onClick={() => setAdding(true)}>
+            <Plus aria-hidden="true" />
+            Add server
+          </Button>
+        }
+      />
       {servers.isPending || sites.isPending || plans.isPending ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <SkeletonRows label="Loading servers…" />
       ) : null}
-      {error instanceof ApiError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {error.message}
-        </p>
-      ) : null}
-      {servers.data !== undefined &&
-      sites.data !== undefined &&
-      plans.data !== undefined ? (
+      <ErrorText error={error} />
+      {servers.data !== undefined && sites.data !== undefined && plans.data !== undefined ? (
         <ServersTable servers={servers.data} sites={sites.data} plans={plans.data} />
       ) : null}
       <AddServerDialog open={adding} onClose={() => setAdding(false)} />

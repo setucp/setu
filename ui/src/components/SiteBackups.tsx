@@ -1,18 +1,25 @@
+import { Archive, History, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useBackups, useDeleteBackup, useRestoreBackup, useTakeBackup } from "@/lib/api";
 import { ApiError, type Backup } from "@/lib/client";
 import { formatBytes } from "@/lib/format";
+import { absoluteTime } from "@/lib/time";
+import { EmptyState } from "./EmptyState";
+import { ErrorText } from "./ErrorText";
+import { SectionHeader } from "./PageHeader";
+import { RelativeTime } from "./RelativeTime";
+import { ResponsiveTable, type Column } from "./ResponsiveTable";
 import { StatusBadge, backupVariant } from "./StatusBadge";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { useConfirm } from "./ui/dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "./ui/table";
+import { SkeletonRows } from "./ui/skeleton";
+
+const kindVariant: Record<string, "info" | "secondary" | "outline"> = {
+  manual: "info",
+  scheduled: "secondary",
+  pre_update: "outline",
+};
 
 /**
  * Backups of one site: take one now, restore a completed one, delete one.
@@ -34,16 +41,8 @@ export function SiteBackups({
   const remove = useDeleteBackup(siteId);
   const confirm = useConfirm();
 
-  if (backups.isPending) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
-  }
-  if (backups.error instanceof ApiError) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {backups.error.message}
-      </p>
-    );
-  }
+  if (backups.isPending) return <SkeletonRows label="Loading backups…" />;
+  if (backups.error instanceof ApiError) return <ErrorText error={backups.error} />;
   const rows = backups.data ?? [];
   const busy = restore.isPending || remove.isPending;
   const error = [take.error, restore.error, remove.error].find(
@@ -52,7 +51,7 @@ export function SiteBackups({
 
   function onRestore(b: Backup) {
     void (async () => {
-      const when = new Date(b.taken_at).toLocaleString();
+      const when = absoluteTime(b.taken_at);
       const ok = await confirm({
         title: `Restore ${siteName} from this backup?`,
         description: `${siteName} is stopped and its database and files are replaced with the ${b.kind} backup taken ${when}. Anything newer is lost.`,
@@ -66,7 +65,7 @@ export function SiteBackups({
           onJob?.(res.job.id);
         },
         onError: (err) => {
-          toast.error(err instanceof ApiError ? err.message : "restore failed");
+          toast.error(err instanceof ApiError ? err.message : "Restore failed");
         },
       });
     })();
@@ -74,7 +73,7 @@ export function SiteBackups({
 
   function onDelete(b: Backup) {
     void (async () => {
-      const when = new Date(b.taken_at).toLocaleString();
+      const when = absoluteTime(b.taken_at);
       const ok = await confirm({
         title: `Delete backup of ${siteName}?`,
         description: `The ${b.kind} backup of ${siteName} taken ${when} is removed from the server. This cannot be undone.`,
@@ -88,91 +87,105 @@ export function SiteBackups({
           onJob?.(res.job.id);
         },
         onError: (err) => {
-          toast.error(err instanceof ApiError ? err.message : "delete failed");
+          toast.error(err instanceof ApiError ? err.message : "Delete failed");
         },
       });
     })();
   }
 
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
+  function actions(b: Backup) {
+    return (
+      <span className="flex justify-end gap-1">
+        {b.status === "completed" ? (
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => onRestore(b)}>
+            <History aria-hidden="true" />
+            Restore
+          </Button>
+        ) : null}
         <Button
           type="button"
-          disabled={take.isPending}
-          onClick={() => {
-            take.mutate(undefined, {
-              onSuccess: (res) => {
-                toast.success("Backup started");
-                onJob?.(res.job.id);
-              },
-              onError: (err) => {
-                toast.error(err instanceof ApiError ? err.message : "backup failed");
-              },
-            });
-          }}
+          variant="ghost-destructive"
+          size="sm"
+          disabled={busy}
+          onClick={() => onDelete(b)}
         >
-          {take.isPending ? "Starting…" : "Take backup"}
+          <Trash2 aria-hidden="true" />
+          Delete
         </Button>
-      </div>
-      {error !== undefined ? (
-        <p role="alert" className="text-sm text-destructive">
-          {error.message}
-        </p>
-      ) : null}
+      </span>
+    );
+  }
+
+  const columns: Column<Backup>[] = [
+    {
+      id: "kind",
+      header: "Kind",
+      cell: (b) => <Badge variant={kindVariant[b.kind] ?? "secondary"}>{b.kind}</Badge>,
+    },
+    { id: "taken", header: "Taken", cell: (b) => <RelativeTime iso={b.taken_at} /> },
+    {
+      id: "size",
+      header: "Size",
+      cell: (b) => <span className="tabular-nums">{formatBytes(b.size_bytes)}</span>,
+    },
+    {
+      id: "status",
+      header: "Status",
+      cell: (b) => <StatusBadge status={b.status} variants={backupVariant} />,
+    },
+    {
+      id: "actions",
+      header: <span className="sr-only">Actions</span>,
+      hideOnCard: true,
+      className: "text-right",
+      cell: actions,
+    },
+  ];
+
+  const takeButton = (
+    <Button
+      type="button"
+      loading={take.isPending}
+      onClick={() => {
+        take.mutate(undefined, {
+          onSuccess: (res) => {
+            toast.success("Backup started");
+            onJob?.(res.job.id);
+          },
+          onError: (err) => {
+            toast.error(err instanceof ApiError ? err.message : "Backup failed");
+          },
+        });
+      }}
+    >
+      {take.isPending ? null : <Archive aria-hidden="true" />}
+      {take.isPending ? "Starting…" : "Take backup"}
+    </Button>
+  );
+
+  return (
+    <div className="flex flex-col gap-4">
+      <SectionHeader
+        title="Backups"
+        description="Database and files, taken nightly, before every update, and on demand."
+        actions={rows.length > 0 ? takeButton : undefined}
+      />
+      <ErrorText error={error} />
       {rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No backups yet.</p>
+        <EmptyState
+          icon={<Archive className="size-6 text-link" aria-hidden="true" />}
+          title="No backups yet."
+          description={`Take the first backup of ${siteName} now; nightly backups start on their own.`}
+          action={takeButton}
+        />
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Kind</TableHead>
-              <TableHead>Taken</TableHead>
-              <TableHead>Size</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>
-                <span className="sr-only">Actions</span>
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((b) => (
-              <TableRow key={b.id}>
-                <TableCell>{b.kind}</TableCell>
-                <TableCell>{new Date(b.taken_at).toLocaleString()}</TableCell>
-                <TableCell>{formatBytes(b.size_bytes)}</TableCell>
-                <TableCell>
-                  <StatusBadge status={b.status} variants={backupVariant} />
-                </TableCell>
-                <TableCell>
-                  <span className="flex justify-end gap-1">
-                    {b.status === "completed" ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => onRestore(b)}
-                      >
-                        Restore
-                      </Button>
-                    ) : null}
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive"
-                      disabled={busy}
-                      onClick={() => onDelete(b)}
-                    >
-                      Delete
-                    </Button>
-                  </span>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <ResponsiveTable
+          label="Backups"
+          rows={rows}
+          columns={columns}
+          getKey={(b) => b.id}
+          cardActions={actions}
+        />
       )}
     </div>
   );

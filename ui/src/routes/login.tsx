@@ -1,4 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { AuthLayout } from "@/components/AuthLayout";
 import { LoginForm } from "@/components/LoginForm";
 
 export const Route = createFileRoute("/login")({
@@ -19,13 +20,12 @@ function LoginPage() {
   const navigate = useNavigate({ from: Route.fullPath });
   const search = Route.useSearch();
   return (
-    <div className="flex min-h-dvh items-center justify-center px-5">
+    <AuthLayout>
       <LoginForm
-        className="w-full max-w-sm"
         onSuccess={() => {
           void navigate({ to: search.redirect ?? "/sites" });
         }}
       />
-    </div>
+    </AuthLayout>
   );
 }

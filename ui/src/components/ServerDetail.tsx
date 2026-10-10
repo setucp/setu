@@ -1,9 +1,17 @@
+import { Ban, CircleCheck, Cpu, Gauge, HeartPulse, Tag } from "lucide-react";
 import { toast } from "sonner";
 import { useCordonServer } from "@/lib/api";
 import { ApiError, type Server, type Site } from "@/lib/client";
-import { StatusBadge } from "./StatusBadge";
+import { AppLink } from "./AppLink";
+import { ErrorText } from "./ErrorText";
+import { PageHeader } from "./PageHeader";
+import { RelativeTime } from "./RelativeTime";
+import { CapacityBar } from "./ServersTable";
+import { StatCard } from "./StatCard";
+import { StatusBadge, StatusDot } from "./StatusBadge";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { useConfirm } from "./ui/dialog";
 
 function describeValue(value: unknown): string {
@@ -38,95 +46,108 @@ export function ServerDetail({ server, sites }: { server: Server; sites: Site[] 
           toast.success(s.cordoned ? `${s.name} cordoned` : `${s.name} uncordoned`);
         },
         onError: (err) => {
-          toast.error(err instanceof ApiError ? err.message : "cordon failed");
+          toast.error(err instanceof ApiError ? err.message : "Cordon failed");
         },
       });
     })();
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold tracking-tight">{server.name}</h1>
-        <StatusBadge status={server.status} />
-        {server.is_control_plane ? <Badge variant="outline">control plane</Badge> : null}
-        {server.cordoned ? <Badge variant="secondary">cordoned</Badge> : null}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="ml-auto"
-          disabled={cordon.isPending}
-          onClick={toggle}
-        >
-          {server.cordoned ? "Uncordon" : "Cordon"}
-        </Button>
-      </div>
-      {cordon.isError && cordon.error instanceof ApiError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {cordon.error.message}
-        </p>
-      ) : null}
-      <dl className="grid max-w-xl grid-cols-[160px_1fr] gap-x-4 gap-y-2 text-sm">
-        <dt className="text-muted-foreground">Host</dt>
-        <dd>{describeValue(server.host)}</dd>
-        <dt className="text-muted-foreground">Agent version</dt>
-        <dd>{describeValue(server.agent_version)}</dd>
-        <dt className="text-muted-foreground">OS / arch</dt>
-        <dd>
-          {describeValue(server.os)} / {describeValue(server.arch)}
-        </dd>
-        <dt className="text-muted-foreground">Last heartbeat</dt>
-        <dd>
-          {server.last_seen_at !== null && server.last_seen_at !== undefined
-            ? new Date(server.last_seen_at).toLocaleString()
-            : "—"}
-        </dd>
-        <dt className="text-muted-foreground">Load (1 min)</dt>
-        <dd>{describeValue(server.load1)}</dd>
-        <dt className="text-muted-foreground">CPU cores</dt>
-        <dd>{describeValue(server.cpu_cores)}</dd>
-        <dt className="text-muted-foreground">Memory</dt>
-        <dd>
-          {describeValue(server.memory_mb)}
-          {server.mem_free_mb !== null && server.mem_free_mb !== undefined
-            ? ` MB total, ${server.mem_free_mb} MB free`
-            : server.memory_mb !== null && server.memory_mb !== undefined
-              ? " MB total"
-              : ""}
-        </dd>
-        <dt className="text-muted-foreground">Disk</dt>
-        <dd>
-          {describeValue(server.disk_mb)}
-          {server.disk_free_mb !== null && server.disk_free_mb !== undefined
-            ? ` MB total, ${server.disk_free_mb} MB free`
-            : server.disk_mb !== null && server.disk_mb !== undefined
-              ? " MB total"
-              : ""}
-        </dd>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        title={server.name}
+        meta={
+          <span className="flex flex-wrap items-center gap-1.5">
+            <StatusBadge status={server.status} />
+            {server.is_control_plane ? <Badge variant="info">control plane</Badge> : null}
+            {server.cordoned ? <Badge variant="warning">cordoned</Badge> : null}
+          </span>
+        }
+        description={<span className="font-mono text-xs">{describeValue(server.host)}</span>}
+        actions={
+          <Button type="button" variant="outline" loading={cordon.isPending} onClick={toggle}>
+            {cordon.isPending ? null : server.cordoned ? (
+              <CircleCheck aria-hidden="true" />
+            ) : (
+              <Ban aria-hidden="true" />
+            )}
+            {server.cordoned ? "Uncordon" : "Cordon"}
+          </Button>
+        }
+      />
+      <ErrorText error={cordon.isError ? cordon.error : null} />
+
+      <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard icon={<HeartPulse aria-hidden="true" />} label="Last heartbeat" value={<RelativeTime iso={server.last_seen_at} />} />
+        <StatCard icon={<Gauge aria-hidden="true" />} label="Load (1 min)" value={describeValue(server.load1)} />
+        <StatCard icon={<Cpu aria-hidden="true" />} label="CPU cores" value={describeValue(server.cpu_cores)} />
+        <StatCard icon={<Tag aria-hidden="true" />} label="Agent version" value={<span className="font-mono text-base">{describeValue(server.agent_version)}</span>} />
       </dl>
-      <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-semibold">
-          Sites on this server ({owned.length})
-        </h2>
-        {owned.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No sites placed here.</p>
-        ) : (
-          <ul className="flex flex-col gap-1 text-sm">
-            {owned.map((s) => (
-              <li key={s.id}>
-                <a
-                  href={`/sites/${s.id}`}
-                  className="text-primary underline-offset-2 hover:underline"
-                >
-                  {s.name}
-                </a>{" "}
-                <span className="text-muted-foreground">{s.domain}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Capacity</CardTitle>
+            <CardDescription>From the agent&apos;s latest heartbeat.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            {server.mem_free_mb === null || server.mem_free_mb === undefined ? (
+              <p className="text-sm text-muted-foreground">No heartbeat figures yet.</p>
+            ) : null}
+            <CapacityBar label="Memory" total={server.memory_mb} free={server.mem_free_mb} />
+            <CapacityBar label="Disk" total={server.disk_mb} free={server.disk_free_mb} />
+            <dl className="mt-2 grid grid-cols-[120px_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
+              <dt className="text-muted-foreground">Memory</dt>
+              <dd className="tabular-nums">
+                {describeValue(server.memory_mb)}
+                {server.memory_mb !== null && server.memory_mb !== undefined ? " MB total" : ""}
+              </dd>
+              <dt className="text-muted-foreground">Disk</dt>
+              <dd className="tabular-nums">
+                {describeValue(server.disk_mb)}
+                {server.disk_mb !== null && server.disk_mb !== undefined ? " MB total" : ""}
+              </dd>
+              <dt className="text-muted-foreground">OS / arch</dt>
+              <dd>
+                {describeValue(server.os)} / {describeValue(server.arch)}
+              </dd>
+            </dl>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Sites on this server ({owned.length})</CardTitle>
+            <CardDescription>
+              {server.cordoned
+                ? "Cordoned: these keep running, no new sites are placed here."
+                : "New sites may be placed here automatically."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="pt-2">
+            {owned.length === 0 ? (
+              <p className="rounded-md border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+                No sites placed here.
+              </p>
+            ) : (
+              <ul className="divide-y">
+                {owned.map((s) => (
+                  <li key={s.id} className="flex items-center gap-3 py-2.5">
+                    <StatusDot status={s.status} />
+                    <div className="min-w-0 flex-1">
+                      <AppLink href={`/sites/${s.id}`} className="block truncate text-sm font-medium hover:text-link">
+                        {s.name}
+                      </AppLink>
+                      <span className="block truncate text-xs text-muted-foreground">{s.domain}</span>
+                    </div>
+                    <span className="font-mono text-xs text-muted-foreground">{s.app_version}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,20 @@
+import { ExternalLink } from "lucide-react";
 import type { SiteDetail } from "@/lib/client";
 import { formatBytes, formatSeconds } from "@/lib/format";
+import { AppLink } from "./AppLink";
+import { RelativeTime } from "./RelativeTime";
 import { StatusBadge } from "./StatusBadge";
+import { Alert } from "./ui/alert";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+
+function Row({ term, children }: { term: string; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-4 py-2.5 text-sm sm:grid-cols-[160px_minmax(0,1fr)]">
+      <dt className="text-muted-foreground">{term}</dt>
+      <dd className="min-w-0 break-words">{children}</dd>
+    </div>
+  );
+}
 
 /**
  * Overview tab (spec §7): status, version, the site's URL, placement and
@@ -8,81 +22,93 @@ import { StatusBadge } from "./StatusBadge";
  */
 export function SiteOverview({ site }: { site: SiteDetail }) {
   const m = site.metrics ?? null;
+  const failed = site.failed_step !== null && site.failed_step !== undefined;
   return (
-    <div className="flex flex-col gap-6">
-      <dl className="grid max-w-xl grid-cols-[140px_1fr] gap-x-4 gap-y-2 text-sm">
-        <dt className="text-muted-foreground">Status</dt>
-        <dd>
-          <StatusBadge status={site.status} />
-        </dd>
-        <dt className="text-muted-foreground">URL</dt>
-        <dd>
-          <a
-            href={`https://${site.domain}`}
-            target="_blank"
-            rel="noreferrer"
-            className="text-primary underline-offset-2 hover:underline"
-          >
-            {site.domain}
-          </a>
-        </dd>
-        <dt className="text-muted-foreground">App</dt>
-        <dd>
-          {site.app_id} <span className="font-mono">{site.app_version}</span>
-        </dd>
-        <dt className="text-muted-foreground">Server</dt>
-        <dd>
-          <a
-            href={`/servers/${site.server_id}`}
-            className="font-mono text-primary underline-offset-2 hover:underline"
-          >
-            {site.server_id}
-          </a>
-        </dd>
-        <dt className="text-muted-foreground">Plan</dt>
-        <dd className="font-mono">{site.plan_id}</dd>
-        <dt className="text-muted-foreground">Owner</dt>
-        <dd>{site.owner_email}</dd>
-        <dt className="text-muted-foreground">Database</dt>
-        <dd className="font-mono">{site.db_name}</dd>
-        <dt className="text-muted-foreground">Port</dt>
-        <dd>{site.port}</dd>
-        {site.failed_step !== null && site.failed_step !== undefined ? (
-          <>
-            <dt className="text-muted-foreground">Failed step</dt>
-            <dd className="text-destructive">{site.failed_step}</dd>
-          </>
-        ) : null}
-      </dl>
-      <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-semibold">Usage</h2>
-        {m === null ? (
-          <p className="text-sm text-muted-foreground">
-            No sample yet — the agent reports usage every minute while the site runs.
-          </p>
-        ) : (
-          <>
-            <dl className="grid max-w-xl grid-cols-3 gap-3">
-              <Metric label="Memory" value={formatBytes(m.memory_bytes)} />
-              <Metric label="CPU time" value={formatSeconds(m.cpu_seconds)} />
-              <Metric label="Disk" value={formatBytes(m.disk_bytes)} />
-            </dl>
-            <p className="text-xs text-muted-foreground">
-              Sampled {new Date(m.at).toLocaleString()}. CPU time is cumulative
-              since the service started.
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <Card>
+        <CardHeader>
+          <CardTitle>Details</CardTitle>
+        </CardHeader>
+        <CardContent className="pt-2">
+          {failed ? (
+            <Alert variant="destructive" className="mb-3" title="Provisioning failed">
+              The job stopped at step <code>{site.failed_step}</code>. Retry it from the Danger
+              tab once the cause is fixed.
+            </Alert>
+          ) : null}
+          <dl className="divide-y">
+            <Row term="Status">
+              <StatusBadge status={site.status} />
+            </Row>
+            <Row term="URL">
+              <a
+                href={`https://${site.domain}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-link hover:underline"
+              >
+                {site.domain}
+                <ExternalLink className="size-3.5" aria-hidden="true" />
+              </a>
+            </Row>
+            <Row term="App">
+              {site.app_id} <span className="font-mono text-xs">{site.app_version}</span>
+            </Row>
+            <Row term="Server">
+              <AppLink href={`/servers/${site.server_id}`} className="font-mono text-xs text-link hover:underline">
+                {site.server_id}
+              </AppLink>
+            </Row>
+            <Row term="Plan">
+              <span className="font-mono text-xs">{site.plan_id}</span>
+            </Row>
+            <Row term="Owner">{site.owner_email}</Row>
+            <Row term="Database">
+              <span className="font-mono text-xs">{site.db_name}</span>
+            </Row>
+            <Row term="Port">
+              <span className="font-mono text-xs">{site.port}</span>
+            </Row>
+            <Row term="Created">
+              <RelativeTime iso={site.created_at} />
+            </Row>
+          </dl>
+        </CardContent>
+      </Card>
+      <Card className="self-start">
+        <CardHeader>
+          <CardTitle>Usage</CardTitle>
+          <CardDescription>Latest one-minute sample from the agent.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {m === null ? (
+            <p className="rounded-md border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+              No sample yet — the agent reports usage every minute while the site runs.
             </p>
-          </>
-        )}
-      </section>
+          ) : (
+            <>
+              <dl className="grid grid-cols-3 gap-3">
+                <Metric label="Memory" value={formatBytes(m.memory_bytes)} />
+                <Metric label="CPU time" value={formatSeconds(m.cpu_seconds)} />
+                <Metric label="Disk" value={formatBytes(m.disk_bytes)} />
+              </dl>
+              <p className="mt-3 text-xs text-muted-foreground">
+                Sampled <RelativeTime iso={m.at} />. CPU time is cumulative since the service
+                started.
+              </p>
+            </>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border p-3">
+    <div className="rounded-md bg-muted/60 p-3">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1 text-lg font-semibold tabular-nums">{value}</dd>
+      <dd className="mt-1 text-base font-semibold tabular-nums">{value}</dd>
     </div>
   );
 }

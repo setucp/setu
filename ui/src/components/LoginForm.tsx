@@ -1,9 +1,11 @@
 import * as React from "react";
 import { useLogin } from "@/lib/api";
 import { ApiError } from "@/lib/client";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
 import { cn } from "@/lib/utils";
+import { Alert } from "./ui/alert";
+import { Button } from "./ui/button";
+import { Field } from "./ui/field";
+import { Input } from "./ui/input";
 
 /** Sign-in form: posts credentials, reports the operator on success. */
 export function LoginForm({
@@ -20,13 +22,17 @@ export function LoginForm({
   function errorMessage(): string | null {
     if (!login.isError) return null;
     const err = login.error;
-    return err instanceof ApiError ? err.message : "sign in failed";
+    return err instanceof ApiError ? err.message : "Sign in failed";
   }
+  const error = errorMessage();
 
   return (
     <form
       aria-label="Sign in"
-      className={cn("flex flex-col gap-4", className)}
+      className={cn(
+        "flex flex-col gap-5 rounded-xl border bg-card p-6 shadow-overlay sm:p-8",
+        className,
+      )}
       onSubmit={(e) => {
         e.preventDefault();
         login.mutate(
@@ -39,38 +45,39 @@ export function LoginForm({
         );
       }}
     >
-      <h1 className="text-xl font-semibold tracking-tight">Sign in to Setu</h1>
-      <label className="flex flex-col gap-1.5 text-sm font-medium">
-        Email
+      <div className="flex flex-col gap-1">
+        <h1 className="text-xl font-semibold tracking-tight">Sign in to Setu</h1>
+        <p className="text-sm text-muted-foreground">Use your operator email and password.</p>
+      </div>
+      {error !== null ? <Alert variant="destructive">{error}</Alert> : null}
+      <Field label="Email">
         <Input
           type="email"
           autoComplete="username"
+          autoFocus
+          placeholder="you@example.com"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+          aria-invalid={error !== null || undefined}
           required
         />
-      </label>
-      <label className="flex flex-col gap-1.5 text-sm font-medium">
-        Password
+      </Field>
+      <Field label="Password">
         <Input
           type="password"
           autoComplete="current-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          aria-invalid={error !== null || undefined}
           required
         />
-      </label>
-      {errorMessage() !== null ? (
-        <p role="alert" className="text-sm text-destructive">
-          {errorMessage()}
-        </p>
-      ) : null}
+      </Field>
       {login.isSuccess ? (
-        <p className="text-sm text-green-700 dark:text-green-400">
+        <Alert variant="success" role="status">
           Signed in as {login.data.email}
-        </p>
+        </Alert>
       ) : null}
-      <Button type="submit" disabled={login.isPending}>
+      <Button type="submit" size="lg" loading={login.isPending} className="w-full">
         {login.isPending ? "Signing in…" : "Sign in"}
       </Button>
     </form>

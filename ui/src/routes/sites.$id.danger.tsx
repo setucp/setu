@@ -1,3 +1,5 @@
+import { SkeletonRows } from "@/components/ui/skeleton";
+import { ErrorText } from "@/components/ErrorText";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { SiteDanger } from "@/components/SiteDanger";
 import { useSite } from "@/lib/api";
@@ -13,17 +15,13 @@ function SiteDangerTab() {
   const site = useSite(id);
 
   if (site.isPending) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
+    return <SkeletonRows rows={3} />;
   }
   if (site.error instanceof ApiError) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {site.error.message}
-      </p>
-    );
+    return <ErrorText error={site.error} />;
   }
   if (site.data === undefined) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
+    return <SkeletonRows rows={3} />;
   }
   return (
     <SiteDanger

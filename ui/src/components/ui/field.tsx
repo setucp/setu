@@ -30,8 +30,8 @@ export function Field({
   const describedBy = error ? errorId : hint ? hintId : undefined;
   const control = React.cloneElement(children, {
     id: children.props.id ?? id,
-    "aria-describedby": describedBy,
-    "aria-invalid": error ? true : undefined,
+    ...(describedBy !== undefined ? { "aria-describedby": describedBy } : {}),
+    ...(error ? { "aria-invalid": true } : {}),
   });
   return (
     <div className={cn("flex flex-col gap-1.5", className)}>

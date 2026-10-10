@@ -1,21 +1,65 @@
+import { Server as ServerIcon } from "lucide-react";
 import type { Plan, Server, Site } from "@/lib/client";
 import { formatMb } from "@/lib/format";
-import { StatusBadge } from "./StatusBadge";
+import { AppLink } from "./AppLink";
+import { EmptyState } from "./EmptyState";
+import { ResponsiveTable, type Column } from "./ResponsiveTable";
+import { StatusBadge, StatusDot } from "./StatusBadge";
 import { Badge } from "./ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "./ui/table";
+import { Progress } from "./ui/progress";
+
+function has(n: number | null | undefined): n is number {
+  return n !== null && n !== undefined;
+}
+
+/** "Memory · 4.0G free" over a used/total bar; nothing when the agent has not reported. */
+export function CapacityBar({
+  label,
+  total,
+  free,
+}: {
+  label: string;
+  total: number | null | undefined;
+  free: number | null | undefined;
+}) {
+  if (!has(free)) return null;
+  return (
+    <div className="flex min-w-32 flex-col gap-1">
+      <div className="flex items-baseline justify-between gap-2 text-xs">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="tabular-nums">{`${formatMb(free)} free`}</span>
+      </div>
+      {has(total) && total > 0 ? (
+        <Progress value={total - free} max={total} label={`${label} in use`} />
+      ) : null}
+    </div>
+  );
+}
+
+function ServerName({ server }: { server: Server }) {
+  return (
+    <div className="flex min-w-0 items-start gap-3">
+      <StatusDot status={server.status} className="mt-1.5" />
+      <div className="min-w-0">
+        <AppLink
+          href={`/servers/${server.id}`}
+          className="block truncate font-semibold text-foreground hover:text-link"
+        >
+          {server.name}
+        </AppLink>
+        <span className="block truncate font-mono text-xs text-muted-foreground">
+          {server.host ?? "—"}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 /**
  * Servers list: status (pending/online/offline), control-plane and cordon
  * markers, host, site count (client-side join over the sites list),
  * reserved plan memory against capacity, and the latest heartbeat's load
- * figures (1-minute load, free memory, free disk) when it has sent any.
+ * and free memory/disk as bars when it has sent any.
  */
 export function ServersTable({
   servers,
@@ -27,7 +71,13 @@ export function ServersTable({
   plans: Plan[];
 }) {
   if (servers.length === 0) {
-    return <p className="py-10 text-center text-sm text-muted-foreground">No servers yet.</p>;
+    return (
+      <EmptyState
+        icon={<ServerIcon className="size-6 text-link" aria-hidden="true" />}
+        title="No servers yet."
+        description="Add a server and run the one-line installer on it; its agent joins the panel by itself."
+      />
+    );
   }
   const planById = new Map(plans.map((p) => [p.id, p]));
   const sitesByServer = new Map<string, Site[]>();
@@ -36,93 +86,88 @@ export function ServersTable({
     list.push(site);
     sitesByServer.set(site.server_id, list);
   }
+  const reservedFor = (server: Server) =>
+    (sitesByServer.get(server.id) ?? []).reduce(
+      (sum, s) => sum + (planById.get(s.plan_id)?.limits.memory_mb ?? 0),
+      0,
+    );
+
+  const columns: Column<Server>[] = [
+    { id: "name", header: "Name", cell: (server) => <ServerName server={server} /> },
+    {
+      id: "status",
+      header: "Status",
+      cell: (server) => (
+        <span className="flex flex-wrap items-center gap-1">
+          <StatusBadge status={server.status} />
+          {server.is_control_plane ? <Badge variant="info">control plane</Badge> : null}
+          {server.cordoned ? <Badge variant="warning">cordoned</Badge> : null}
+        </span>
+      ),
+    },
+    {
+      id: "sites",
+      header: "Sites",
+      cell: (server) => {
+        const n = (sitesByServer.get(server.id) ?? []).length;
+        return <span className="whitespace-nowrap tabular-nums">{`${n} site${n === 1 ? "" : "s"}`}</span>;
+      },
+    },
+    {
+      id: "reserved",
+      header: "Reserved",
+      cardLabel: "Memory reserved",
+      cell: (server) => {
+        const reserved = reservedFor(server);
+        const owned = (sitesByServer.get(server.id) ?? []).length;
+        if (reserved === 0 && owned === 0) return <span className="text-muted-foreground">—</span>;
+        return (
+          <div className="flex min-w-28 flex-col gap-1">
+            <span className="text-xs tabular-nums">
+              {`${formatMb(reserved)}${has(server.memory_mb) ? ` of ${formatMb(server.memory_mb)}` : ""}`}
+            </span>
+            {has(server.memory_mb) && server.memory_mb > 0 ? (
+              <Progress
+                value={reserved}
+                max={server.memory_mb}
+                tone="primary"
+                label={`${reserved} of ${server.memory_mb} MB reserved`}
+              />
+            ) : null}
+          </div>
+        );
+      },
+    },
+    {
+      id: "load",
+      header: "Load",
+      cell: (server) => (
+        <span className="tabular-nums">{has(server.load1) ? server.load1.toFixed(2) : "—"}</span>
+      ),
+    },
+    {
+      id: "capacity",
+      header: "Capacity",
+      className: "min-w-44",
+      cell: (server) =>
+        has(server.mem_free_mb) || has(server.disk_free_mb) ? (
+          <div className="flex flex-col gap-2">
+            <CapacityBar label="Memory" total={server.memory_mb} free={server.mem_free_mb} />
+            <CapacityBar label="Disk" total={server.disk_mb} free={server.disk_free_mb} />
+          </div>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+    },
+  ];
 
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Name</TableHead>
-          <TableHead>Host</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead>Sites</TableHead>
-          <TableHead>Memory reserved</TableHead>
-          <TableHead>Load</TableHead>
-          <TableHead>Free</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {servers.map((server) => {
-          const owned = sitesByServer.get(server.id) ?? [];
-          const reserved = owned.reduce(
-            (sum, s) => sum + (planById.get(s.plan_id)?.limits.memory_mb ?? 0),
-            0,
-          );
-          return (
-            <TableRow key={server.id}>
-              <TableCell>
-                <a
-                  href={`/servers/${server.id}`}
-                  className="font-medium text-primary underline-offset-2 hover:underline"
-                >
-                  {server.name}
-                </a>
-              </TableCell>
-              <TableCell>{server.host ?? "—"}</TableCell>
-              <TableCell>
-                <span className="flex flex-wrap items-center gap-1">
-                  <StatusBadge status={server.status} />
-                  {server.is_control_plane ? <Badge variant="outline">control plane</Badge> : null}
-                  {server.cordoned ? <Badge variant="secondary">cordoned</Badge> : null}
-                </span>
-              </TableCell>
-              <TableCell>
-                {owned.length} site{owned.length === 1 ? "" : "s"}
-              </TableCell>
-              <TableCell>
-                {reserved > 0 || owned.length > 0 ? (
-                  <span>
-                    {formatMb(reserved)}
-                    {server.memory_mb !== null && server.memory_mb !== undefined
-                      ? ` of ${formatMb(server.memory_mb)}`
-                      : null}
-                  </span>
-                ) : (
-                  "—"
-                )}
-                {server.memory_mb !== null &&
-                server.memory_mb !== undefined &&
-                server.memory_mb > 0 ? (
-                  <span
-                    className="mt-1 block h-1.5 w-24 overflow-hidden rounded bg-muted"
-                    role="img"
-                    aria-label={`${reserved} of ${server.memory_mb} MB reserved`}
-                  >
-                    <span
-                      className="block h-full rounded bg-primary"
-                      style={{
-                        width: `${Math.min(100, (reserved / server.memory_mb) * 100).toFixed(1)}%`,
-                      }}
-                    />
-                  </span>
-                ) : null}
-              </TableCell>
-              <TableCell>
-                {server.load1 === null || server.load1 === undefined ? "—" : server.load1.toFixed(2)}
-              </TableCell>
-              <TableCell className="text-xs">
-                {server.mem_free_mb === null || server.mem_free_mb === undefined ? (
-                  "—"
-                ) : (
-                  <span className="block">{formatMb(server.mem_free_mb)} free memory</span>
-                )}
-                {server.disk_free_mb === null || server.disk_free_mb === undefined ? null : (
-                  <span className="block">{formatMb(server.disk_free_mb)} free disk</span>
-                )}
-              </TableCell>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
+    <ResponsiveTable
+      label="Servers"
+      rows={servers}
+      columns={columns}
+      getKey={(s) => s.id}
+      cardTitle={(server) => <ServerName server={server} />}
+    />
   );
 }
