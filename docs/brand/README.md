@@ -1,7 +1,7 @@
 # Setu brand
 
-"Setu" is Sanskrit for bridge. The mark is a tied-arch bridge: a deck,
-an arch and three hangers, drawn with round strokes so it survives 16 px.
+"Setu" is Sanskrit for bridge. The mark is a keystone: a chevron span resting on its base, two
+solid shapes so it survives 16 px and reads as a bridge from a distance.
 
 | File | Use |
 |---|---|

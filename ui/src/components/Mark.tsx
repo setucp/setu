@@ -1,22 +1,18 @@
 import { cn } from "@/lib/utils";
 
-/** The Setu bridge mark (docs/brand), drawn in the accent colour. */
+/** The Setu keystone mark (docs/brand): a chevron span over its base, in the accent colour. */
 export function Mark({ className, title }: { className?: string; title?: string }) {
   return (
     <svg
       viewBox="0 0 64 64"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      fill="currentColor"
       className={cn("text-primary", className)}
       role={title === undefined ? undefined : "img"}
       aria-hidden={title === undefined ? true : undefined}
       aria-label={title}
     >
-      <path d="M10 42 H54" strokeWidth="6" />
-      <path d="M10 42 C18 16 46 16 54 42" strokeWidth="6" />
-      <path d="M22 42 V27.5 M32 42 V22.5 M42 42 V27.5" strokeWidth="4" />
+      <path d="M32 12 L58 38 H46 L32 24 L18 38 H6 Z" stroke="currentColor" strokeWidth="3" strokeLinejoin="round" />
+      <rect x="6" y="44" width="52" height="8" rx="4" />
     </svg>
   );
 }
