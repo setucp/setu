@@ -1086,3 +1086,56 @@ async fn settings_and_backups_round_trip() {
     assert!(b.site_id.is_none());
     assert_eq!(b.domain, "a.example.com");
 }
+
+#[tokio::test]
+async fn delete_operator_removes_sessions_and_unknown_is_not_found() {
+    let (_test, db) = test_db().await;
+    let a = db
+        .operators()
+        .create("a@x.io", "h1", "owner")
+        .await
+        .unwrap();
+    let b = db
+        .operators()
+        .create("b@x.io", "h1", "viewer")
+        .await
+        .unwrap();
+    let b1 = db.sessions().create(&b.id).await.unwrap();
+
+    let gone = db.operators().delete(&b.id).await.expect("delete viewer");
+    assert_eq!(gone.email, "b@x.io");
+    assert!(
+        db.sessions().load(&b1).await.unwrap().is_none(),
+        "session ended"
+    );
+    assert!(db.operators().by_id(&b.id).await.unwrap().is_none());
+    let err = db
+        .operators()
+        .delete(&b.id)
+        .await
+        .expect_err("already gone");
+    assert_eq!(err.code, ErrorCode::NotFound);
+    let err = db.operators().delete(&a.id).await.expect_err("last owner");
+    assert_eq!(err.code, ErrorCode::Conflict);
+}
+
+/// Review Focus 1: two owners delete each other at once; exactly one wins.
+#[tokio::test]
+async fn delete_operator_never_removes_the_last_owner_under_race() {
+    for round in 0..5 {
+        let (_test, db) = test_db().await;
+        let a = db.operators().create("a@x.io", "h", "owner").await.unwrap();
+        let b = db.operators().create("b@x.io", "h", "owner").await.unwrap();
+        let ops = db.operators();
+        let (ra, rb) = tokio::join!(ops.delete(&b.id), ops.delete(&a.id));
+        assert_eq!(
+            usize::from(ra.is_ok()) + usize::from(rb.is_ok()),
+            1,
+            "round {round}: exactly one delete succeeds"
+        );
+        let err = ra.err().or(rb.err()).expect("one refusal");
+        assert_eq!(err.code, ErrorCode::Conflict, "round {round}");
+        let owners = db.operators().list().await.unwrap();
+        assert_eq!(owners.iter().filter(|o| o.role == "owner").count(), 1);
+    }
+}

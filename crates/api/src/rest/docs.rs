@@ -45,6 +45,7 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::operators::list,
         super::operators::create,
         super::operators::set_password,
+        super::operators::delete,
         super::setup::status,
         super::setup::create_owner,
         super::setup::local_server,

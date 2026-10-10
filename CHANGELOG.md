@@ -21,6 +21,12 @@ Follow-ups from the first release (spec
   the installer restarts `setu` and the local agent only when the binary
   changed. Re-running `setu agent install` is not needed.
 
+### Panel
+
+- Owners can delete an operator in Settings → Operators (#2). The
+  owner cannot delete themselves or the last owner; the deleted
+  operator's sessions end at once.
+
 ### Internal
 
 - Workspace lints: `clippy::pedantic`, `unwrap_used`, `expect_used` as

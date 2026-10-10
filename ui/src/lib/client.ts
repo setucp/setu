@@ -317,6 +317,11 @@ export const api = {
     });
   },
 
+  /** Owner only. Refused for yourself and the last owner (409). */
+  deleteOperator(id: string): Promise<void> {
+    return request(`/api/v1/operators/${encodeURIComponent(id)}`, { method: "DELETE" });
+  },
+
   /** Own password needs `current_password`; the owner sets anyone else's. */
   setOperatorPassword(
     id: string,

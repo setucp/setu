@@ -294,6 +294,16 @@ export function useCreateOperator() {
   });
 }
 
+export function useDeleteOperator() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteOperator(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["operators"] });
+    },
+  });
+}
+
 export function useSetOperatorPassword() {
   return useMutation({
     mutationFn: ({

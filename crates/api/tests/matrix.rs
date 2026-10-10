@@ -226,6 +226,16 @@ async fn route_matrix() {
         404,
     )
     .await;
+    ctx.row(
+        "DELETE",
+        "/api/v1/operators/does-not-exist",
+        None,
+        401,
+        403,
+        403,
+        404,
+    )
+    .await;
 
     // The OpenAPI document needs a session; Swagger UI is gone.
     ctx.row("GET", "/api/v1/openapi.json", None, 401, 200, 200, 200)

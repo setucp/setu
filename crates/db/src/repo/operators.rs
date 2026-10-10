@@ -13,6 +13,11 @@ use crate::{map_db_error, AppError};
 #[allow(clippy::unreadable_literal)] // reviewed: kept as-is (R150)
 const SETUP_LOCK_KEY: i64 = -8640242326146119732;
 
+/// Advisory-lock key serialising operator deletions, so the last-owner
+/// check and the delete are one atomic decision (R149). Distinct from
+/// `SETUP_LOCK_KEY`.
+const OPERATORS_LOCK_KEY: i64 = 0x5e7a_0002;
+
 /// One panel user. Holds credential material: `Debug` redacts it.
 #[derive(Clone)]
 pub struct Operator {
@@ -157,6 +162,48 @@ impl<'a> Operators<'a> {
             .await
             .map_err(map_db_error)?;
         Ok(n.unwrap_or(0))
+    }
+
+    /// Delete an operator and every session of theirs in one transaction
+    /// under [`OPERATORS_LOCK_KEY`]: `not_found` for an unknown id,
+    /// `conflict` when it is the last owner. Returns the deleted row
+    /// (audit names its email).
+    pub async fn delete(&self, id: &str) -> Result<Operator, AppError> {
+        let mut tx = self.pool.begin().await.map_err(map_db_error)?;
+        sqlx::query!("SELECT pg_advisory_xact_lock($1)", OPERATORS_LOCK_KEY)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_db_error)?;
+        let target = sqlx::query_as!(
+            Operator,
+            "SELECT id, email, password_hash, role, created_at
+             FROM operators WHERE id = $1",
+            id,
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_db_error)?
+        .ok_or_else(|| AppError::not_found("operator not found"))?;
+        if target.role == "owner" {
+            let owners: Option<i64> =
+                sqlx::query_scalar!("SELECT COUNT(*) FROM operators WHERE role = 'owner'")
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(map_db_error)?;
+            if owners.unwrap_or(0) <= 1 {
+                return Err(AppError::conflict("cannot delete the last owner"));
+            }
+        }
+        sqlx::query!("DELETE FROM sessions WHERE operator_id = $1", id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_db_error)?;
+        sqlx::query!("DELETE FROM operators WHERE id = $1", id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_db_error)?;
+        tx.commit().await.map_err(map_db_error)?;
+        Ok(target)
     }
 
     pub async fn list(&self) -> Result<Vec<Operator>, AppError> {

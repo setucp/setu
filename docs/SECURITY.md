@@ -160,6 +160,10 @@ password).
   `SameSite=Lax`, `Secure` when `public_url` is https; 7 days, sliding.
   Login always issues a fresh session (no fixation); a password change
   ends every session of that operator (R102).
+  Deleting an operator (owner only) refuses yourself and the last
+  owner with 409, ends every session of theirs and is audited as
+  `operator.delete`; concurrent deletions are serialised by an advisory
+  lock, so two owners deleting each other cannot both succeed (R149).
 - Roles: `owner` > `operator` > `viewer`; every route × role is pinned
   by `crates/api/tests/matrix.rs`. Every mutation writes `audit_log`
   (operator, action, target kind and id, client IP).

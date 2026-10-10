@@ -72,6 +72,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/me", get(auth::me))
         .route("/operators", get(operators::list).post(operators::create))
         .route("/operators/{id}/password", put(operators::set_password))
+        .route("/operators/{id}", delete(operators::delete))
         .route("/setup", get(setup::status).post(setup::create_owner))
         .route("/setup/local-server", post(setup::local_server))
         .route("/servers", get(servers::list).post(servers::create))
