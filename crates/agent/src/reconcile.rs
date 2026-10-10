@@ -81,7 +81,12 @@ where
     let mut units = Vec::new();
     for short in state.sites.keys() {
         let status = helper
-            .call(Verb::Unit, short, serde_json::json!({ "op": "show" }), None)
+            .call(
+                Verb::Unit,
+                short,
+                serde_json::json!({ "op": "show" }),
+                crate::helper_client::HelperIo::none(),
+            )
             .await
             .map(|o| RuntimeStatus::from_show(&o.json))
             .unwrap_or_else(|_| RuntimeStatus {

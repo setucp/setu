@@ -17,7 +17,7 @@ use crate::caddy::CaddyAdmin;
 use crate::config::AgentConfig;
 use crate::download::DownloadPolicy;
 use crate::helper::{UnitInput, Verb};
-use crate::helper_client::Helper;
+use crate::helper_client::{Helper, HelperIo};
 use crate::paths::check_short;
 use crate::postgres::PostgresAdmin;
 use crate::runtime::{Cursor, LogStream, Runtime, RuntimeStatus, SiteId};
@@ -118,7 +118,11 @@ impl<H: Helper, P, C> NativeRuntime<H, P, C> {
         input: serde_json::Value,
     ) -> anyhow::Result<serde_json::Value> {
         check_short(short)?;
-        Ok(self.helper.call(verb, short, input, None).await?.json)
+        Ok(self
+            .helper
+            .call(verb, short, input, HelperIo::none())
+            .await?
+            .json)
     }
 
     /// Helper `site-create {dirs}`: user + tree + `data/<dir>` from the
@@ -233,26 +237,43 @@ impl<H: Helper, P, C> NativeRuntime<H, P, C> {
         Ok(out["changed"].as_bool().unwrap_or(true))
     }
 
-    /// Helper `backup {dirs}`: the tar.zst bytes.
-    pub async fn backup_dirs(&self, short: &str, dirs: &[String]) -> anyhow::Result<Vec<u8>> {
+    /// Helper `backup {dirs}`: the tar.zst streamed into the file `to`;
+    /// returns its size in bytes.
+    pub async fn backup_dirs(
+        &self,
+        short: &str,
+        dirs: &[String],
+        to: &std::path::Path,
+    ) -> anyhow::Result<u64> {
         check_short(short)?;
         Ok(self
             .helper
-            .call(Verb::Backup, short, json!({ "dirs": dirs }), None)
+            .call(
+                Verb::Backup,
+                short,
+                json!({ "dirs": dirs }),
+                HelperIo::stdout_to(to),
+            )
             .await?
-            .stdout)
+            .streamed)
     }
 
-    /// Helper `restore {dirs}` with the tar.zst on stdin.
+    /// Helper `restore {dirs}` with the tar.zst streamed from the file
+    /// `from` on stdin.
     pub async fn restore_dirs(
         &self,
         short: &str,
         dirs: &[String],
-        archive: Vec<u8>,
+        from: &std::path::Path,
     ) -> anyhow::Result<()> {
         check_short(short)?;
         self.helper
-            .call(Verb::Restore, short, json!({ "dirs": dirs }), Some(archive))
+            .call(
+                Verb::Restore,
+                short,
+                json!({ "dirs": dirs }),
+                HelperIo::stdin_from(from),
+            )
             .await
             .map(|_| ())
     }

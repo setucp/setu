@@ -3,7 +3,9 @@
 //!
 //! The agent writes and reads the archive itself (the backups tree is
 //! `setu`-owned, so deleting a backup needs no helper verb); the helper
-//! streams the data dirs (`backup` on stdout, `restore` on stdin). The
+//! streams the data dirs (`backup` on stdout, `restore` on stdin) and
+//! `pg_dump`/`pg_restore` stream the dump, always between a pipe and a
+//! file, never through a whole buffer (I3). The
 //! directory name is the control plane's `backup_id`, validated as one
 //! safe path component; nothing else path-like arrives.
 
@@ -43,9 +45,12 @@ pub fn backup_dir(backups_root: &Path, short: &str, backup_id: &str) -> anyhow::
     Ok(backups_root.join(short).join(backup_id))
 }
 
-/// Distinct first components of a tar.zst's entries (validated dirs).
-pub fn top_level_dirs(archive: &[u8]) -> anyhow::Result<Vec<String>> {
-    let dec = zstd::stream::read::Decoder::new(archive)?;
+/// Distinct first components of the tar.zst at `archive` (validated
+/// dirs), read as a stream.
+pub fn top_level_dirs(archive: &Path) -> anyhow::Result<Vec<String>> {
+    let file = std::fs::File::open(archive)
+        .map_err(|e| anyhow::anyhow!("cannot read {DIRS_ARCHIVE}: {e}"))?;
+    let dec = zstd::stream::read::Decoder::new(std::io::BufReader::new(file))?;
     let mut ar = tar::Archive::new(dec);
     let mut dirs: Vec<String> = Vec::new();
     for entry in ar.entries()? {
@@ -68,8 +73,14 @@ pub fn top_level_dirs(archive: &[u8]) -> anyhow::Result<Vec<String>> {
     Ok(dirs)
 }
 
-/// Take a backup: `pg_dump` (stdout) into `db.dump`, helper `backup` into
-/// `dirs.tar.zst`. Returns the backup dir and its size in bytes.
+/// `<dir>/.<name>.part`: where a file streams before its rename.
+fn part_path(dir: &Path, name: &str) -> PathBuf {
+    dir.join(format!(".{name}.part"))
+}
+
+/// Take a backup: `pg_dump` (stdout) streamed into `db.dump`, helper
+/// `backup` streamed into `dirs.tar.zst` (each through a `.part` file
+/// renamed when complete). Returns the backup dir and its size in bytes.
 pub async fn backup_site<H: Helper, P: PostgresAdmin, C>(
     rt: &NativeRuntime<H, P, C>,
     short: &str,
@@ -87,19 +98,32 @@ pub async fn backup_site<H: Helper, P: PostgresAdmin, C>(
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o750))
             .map_err(|e| anyhow::anyhow!("cannot chmod {}: {e}", dir.display()))?;
     }
-    let dump = rt.postgres().dump(db).await?;
-    crate::config::atomic_write(&dir.join(DB_DUMP), &dump)
-        .map_err(|e| anyhow::anyhow!("cannot write {DB_DUMP}: {e}"))?;
-    let archive = rt.backup_dirs(short, dirs).await?;
-    crate::config::atomic_write(&dir.join(DIRS_ARCHIVE), &archive)
-        .map_err(|e| anyhow::anyhow!("cannot write {DIRS_ARCHIVE}: {e}"))?;
-    Ok((dir, (dump.len() + archive.len()) as u64))
+    let mut total = 0;
+    for (name, is_db) in [(DB_DUMP, true), (DIRS_ARCHIVE, false)] {
+        let part = part_path(&dir, name);
+        let written = if is_db {
+            rt.postgres().dump(db, &part).await
+        } else {
+            rt.backup_dirs(short, dirs, &part).await
+        };
+        let size = match written {
+            Ok(size) => size,
+            Err(e) => {
+                let _ = std::fs::remove_file(&part);
+                return Err(e);
+            }
+        };
+        std::fs::rename(&part, dir.join(name))
+            .map_err(|e| anyhow::anyhow!("cannot write {name}: {e}"))?;
+        total += size;
+    }
+    Ok((dir, total))
 }
 
 /// Restore a backup (the caller stopped the site): the database is
 /// replaced from `db.dump` (drop with force, create, `pg_restore` as
-/// `role`), then helper `restore` of the requested `dirs` that the
-/// archive holds.
+/// `role`, the file streamed to its stdin), then helper `restore` of the
+/// requested `dirs` that the archive holds (streamed the same way).
 pub async fn restore_site<H: Helper, P: PostgresAdmin, C>(
     rt: &NativeRuntime<H, P, C>,
     short: &str,
@@ -109,21 +133,21 @@ pub async fn restore_site<H: Helper, P: PostgresAdmin, C>(
     backup_id: &str,
 ) -> anyhow::Result<()> {
     let dir = backup_dir(&rt.config().backups_root, short, backup_id)?;
-    let dump = std::fs::read(dir.join(DB_DUMP))
-        .map_err(|e| anyhow::anyhow!("backup has no readable {DB_DUMP}: {e}"))?;
-    rt.postgres().restore_replace(db, role, dump).await?;
+    let dump = dir.join(DB_DUMP);
+    if !dump.is_file() {
+        anyhow::bail!("backup has no readable {DB_DUMP}");
+    }
+    rt.postgres().restore_replace(db, role, &dump).await?;
     let archive_path = dir.join(DIRS_ARCHIVE);
     if archive_path.is_file() {
-        let archive = std::fs::read(&archive_path)
-            .map_err(|e| anyhow::anyhow!("cannot read {DIRS_ARCHIVE}: {e}"))?;
-        let present = top_level_dirs(&archive)?;
+        let present = top_level_dirs(&archive_path)?;
         let wanted: Vec<String> = dirs
             .iter()
             .filter(|d| present.contains(d))
             .cloned()
             .collect();
         if !wanted.is_empty() {
-            rt.restore_dirs(short, &wanted, archive).await?;
+            rt.restore_dirs(short, &wanted, &archive_path).await?;
         }
     }
     Ok(())

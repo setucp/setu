@@ -5,11 +5,14 @@
 //! Passwords never reach argv: psql reads a script on stdin that starts
 //! with `\set pw '<value>'` and uses `:'pw'`. Errors carry one line of
 //! stderr with the password replaced by `***`. Dumps go to stdout
-//! (`pg_dump -Fc <db>`) and the agent writes them under its own
-//! `/var/lib/setu/backups`; `restore_replace` drops the database first
-//! so objects a failed version created do not survive.
+//! (`pg_dump -Fc <db>`), streamed into a file under the agent's own
+//! `/var/lib/setu/backups`; `pg_restore` reads one streamed from a file
+//! (I3: a dump never sits in agent memory); `restore_replace` drops the
+//! database first so objects a failed version created do not survive.
+//! Every database and role name must be `site_<short>` (M11).
 
 use std::collections::{HashMap, VecDeque};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 /// Postgres surface the agent needs. Every call is idempotent.
@@ -20,12 +23,14 @@ pub trait PostgresAdmin: Send + Sync {
     async fn create_or_alter(&self, db: &str, role: &str, password: &str) -> anyhow::Result<()>;
     /// Drop the database (forcing connections off) and the role.
     async fn drop(&self, db: &str, role: &str) -> anyhow::Result<()>;
-    /// `pg_dump -Fc` of the database.
-    async fn dump(&self, db: &str) -> anyhow::Result<Vec<u8>>;
-    /// Replace the database with a custom-format dump: drop with force,
-    /// create again (role password untouched), `pg_restore --no-owner
-    /// --role=<role>` from stdin.
-    async fn restore_replace(&self, db: &str, role: &str, dump: Vec<u8>) -> anyhow::Result<()>;
+    /// `pg_dump -Fc` of the database, streamed into the file `to`
+    /// (created 0600); returns its size in bytes.
+    async fn dump(&self, db: &str, to: &Path) -> anyhow::Result<u64>;
+    /// Replace the database with the custom-format dump in the file
+    /// `from`: drop with force, create again (role password untouched),
+    /// `pg_restore --no-owner --role=<role>` with the file streamed to
+    /// its stdin.
+    async fn restore_replace(&self, db: &str, role: &str, from: &Path) -> anyhow::Result<()>;
     /// Databases named `site_*` (for `Inventory`).
     async fn list_databases(&self) -> anyhow::Result<Vec<String>>;
 }
@@ -42,6 +47,15 @@ pub struct RunOutput {
 #[async_trait::async_trait]
 pub trait CommandRunner: Send + Sync {
     async fn run(&self, argv: &[String], stdin: &[u8]) -> anyhow::Result<RunOutput>;
+    /// Run with stdin streamed from the file `stdin_from` (else empty)
+    /// and stdout streamed into the file `stdout_to` (then `stdout` of
+    /// the result is empty), never buffering either.
+    async fn run_io(
+        &self,
+        argv: &[String],
+        stdin_from: Option<&Path>,
+        stdout_to: Option<&Path>,
+    ) -> anyhow::Result<RunOutput>;
 }
 
 /// Production runner: `tokio::process`, environment inherited (sudo
@@ -52,39 +66,23 @@ pub struct TokioRunner;
 #[async_trait::async_trait]
 impl CommandRunner for TokioRunner {
     async fn run(&self, argv: &[String], stdin: &[u8]) -> anyhow::Result<RunOutput> {
-        use tokio::io::AsyncWriteExt as _;
-        let (prog, args) = argv
-            .split_first()
-            .ok_or_else(|| anyhow::anyhow!("empty argv"))?;
-        let mut child = tokio::process::Command::new(prog)
-            .args(args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| anyhow::anyhow!("cannot run {prog}: {e}"))?;
-        let mut pipe = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("no stdin pipe"))?;
-        let input = stdin.to_vec();
-        // Write concurrently with reading output so a large dump on
-        // stdin cannot deadlock against a full stdout pipe.
-        let writer = tokio::spawn(async move {
-            let res = pipe.write_all(&input).await;
-            drop(pipe);
-            res
-        });
-        let out = child
-            .wait_with_output()
-            .await
-            .map_err(|e| anyhow::anyhow!("{prog} failed to finish: {e}"))?;
-        // A child that exits early closes its stdin: a broken pipe then
-        // is not the interesting error, the exit status is.
-        let _ = writer.await;
+        let out = crate::stream::run(argv, stdin.to_vec(), None, None).await?;
         Ok(RunOutput {
-            success: out.status.success(),
+            success: out.success,
+            stdout: out.stdout,
+            stderr: out.stderr,
+        })
+    }
+
+    async fn run_io(
+        &self,
+        argv: &[String],
+        stdin_from: Option<&Path>,
+        stdout_to: Option<&Path>,
+    ) -> anyhow::Result<RunOutput> {
+        let out = crate::stream::run(argv, Vec::new(), stdin_from, stdout_to).await?;
+        Ok(RunOutput {
+            success: out.success,
             stdout: out.stdout,
             stderr: out.stderr,
         })
@@ -133,6 +131,26 @@ impl CommandRunner for FakeRunner {
                 success: true,
                 ..RunOutput::default()
             }))
+    }
+
+    /// Records the file's bytes as stdin; a reply's stdout goes into
+    /// `stdout_to` (tests only: inputs are small).
+    async fn run_io(
+        &self,
+        argv: &[String],
+        stdin_from: Option<&Path>,
+        stdout_to: Option<&Path>,
+    ) -> anyhow::Result<RunOutput> {
+        let stdin = match stdin_from {
+            Some(path) => std::fs::read(path)?,
+            None => Vec::new(),
+        };
+        let mut out = self.run(argv, &stdin).await?;
+        if let Some(path) = stdout_to {
+            std::fs::write(path, &out.stdout)?;
+            out.stdout = Vec::new();
+        }
+        Ok(out)
     }
 }
 
@@ -233,6 +251,29 @@ impl<R: CommandRunner> PsqlSudo<R> {
         anyhow::bail!("{prog} failed: {line}")
     }
 
+    /// [`Self::exec`] with stdin from / stdout into files (dumps).
+    async fn exec_io(
+        &self,
+        prog: &str,
+        args: &[&str],
+        stdin_from: Option<&Path>,
+        stdout_to: Option<&Path>,
+    ) -> anyhow::Result<()> {
+        let out = self
+            .runner
+            .run_io(&Self::as_postgres(prog, args), stdin_from, stdout_to)
+            .await?;
+        if out.success {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let line = stderr
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("no error output");
+        anyhow::bail!("{prog} failed: {line}")
+    }
+
     async fn psql(&self, script: &str, secret: Option<&str>) -> anyhow::Result<()> {
         self.exec(
             "psql",
@@ -271,12 +312,14 @@ impl<R: CommandRunner> PostgresAdmin for PsqlSudo<R> {
         .await
     }
 
-    async fn dump(&self, db: &str) -> anyhow::Result<Vec<u8>> {
+    async fn dump(&self, db: &str, to: &Path) -> anyhow::Result<u64> {
         check_ident(db, "database")?;
-        self.exec("pg_dump", &["-Fc", db], &[], None).await
+        self.exec_io("pg_dump", &["-Fc", db], None, Some(to))
+            .await?;
+        Ok(std::fs::metadata(to)?.len())
     }
 
-    async fn restore_replace(&self, db: &str, role: &str, dump: Vec<u8>) -> anyhow::Result<()> {
+    async fn restore_replace(&self, db: &str, role: &str, from: &Path) -> anyhow::Result<()> {
         check_ident(db, "database")?;
         check_ident(role, "role")?;
         self.psql(
@@ -287,14 +330,13 @@ impl<R: CommandRunner> PostgresAdmin for PsqlSudo<R> {
         let ensure = create_role_sql(role) + &create_db_and_revoke_sql(db, role);
         self.psql(&ensure, None).await?;
         let role_arg = format!("--role={role}");
-        self.exec(
+        self.exec_io(
             "pg_restore",
             &["--no-owner", &role_arg, "-d", db],
-            &dump,
+            Some(from),
             None,
         )
         .await
-        .map(|_| ())
     }
 
     async fn list_databases(&self) -> anyhow::Result<Vec<String>> {
@@ -368,12 +410,15 @@ impl PostgresAdmin for FakePostgres {
         Ok(())
     }
 
-    async fn dump(&self, db: &str) -> anyhow::Result<Vec<u8>> {
+    async fn dump(&self, db: &str, to: &Path) -> anyhow::Result<u64> {
         self.lock().calls.push(format!("dump {db}"));
-        Ok(format!("fake-dump-of:{db}\n").into_bytes())
+        let bytes = format!("fake-dump-of:{db}\n").into_bytes();
+        std::fs::write(to, &bytes)?;
+        Ok(bytes.len() as u64)
     }
 
-    async fn restore_replace(&self, db: &str, role: &str, dump: Vec<u8>) -> anyhow::Result<()> {
+    async fn restore_replace(&self, db: &str, role: &str, from: &Path) -> anyhow::Result<()> {
+        let dump = std::fs::read(from)?;
         let mut inner = self.lock();
         inner.calls.push(format!("restore {db} {role}"));
         if dump != format!("fake-dump-of:{db}\n").into_bytes() {

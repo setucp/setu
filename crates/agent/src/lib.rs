@@ -34,13 +34,14 @@ pub mod reconcile;
 pub mod run_loop;
 pub mod runtime;
 pub mod state;
+pub mod stream;
 
 pub use caddy::{CaddyAdmin, CaddySocket, FakeCaddy, PanelRoute};
 pub use cli::{run_agent, AgentCmd};
 pub use commands::{handle, Agent};
 pub use config::AgentConfig;
 pub use dispatch::{command_kind, execute};
-pub use helper_client::{FakeHelper, Helper, HelperOutput, LocalHelper, SudoHelper};
+pub use helper_client::{FakeHelper, Helper, HelperIo, HelperOutput, LocalHelper, SudoHelper};
 pub use paths::Paths;
 pub use postgres::{
     CommandRunner, FakePostgres, FakeRunner, PostgresAdmin, PsqlSudo, RunOutput, TokioRunner,

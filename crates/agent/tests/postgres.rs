@@ -91,7 +91,10 @@ async fn psql_errors_are_redacted() {
 async fn restore_replace_drops_with_force_then_restores() {
     let runner = FakeRunner::new();
     let pg = PsqlSudo::new(runner.clone());
-    pg.restore_replace("site_abcd1234", "site_abcd1234", b"PGDMP-bytes".to_vec())
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = dir.path().join("in.dump");
+    std::fs::write(&input, b"PGDMP-bytes").expect("write dump");
+    pg.restore_replace("site_abcd1234", "site_abcd1234", &input)
         .await
         .expect("restore_replace");
     let calls = runner.calls();
@@ -134,8 +137,10 @@ async fn restore_replace_drops_with_force_then_restores() {
         stdout: b"PGDMP-out".to_vec(),
         stderr: Vec::new(),
     });
-    let bytes = pg.dump("site_abcd1234").await.expect("dump");
-    assert_eq!(bytes, b"PGDMP-out");
+    let out = dir.path().join("out.dump");
+    let size = pg.dump("site_abcd1234", &out).await.expect("dump");
+    assert_eq!(size, 9);
+    assert_eq!(std::fs::read(&out).expect("dump file"), b"PGDMP-out");
     assert_eq!(
         argv(&runner.calls()[3]),
         vec![
