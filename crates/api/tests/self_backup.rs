@@ -200,3 +200,57 @@ async fn panel_backup_endpoint_reports_the_last_success() {
     assert_eq!(body["size_bytes"], 1024);
     assert!(body["dir"].as_str().unwrap().ends_with("backups/setu"));
 }
+
+/// M2: the dump holds the whole database, so its file is 0600 from the
+/// moment it exists (the partial is created 0600 before `pg_dump` writes).
+#[tokio::test]
+async fn dump_file_is_0600() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let tdb = TestDb::new().await;
+    let db = setu_db::Db::new(tdb.pool.clone());
+    let data = tempfile::tempdir().unwrap();
+    let runner = Arc::new(FakeDump {
+        fail: false,
+        seen: Mutex::new(vec![]),
+    });
+    let now = Utc.with_ymd_and_hms(2026, 10, 10, 3, 1, 0).unwrap();
+    let rec = self_backup::run_once(&db, runner, DB_URL, data.path(), now)
+        .await
+        .unwrap();
+    let file = rec.file.expect("a dump was written");
+    let path = self_backup::backup_dir(data.path()).join(file);
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "{}", path.display());
+}
+
+/// M2: a `.partial` left by a crashed dump is pruned once it is over an
+/// hour old; a fresh one (maybe a dump in progress) is kept.
+#[tokio::test]
+async fn partial_files_are_pruned() {
+    let tdb = TestDb::new().await;
+    let db = setu_db::Db::new(tdb.pool.clone());
+    let data = tempfile::tempdir().unwrap();
+    let dir = self_backup::backup_dir(data.path());
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = dir.join("setu-20261009T030000Z.dump.partial");
+    let fresh = dir.join("setu-20261010T025900Z.dump.partial");
+    std::fs::write(&old, b"half").unwrap();
+    std::fs::write(&fresh, b"half").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600))
+        .unwrap();
+    let runner = Arc::new(FakeDump {
+        fail: false,
+        seen: Mutex::new(vec![]),
+    });
+    let now = Utc.with_ymd_and_hms(2026, 10, 10, 3, 1, 0).unwrap();
+    self_backup::run_once(&db, runner, DB_URL, data.path(), now)
+        .await
+        .unwrap();
+    let left = dumps(&dir);
+    assert!(!left.contains(&"setu-20261009T030000Z.dump.partial".to_string()));
+    assert!(left.contains(&"setu-20261010T025900Z.dump.partial".to_string()));
+}

@@ -104,6 +104,41 @@ impl Runner for ProcessRunner {
     }
 }
 
+/// Spawns the program and waits at most `timeout`; past it the child is
+/// killed and the run fails (a hung `pg_dump` must not hold the nightly
+/// backup forever).
+pub struct TimedProcessRunner {
+    pub timeout: std::time::Duration,
+}
+
+impl Runner for TimedProcessRunner {
+    fn run(&self, inv: &Invocation) -> Result<(), String> {
+        let mut child = std::process::Command::new(&inv.program)
+            .args(&inv.args)
+            .envs(inv.env.iter().map(|(k, v)| (k, v)))
+            .spawn()
+            .map_err(|e| format!("cannot run {}: {e}", inv.program))?;
+        let started = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => return Ok(()),
+                Ok(Some(status)) => return Err(format!("{} failed: {status}", inv.program)),
+                Ok(None) if started.elapsed() >= self.timeout => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "{} ran past {} s and was killed",
+                        inv.program,
+                        self.timeout.as_secs()
+                    ));
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(200)),
+                Err(e) => return Err(format!("waiting for {}: {e}", inv.program)),
+            }
+        }
+    }
+}
+
 /// Percent-decode a URL component (`+` stays `+`).
 fn decode(s: &str) -> String {
     let bytes = s.as_bytes();
