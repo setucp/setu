@@ -3,9 +3,9 @@
 Setu is a control panel for single-binary web apps (and, from phase 2,
 container images): one binary `setu`: `setu serve` is the control plane, `setu agent run` the per-server agent, React
 UI embedded in the control-plane binary. Read `docs/HANDOFF.md`, then the spec
-`docs/specs/2026-10-09-setu-design.md` (revision 3), the review record
-`docs/specs/2026-10-09-setu-review.md` and the plan
-`docs/plans/2026-10-09-setu-mvp.md` (revision 3).
+`docs/specs/2026-10-09-setu-design.md` (revision 4, as built), the review
+record `docs/specs/2026-10-09-setu-review.md` and the plan
+`docs/plans/2026-10-09-setu-mvp.md` (revision 3) with its ledger.
 The spec is the authority; the plan argues from it; disagreements are
 rulings recorded in the plan's ledger.
 
@@ -52,16 +52,29 @@ rulings recorded in the plan's ledger.
 ## Layout
 
 ```
-crates/common    config, sealing (v1:/plain:, KeyVault scheme), ids, domain, shared validation regexes, error envelope, TestDb
-crates/manifest  app manifest schema, validator corpus, env resolution
-crates/proto     agent command/result/heartbeat types
-crates/db        sqlx repos (incl. sessions, command queue with leases) + migrations
-crates/jobs      provision/update/backup/restore/delete state machines over AgentClient
-crates/api       axum control plane, utoipa, embedded UI; the one binary `setu` (serve | agent | cli)
-crates/agent     Runtime trait, NativeRuntime, typed privileged helper (`setu helper`), Postgres/Caddy adapters, reconcile (lib; `setu agent …`)
-                 (TestServer lives in crates/api/tests/common; FakeAgent in crates/jobs::testing)
+crates/common    config (listen, trusted_proxies), seal (v1:/plain:, KeyVault scheme), ids, domain,
+                 validate (shared regexes), error (envelope + codes)
+crates/manifest  schema, validate (+ corpus in tests/corpus), resolve (env resolution and merge)
+crates/proto     agent commands, SiteSpec, results, heartbeat, join, inventory (one lib.rs)
+crates/db        repo/{apps,audit,backups,commands,jobs,metrics,operators,plans,servers,sessions,
+                 settings,sites} + migrations/0001_init.sql
+crates/testkit   TestDb (throwaway database per test)
+crates/jobs      agent (AgentClient, DbAgentClient, FakeAgent in `agent::testing`), runner, scheduler, clock,
+                 provision, update, backup, restore, delete, delete_backup, env_update, lifecycle
+crates/api       the one binary `setu` (main.rs: serve | migrate | operator | backup | setting |
+                 openapi | agent | helper); listen (unix/TCP, Peer), auth/{session,client_ip},
+                 rest/{setup,auth,operators,servers,apps,plans,sites,backups,jobs,agent,docs},
+                 notifier (LISTEN/NOTIFY), embed (UI), cli, state, testing (TestServer)
+crates/agent     (lib; `setu agent …`, `setu helper …`) helper/{cli,validate,fs,site,unit,env,install,
+                 backup,remove,users,ownership}, helper_client, runtime/{mod (Runtime trait),native},
+                 commands, dispatch, run_loop, heartbeat, reconcile, state, caddy, postgres, journal,
+                 backup, paths, metrics, netstat, download, install, install_system, doctor, config, cli;
+                 assets/ (golden units, sudoers, nftables, Caddy base and drop-in)
 
-apps/hello       tiny Axum app used by tests and the e2e
+apps/hello       tiny Axum app used by the e2e (manifest.tmpl.toml)
 ui/              Vite + React + TanStack + Tailwind + shadcn/ui
-scripts/         test.sh, test-pg.sh, e2e.sh, test-install.sh, build-ui.sh, sqlx-prepare.sh, check-sudoers.sh
+scripts/         test.sh, test-pg.sh, sqlx-prepare.sh, build-ui.sh, check-sudoers.sh, check-links.sh,
+                 e2e.sh (+ e2e/Dockerfile, e2e/e2e-init), test-install.sh, package-release.sh,
+                 check-release-version.sh, release-notes.sh
+install.sh       the single-node installer (attached to each release)
 ```

@@ -38,8 +38,9 @@ What it does, in order (spec §8):
 4. Creates the system user `setu`, `/var/lib/setu` (setu 0750) and
    `/etc/setu` (root 0755).
 5. Creates the `setu` role (a generated password, handed to `psql` on
-   stdin with `\set`, never on a command line) and database, and
-   `REVOKE CONNECT ON DATABASE setu FROM PUBLIC`.
+   stdin with `\set`, never on a command line) and database,
+   `REVOKE CONNECT ON DATABASE setu FROM PUBLIC` and `GRANT CONNECT …
+   TO setu`.
 6. Writes `/etc/setu/setu.toml` (setu:setu 0600):
    `listen = "unix:/run/setu/http.sock"`, `database_url`, a generated
    `secret_key` (64 hex), `public_url = "https://<panel host>"`,
@@ -95,9 +96,11 @@ sudo -u setu setu setting set tls_internal true
 ```
 
 `setu backup` hands the database password to `pg_dump` in its
-environment (`PGPASSWORD`), never on argv; restore with `pg_restore -d
-setu --clean` as `postgres`. `operator create` takes the password from
-`SETU_OPERATOR_PASSWORD` or the first line of stdin.
+environment (`PGPASSWORD`), never on argv; restoring it, and keeping
+`setu.toml` (the key to every sealed secret) with it, is in
+[OPERATIONS.md](OPERATIONS.md#backing-up-the-control-plane).
+`operator create` takes the password from `SETU_OPERATOR_PASSWORD` or
+the first line of stdin.
 
 ## Manual install
 
@@ -116,9 +119,12 @@ setu --clean` as `postgres`. `operator create` takes the password from
 
 Re-run `install.sh --version <new> …` with the same flags: it verifies
 the new archive, replaces the binary and restarts `setu.service`
-(migrations run on boot). Back up first (`setu backup`); migrations
-are forward-only. Site updates are separate: each site moves to a newer
-app version from the UI with automatic rollback.
+(migrations run on boot). It does not restart the local agent: run
+`systemctl restart setu-agent` afterwards, and upgrade other servers'
+binaries by hand ([OPERATIONS.md](OPERATIONS.md#upgrading)). Back up
+first (`setu backup`); migrations are forward-only. Site updates are
+separate: each site moves to a newer app version from the UI with
+automatic rollback.
 
 ## Uninstalling
 

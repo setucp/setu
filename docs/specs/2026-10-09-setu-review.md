@@ -118,3 +118,40 @@ route and any Origin requirement (e2e assertion 12 sends `Origin`);
 `visudo -cf` ownership checks on a non-root-owned file (Task 10b
 ledgers the outcome); Caddy admin `Host` handling over a unix socket;
 GitHub-runner behaviour with `--cgroupns=private`.
+
+## Revision 3 → as built (spec revision 4, 2026-10-10)
+
+Phase 1 was built on branch `mvp` against revision 3 (gap work list
+`docs/plans/2026-10-09-rev3-gap.md`, work sets WS1–WS12). Where the
+build had to depart from revision 3, the departure is a ruling in
+`docs/plans/2026-10-09-setu-mvp.ledger.md`; spec revision 4 folds them
+in and cites each one inline. The rulings that changed the spec text:
+
+| Section | Rulings | Change |
+|---|---|---|
+| §1 | R85, R99, R112, R113, R124, R126 | `Runtime` keyed by the short id; `switch_version`, restart, health and dir backup are `NativeRuntime` methods outside the trait; `--insecure` never disables certificate checks; CLI gains `setting set` and `openapi` |
+| §2 | R52–R55, R57, R59 | `args` in `[run]`; `startup_grace_s` 1–3600 is the health timeout; `postgres_url` always secret; no control characters in values; merge re-resolves `postgres_url` from the stored URL; real Vyasa sha256; `command` strategy refused |
+| §3 | R75, R76, R83, R89, R92, R105, R108 | load columns on `servers`; backup statuses; `setu_redact_command`; server-level `delete_backup` jobs; no password column; settings keys |
+| §4 | R60, R61, R63–R74, R80, R81, R112, R116, R118, R123, R126, R127 | helper framing and verb inputs as built; `unit start/stop` = `enable/disable --now`; restore swaps with two renames; sudoers exactly two lines; agent unit without `ProtectSystem`; `/etc/setu` root-owned; Caddy repository with the verified `.deb` fallback; `/run/setu` 0755 with the socket 0660 `setu:caddy`; `WorkingDirectory=/etc/setu`; `/usr/local/bin/setu`; route upsert by `GET /id` → `PATCH` else `POST`; restore-replace sequence |
+| §5 | R24, R71, R76, R83, R85–R87, R91, R94, R96–R101, R108, R111 | `site` is the short id except `SiteCreate`/`WriteUnit`/`Health`; `site_short_id` on route commands; `listening_ports`; persist-before-post with read-only results dropped once posted; one nonce per install, one retry; heartbeat load stored on servers; `?wait=0`; LISTEN/NOTIFY notifier; doctor rows |
+| §6 | R82, R87–R95, R101, R110, R118 | env generated once at creation; capacity admitted at creation only; provision `validate` port check; update prompts and rollback rules (with or without restore); scheduler in control-plane local time with skip rules; delete aborts on a failed `pre_delete` backup unless the site is `failed`; restart = `Restart` command |
+| §7 | R19, R102–R111, R114, R117, R125 | sessions as built; `Origin`-or-`Sec-Fetch-Site` on every mutation incl. login and setup; XFF rules; setup token minted also when the file is missing; reveal 403 and `env.reveal_denied`; API shapes; top-level backup routes; local-server command shape; OpenAPI JSON instead of Swagger |
+| §8 | R47, R48, R50, R113, R121, R124, R127, R129 | `install.sh` flags and behaviour; config keys; `setu backup`; `setting set`; release workflow |
+| §9 | R67, R119, R120, R122, R128 | the 14 named e2e assertions and the 9 named installer assertions; e2e image cgroup2 entrypoint; clang fallback for musl |
+| §11 | R60, R102, R119 | hyper for the Caddy socket, nix 0.31, no tower-sessions, rustls on ring |
+
+Ledger rulings superseded along the way (R30, R35, R36, R37, R41 and
+R62) are marked at the end of the ledger.
+
+### The four "still unverified" items
+
+| Item | Outcome |
+|---|---|
+| Vyasa 0.2.0's login route and any `Origin` requirement | Confirmed (R122): `POST /api/v1/auth/login {email, password}`, read from Vyasa's source; e2e assertion 12 sends it from inside the box with `Origin: https://vyasa.test` and gets 200 |
+| `visudo -cf` on a non-root-owned file | Checked on this host (R66, R70): classic `visudo.ws -cf` on a 0440 copy prints "parsed OK" unprivileged with no ownership complaint; sudo-rs's `visudo` rejected `Defaults:setu !requiretty`, so that line was dropped and both now parse the two-line file |
+| Caddy admin `Host` handling over a unix socket | Verified (R72): Caddy accepts `Host: 127.0.0.1` on a unix admin listener; the client sends it, checked against real Caddy 2.11.7 (opt-in test `caddy_socket_against_real_caddy_when_available`) |
+| GitHub-runner behaviour with `--cgroupns=private` | Not yet known: the e2e passes on this host (cgroup v2, with the R120 cgroup2 remount), but CI has not run it yet |
+
+Also measured: provisioning `hello` took 8.2 s and Vyasa 0.2.0 about
+9 s in the e2e container on this host; a Hetzner measurement is still
+open.
