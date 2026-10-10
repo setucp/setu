@@ -32,6 +32,11 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 install -m 0755 "${bindir}/setu" "$tmp/setu"
 tar -C "$tmp" --owner=0 --group=0 --numeric-owner -czf "${distdir}/${name}.tar.gz" setu
 install -m 0755 "${root}/install.sh" "${distdir}/install.sh"
-archives=( "$distdir"/setu-"$version"-*-unknown-linux-musl.tar.gz )
-(cd "$distdir" && sha256sum "${archives[@]##*/}" install.sh > SHA256SUMS)
+# Only the exact release names of the two targets; other files in DISTDIR
+# (stray archives, other versions) are not release assets.
+archives=()
+for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+  [[ -f "${distdir}/setu-${version}-${t}.tar.gz" ]] && archives+=("setu-${version}-${t}.tar.gz")
+done
+(cd "$distdir" && sha256sum "${archives[@]}" install.sh > SHA256SUMS)
 echo "packaged ${distdir}/${name}.tar.gz; SHA256SUMS lists ${#archives[@]} archive(s) and install.sh"

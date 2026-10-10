@@ -49,4 +49,13 @@ if TARGET=riscv64-unknown-linux-musl bash "$ROOT/scripts/package-release.sh" "$V
   fail "an unknown target must be refused"
 fi
 echo "ok - unknown target refused"
-echo "1..5 PASS"
+
+# A stray archive in DISTDIR is not a release asset: only the exact
+# setu-<ver>-<target>.tar.gz names of the two targets are listed.
+printf 'stray\n' >"$DIST/setu-$VERSION-riscv64-unknown-linux-musl.tar.gz"
+bash "$ROOT/scripts/package-release.sh" "$VERSION" "$SCRATCH/bin-x86" "$DIST" "$X86" >/dev/null
+lines=$(wc -l <"$DIST/SHA256SUMS")
+[ "$lines" = 3 ] || fail "a stray archive is listed: SHA256SUMS has $lines lines, want 3"
+grep -q riscv64 "$DIST/SHA256SUMS" && fail "a stray archive is listed in SHA256SUMS"
+echo "ok - stray archives are not listed"
+echo "1..6 PASS"
