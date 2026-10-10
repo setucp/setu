@@ -327,6 +327,13 @@ pub async fn rotate_token(
 ) -> Result<impl IntoResponse, AppError> {
     let caller = require_role(&session, Role::Owner).await?;
     let (server, join_token) = state.db.servers().rotate_join_token(&id).await?;
+    let tls_internal = state
+        .db
+        .settings()
+        .get(setu_db::TLS_INTERNAL)
+        .await?
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     audit(
         &state.db,
         Some(&caller.id),
@@ -338,6 +345,17 @@ pub async fn rotate_token(
     Ok(Json(RotateTokenResponse {
         server: ServerOut::from_row(&server, state.clock.now()),
         join_token,
-        join_command: "setu agent join".to_string(),
+        join_command: join_command(tls_internal),
     }))
+}
+
+/// The re-join command: under `tls internal` the agent trusts Caddy's
+/// local CA, as the local-server install command does (I1).
+fn join_command(tls_internal: bool) -> String {
+    let mut cmd = "setu agent join".to_string();
+    if tls_internal {
+        cmd.push_str(" --ca ");
+        cmd.push_str(super::setup::CADDY_LOCAL_CA);
+    }
+    cmd
 }

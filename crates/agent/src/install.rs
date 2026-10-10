@@ -177,6 +177,20 @@ pub fn rejoin_control_plane(
     }
 }
 
+/// `(insecure, ca)` for a join: flags add to agent.toml's settings and
+/// never remove them, so a re-join without `--ca` keeps the configured
+/// CA and a configured `insecure` stays on (I1).
+pub fn rejoin_transport(
+    insecure: bool,
+    ca: Option<PathBuf>,
+    existing: &AgentConfig,
+) -> (bool, Option<PathBuf>) {
+    (
+        insecure || existing.insecure,
+        ca.or_else(|| existing.ca.clone()),
+    )
+}
+
 /// agent.toml after a (re-)join: identity and control plane replaced,
 /// `--insecure` only ever switched on, `--ca` / `--panel-host` only when
 /// given; everything else (paths, intervals, panel route) kept (R148).
@@ -654,6 +668,36 @@ mod tests {
             rejoin_control_plane(Some("https://other.example.com".into()), &cfg).unwrap(),
             "https://other.example.com"
         );
+    }
+
+    /// I1: a re-join without `--ca` / `--insecure` keeps agent.toml's CA
+    /// and insecure setting, both for the URL check and the HTTP client.
+    #[test]
+    fn rejoin_reuses_ca_and_insecure_from_agent_toml() {
+        let existing = AgentConfig {
+            control_plane: "http://panel.internal.example".into(),
+            server_id: "srv1".into(),
+            insecure: true,
+            ca: Some(PathBuf::from("/nonexistent-setu-test/ca.pem")),
+            ..AgentConfig::default()
+        };
+        let (insecure, ca) = rejoin_transport(false, None, &existing);
+        assert!(insecure, "insecure is read from agent.toml");
+        assert_eq!(ca, existing.ca, "a configured ca is never dropped");
+        // The URL check accepts plain http only because of the kept flag.
+        assert!(check_control_plane(&existing.control_plane, insecure).is_ok());
+        assert!(check_control_plane(&existing.control_plane, false).is_err());
+        // The client is built with the kept CA: a missing file fails there.
+        let err = crate::config::http_client(ca.as_deref()).expect_err("ca is read");
+        assert!(err.to_string().contains("/nonexistent-setu-test/ca.pem"));
+        // Flags can only add to the file, never switch it off.
+        let (insecure, ca) = rejoin_transport(
+            false,
+            Some(PathBuf::from("/x.pem")),
+            &AgentConfig::default(),
+        );
+        assert!(!insecure);
+        assert_eq!(ca, Some(PathBuf::from("/x.pem")));
     }
 
     #[test]

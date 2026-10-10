@@ -889,3 +889,33 @@ async fn rotate_token_old_token_works_until_the_agent_rejoins() {
     let audit = srv.db.audit().list_recent(50).await.expect("audit");
     assert!(audit.iter().any(|a| a.action == "server.rotate_token"));
 }
+
+/// I1: under `tls_internal` the rotate response's re-join command trusts
+/// Caddy's local CA, the same as the local-server install command does.
+#[tokio::test]
+async fn rotate_join_command_trusts_caddy_ca_under_tls_internal() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let (server_id, _old) = joined(&srv, "rot-ca").await;
+    let owner = srv.login_as_owner().await;
+    srv.db
+        .settings()
+        .set(setu_db::TLS_INTERNAL, &json!(true))
+        .await
+        .expect("set tls_internal");
+    let url = srv.url(&format!("/api/v1/servers/{server_id}/rotate-token"));
+    let body: Value = owner
+        .post(&url)
+        .send()
+        .await
+        .expect("sends")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(
+        body["join_command"],
+        json!(
+            "setu agent join --ca /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt"
+        )
+    );
+}

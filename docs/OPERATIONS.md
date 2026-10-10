@@ -190,8 +190,10 @@ setu agent join        # paste the token when asked, or: SETU_JOIN_TOKEN=... set
 ```
 
 `setu agent join` reads the control plane from `/etc/setu/agent.toml`,
-keeps every other field of it (paths, intervals, the panel route, the
-`insecure` setting) and restarts the running agent so it uses the new
+keeps every other field of it (paths, intervals, the panel route) and
+keeps its CA (`ca`) and `insecure` setting unless a flag adds to them;
+under `tls internal` the printed command already carries `--ca` for
+Caddy's local CA. It restarts the running agent so it uses the new
 server token (#8). A lost join response is recovered by running the same
 join again with the same token; rotating a second time before the join
 replaces the first join token. After the join, the old server token is
