@@ -250,11 +250,11 @@ fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
 
 #[tokio::test]
 async fn ip_panel_host_gets_a_default_sni() {
-    let cfg = setu_agent::install_system::caddy_base_config(true, Some(&panel("172.30.0.2")))
+    let cfg = setu_agent::install_system::caddy_base_config(true, Some(&panel("192.0.2.10")))
         .expect("config");
     assert_eq!(
         cfg["apps"]["http"]["servers"]["setu"]["tls_connection_policies"][0]["default_sni"],
-        serde_json::json!("172.30.0.2")
+        serde_json::json!("192.0.2.10")
     );
     let cfg =
         setu_agent::install_system::caddy_base_config(true, Some(&panel("panel.example.test")))
