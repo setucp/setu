@@ -240,7 +240,7 @@ async fn partial_files_are_pruned() {
         .write(true)
         .open(&old)
         .unwrap()
-        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600))
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_hours(2))
         .unwrap();
     let runner = Arc::new(FakeDump {
         fail: false,

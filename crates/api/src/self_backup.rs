@@ -27,9 +27,9 @@ use crate::cli::{pg_dump_invocation, Runner, TimedProcessRunner};
 /// Dumps kept in [`backup_dir`].
 pub const KEEP: usize = 7;
 /// Longest a `pg_dump` may run before it is killed (M2).
-pub const DUMP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+pub const DUMP_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(30);
 /// `.partial` files older than this are leftovers of a crashed dump.
-const PARTIAL_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+const PARTIAL_MAX_AGE: std::time::Duration = std::time::Duration::from_hours(1);
 /// Jitter key (the scheduler's `due_at` takes a site id).
 const JITTER_KEY: &str = "setu-control-plane";
 
