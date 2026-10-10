@@ -62,6 +62,11 @@ describe("jobs", () => {
     await waitFor(() =>
       expect(log.textContent).toBe("step install: ok\nstep health: ok\nstep finish: ok"),
     );
+    // The server ends the tail with `event: end`: the client closes the
+    // stream instead of reconnecting and replaying it.
+    expect(source.closed).toBe(false);
+    source.emitEvent("end", "done");
+    expect(source.closed).toBe(true);
   }, 20000);
 
   it("finished jobs do not subscribe to the live log", async () => {

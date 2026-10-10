@@ -51,14 +51,24 @@ export class MockEventSource {
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
+  private listeners: Record<string, Array<(event: { data: string }) => void>> = {};
 
   constructor(url: string) {
     this.url = url;
     MockEventSource.instances.push(this);
   }
 
+  addEventListener(name: string, listener: (event: { data: string }) => void) {
+    (this.listeners[name] ??= []).push(listener);
+  }
+
   emit(data: string) {
     this.onmessage?.({ data });
+  }
+
+  /** A named SSE event (`event: <name>`), e.g. the job log's `end`. */
+  emitEvent(name: string, data: string) {
+    for (const listener of this.listeners[name] ?? []) listener({ data });
   }
 
   /** A browser auto-reconnect on the same instance. */
