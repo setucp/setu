@@ -34,9 +34,18 @@ SETU_INSTALL_DIR=$(cd "$SETU_INSTALL_DIR" && pwd)
 NET=setu-install-net
 CTN=setu-install-test
 BASE_IMAGE=${SETU_TEST_IMAGE:-ubuntu:24.04}
-IMAGE="setu-install-test-image:$(printf '%s' "$BASE_IMAGE" | tr -c 'A-Za-z0-9._-' '_')"
+# SETU_TEST_WITH_SUDO=0 builds the box without sudo (Debian 12 in CI, 0.1.2 I2d).
+WITH_SUDO=${SETU_TEST_WITH_SUDO:-1}
+case "$WITH_SUDO" in 0 | 1) ;; *) echo "test-install.sh: SETU_TEST_WITH_SUDO must be 0 or 1" >&2; exit 2 ;; esac
+IMAGE="setu-install-test-image:$(printf '%s' "$BASE_IMAGE" | tr -c 'A-Za-z0-9._-' '_')-sudo$WITH_SUDO"
 ART_PORT=8124
-TARGET=x86_64-unknown-linux-musl
+# SETU_TEST_TARGET selects the architecture (0.1.2 I2c: the aarch64 job
+# runs natively on the arm runner): x86_64 (default) or aarch64.
+TARGET=${SETU_TEST_TARGET:-x86_64-unknown-linux-musl}
+case "$TARGET" in
+  x86_64-unknown-linux-musl | aarch64-unknown-linux-musl) ;;
+  *) echo "test-install.sh: unsupported SETU_TEST_TARGET $TARGET" >&2; exit 2 ;;
+esac
 HOST=setu.test
 ORIGIN=https://$HOST
 DIST=$SETU_INSTALL_DIR/dist
@@ -190,11 +199,12 @@ mkdir -p "$DIST"
 
 # ---- the release build: musl, no test features (as release.yml)
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
+CC_VAR=CC_${TARGET//-/_}
 if ! command -v musl-gcc >/dev/null 2>&1 &&
-  ! command -v x86_64-linux-musl-gcc >/dev/null 2>&1 &&
-  [ -z "${CC_x86_64_unknown_linux_musl:-}" ]; then
+  ! command -v "${TARGET%%-*}-linux-musl-gcc" >/dev/null 2>&1 &&
+  [ -z "${!CC_VAR:-}" ]; then
   command -v clang >/dev/null 2>&1 || bail "no C compiler for $TARGET (install musl-tools or clang)"
-  export CC_x86_64_unknown_linux_musl=clang
+  export "$CC_VAR=clang"
 fi
 [ -f "$ROOT/ui/dist/index.html" ] || note "ui/dist absent: the binary is built API-only"
 note "building setu ($TARGET, release, no features)"
@@ -203,7 +213,7 @@ note "building setu ($TARGET, release, no features)"
 SETU_BIN=$ROOT/target/$TARGET/release/setu
 file "$SETU_BIN" | grep -q 'static' || bail "setu is not statically linked"
 VERSION=$("$SETU_BIN" --version | awk '{print $2}')
-bash "$ROOT/scripts/package-release.sh" "$VERSION" "$(dirname "$SETU_BIN")" "$DIST" >/dev/null ||
+bash "$ROOT/scripts/package-release.sh" "$VERSION" "$(dirname "$SETU_BIN")" "$DIST" "$TARGET" >/dev/null ||
   bail "package-release.sh failed"
 ARCHIVE=setu-$VERSION-$TARGET.tar.gz
 (cd "$DIST" && sha256sum -c --quiet SHA256SUMS) || bail "SHA256SUMS does not verify"
@@ -211,7 +221,7 @@ note "packaged $ARCHIVE + SHA256SUMS"
 
 note "building image $IMAGE"
 note "base image $BASE_IMAGE"
-docker build -q --build-arg "BASE=$BASE_IMAGE" -t "$IMAGE" "$ROOT/scripts/e2e" \
+docker build -q --build-arg "BASE=$BASE_IMAGE" --build-arg "WITH_SUDO=$WITH_SUDO" -t "$IMAGE" "$ROOT/scripts/e2e" \
   >"$SETU_INSTALL_DIR/image.log" 2>&1 ||
   { tail -20 "$SETU_INSTALL_DIR/image.log"; bail "docker build failed"; }
 

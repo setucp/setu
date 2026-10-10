@@ -17,9 +17,13 @@
 ARG BASE=ubuntu:24.04
 FROM ${BASE}
 
+# WITH_SUDO=0 leaves sudo out (the installer must bring it; Debian 12 in
+# the installer matrix, 0.1.2 I2d).
+ARG WITH_SUDO=1
 RUN apt-get update -qq \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-       systemd systemd-sysv dbus curl ca-certificates sudo python3 iproute2 \
+       systemd systemd-sysv dbus curl ca-certificates python3 iproute2 \
+  && if [ "$WITH_SUDO" = 1 ]; then DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sudo; fi \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
