@@ -23,7 +23,7 @@ pub use servers::{
     HeartbeatInput, HeartbeatOutcome, JoinError, JoinInput, Server, ServerStatus, Servers,
 };
 pub use sessions::{Session, Sessions};
-pub use settings::{Settings, SETUP_TOKEN_HASH, TLS_INTERNAL};
+pub use settings::{Settings, SELF_BACKUP, SETUP_TOKEN_HASH, TLS_INTERNAL};
 pub use sites::{Allocation, CreateError, NewSite, Site, Sites};
 
 /// `Duration` → seconds as `f64` for `make_interval(secs => $n)`.

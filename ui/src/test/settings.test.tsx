@@ -128,4 +128,28 @@ describe("settings", () => {
     await waitFor(() => expect(screen.queryAllByText("ops@example.com")).toHaveLength(0));
     expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith("/api/v1/operators/op2"))).toBe(true);
   });
+  it("panel shows the last control-plane backup", async () => {
+    stubFetch((url) => {
+      if (url.endsWith("/api/v1/auth/me")) return json(me);
+      if (url.endsWith("/api/v1/setup")) return json({ needed: false, public_url: "https://panel.example.com" });
+      if (url.includes("/api/v1/audit")) return json({ audit: [] });
+      if (url.endsWith("/api/v1/operators")) return json({ operators: [me] });
+      if (url.endsWith("/api/v1/panel/backup")) {
+        return json({
+          last_success_at: "2026-10-10T03:01:00Z",
+          file: "setu-20261010T030100Z.dump",
+          size_bytes: 2097152,
+          last_attempt_at: "2026-10-10T03:01:00Z",
+          last_error: null,
+          dir: "/var/lib/setu/backups/setu",
+        });
+      }
+      return notFound();
+    });
+    renderWithClient(<SettingsView />);
+    expect(await screen.findByText("Control-plane backup")).toBeInTheDocument();
+    expect(await screen.findByText("setu-20261010T030100Z.dump")).toBeInTheDocument();
+    expect(screen.getByText(/2\.0 MiB/)).toBeInTheDocument();
+    expect(screen.getByText("/var/lib/setu/backups/setu")).toBeInTheDocument();
+  });
 });

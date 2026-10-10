@@ -12,6 +12,9 @@ pub const SETUP_TOKEN_HASH: &str = "setup_token_hash";
 /// Key of a JSON `true` when the panel's Caddy runs `tls internal`
 /// (the local-server install command then adds `--ca`).
 pub const TLS_INTERNAL: &str = "tls_internal";
+/// Key of the control plane's self-backup record (JSON: last success,
+/// file, size, last attempt and error), written by `setu serve` (R145).
+pub const SELF_BACKUP: &str = "self_backup";
 
 /// Repository accessor; build via [`crate::Db::settings`].
 pub struct Settings<'a> {

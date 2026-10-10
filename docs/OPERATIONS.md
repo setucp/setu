@@ -42,6 +42,9 @@ caddy-api`. Health: `setu agent doctor` on a server; `/healthz` and
 If the control plane is down from 03:00 until after the two-hour
 window, that night's backups are skipped; the next night catches up.
 
+The control plane's own database has a separate nightly dump, run beside
+the scheduler; see *Backing up the control plane*.
+
 ## Site backups
 
 Location, on the server that runs the site:
@@ -100,8 +103,14 @@ sudo -u setu setu backup --out /var/lib/setu/setu-$(date +%F).dump
 `database_url`, passing the password in `pg_dump`'s environment, never
 on its command line. Copy the dump **and** a copy of `setu.toml` (it
 holds the database password and the secret key: store it like a
-private key) off the box. There is no scheduled self-backup in phase 1:
-put the command in a root cron entry or a systemd timer.
+private key) off the box.
+
+`setu serve` also dumps the database itself every night at 03:00 (panel
+time; if the panel was down then, as soon as it is back) into
+`/var/lib/setu/backups/setu/setu-<UTC time>.dump`, keeping the newest
+seven. Settings → Panel shows the last successful one; a failed attempt
+is shown there too and retried hourly. These copies live on the same box:
+still copy them, and `setu.toml`, off it.
 
 ## Restoring the control plane
 

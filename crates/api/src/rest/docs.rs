@@ -17,6 +17,7 @@ use super::auth::{LoginRequest, OperatorOut};
 use super::backups::{BackupJobResponse, BackupListOut, BackupOut};
 use super::jobs::{AuditEntryOut, AuditListOut, AuditQuery, JobListOut, JobsQuery};
 use super::operators::{CreateOperatorRequest, OperatorListOut, SetPasswordRequest};
+use super::panel::SelfBackupOut;
 use super::plans::{CreatePlanRequest, PlanLimitsIn, PlanListOut, PlanOut, UpdatePlanRequest};
 use super::servers::{
     CordonRequest, CreateServerRequest, CreateServerResponse, RotateTokenResponse, ServerListOut,
@@ -61,6 +62,7 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::apps::publish,
         super::apps::versions,
         super::apps::version_prompts,
+        super::panel::backup_status,
         super::plans::list,
         super::plans::create,
         super::plans::get,
@@ -110,6 +112,7 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         CreateServerResponse,
         CordonRequest,
         RotateTokenResponse,
+        SelfBackupOut,
         SetupStatusOut,
         SetupRequest,
         LocalServerRequest,

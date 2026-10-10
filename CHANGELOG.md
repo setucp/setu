@@ -43,6 +43,10 @@ Follow-ups from the first release (spec
 
 ### Control plane
 
+- Nightly self-backup: `setu serve` runs `pg_dump -Fc` of its own
+  database into `<data_dir>/backups/setu/`, keeps seven, and Settings →
+  Panel shows the last successful one (`GET /api/v1/panel/backup`) (#9).
+
 - Server token rotation: `POST /api/v1/servers/{id}/rotate-token` (owner)
   issues a single-use join token and marks the server `rejoining`; the
   old token keeps working until `setu agent join` runs with the new one

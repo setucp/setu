@@ -9,6 +9,7 @@ export type Prompt = components["schemas"]["PromptOut"];
 export type RevealOut = components["schemas"]["RevealOut"];
 export type Server = components["schemas"]["ServerOut"];
 export type RotateTokenResponse = components["schemas"]["RotateTokenResponse"];
+export type SelfBackup = components["schemas"]["SelfBackupOut"];
 export type AppInfo = components["schemas"]["AppOut"];
 export type AppVersion = components["schemas"]["AppVersionOut"];
 export type Job = components["schemas"]["JobOut"];
@@ -198,6 +199,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name }),
     });
+  },
+
+  /** The control plane's own nightly database backup (viewer and above). */
+  panelBackup(): Promise<SelfBackup> {
+    return request("/api/v1/panel/backup");
   },
 
   /** Owner only: a new single-use join token (1 h) for a joined server. */

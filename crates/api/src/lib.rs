@@ -14,6 +14,7 @@ pub mod embed;
 pub mod listen;
 pub mod notifier;
 pub mod rest;
+pub mod self_backup;
 pub mod state;
 pub mod testing;
 

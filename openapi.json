@@ -1163,6 +1163,37 @@
         }
       }
     },
+    "/api/v1/panel/backup": {
+      "get": {
+        "tags": [
+          "super::panel"
+        ],
+        "summary": "The last control-plane self-backup.",
+        "operationId": "backup_status",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfBackupOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/plans": {
       "get": {
         "tags": [
@@ -4699,6 +4730,53 @@
           },
           "server": {
             "$ref": "#/components/schemas/ServerOut"
+          }
+        }
+      },
+      "SelfBackupOut": {
+        "type": "object",
+        "required": [
+          "dir"
+        ],
+        "properties": {
+          "dir": {
+            "type": "string",
+            "description": "Where dumps are written (`<data_dir>/backups/setu`)."
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File name of the newest dump in `dir`."
+          },
+          "last_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One line, no secrets (`pg_dump failed: exit status: 1`)."
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
           }
         }
       },

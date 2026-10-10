@@ -1,13 +1,16 @@
 import * as React from "react";
 import { KeyRound, Monitor, Moon, Sun } from "lucide-react";
-import { useAudit, useMe, useOperators, useSetupStatus } from "@/lib/api";
+import { usePanelBackup, useAudit, useMe, useOperators, useSetupStatus } from "@/lib/api";
 import { useTheme, type Theme } from "@/lib/theme";
+import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { CopyField } from "./CopyButton";
 import { ErrorText } from "./ErrorText";
+import { RelativeTime } from "./RelativeTime";
 import { AuditTable, OperatorsPanel, PasswordDialog } from "./OperatorsPanel";
 import { PageHeader } from "./PageHeader";
 import { Avatar } from "./ui/avatar";
+import { Alert } from "./ui/alert";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
@@ -162,6 +165,7 @@ export function SettingsView() {
             <p className="mt-3 text-xs text-muted-foreground">
               Set with <code>public_url</code> in <code>/etc/setu/setu.toml</code>.
             </p>
+            <SelfBackupStatus />
           </Section>
           <Section id="appearance" title="Appearance" description="Stored in this browser only.">
             <Appearance />
@@ -175,6 +179,38 @@ export function SettingsView() {
           </Section>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The control plane's own nightly `pg_dump` (0.1.1 #9): last success, failures. */
+function SelfBackupStatus() {
+  const backup = usePanelBackup();
+  if (backup.isPending) return <Skeleton className="mt-4 h-10 w-full" />;
+  if (backup.error) return <ErrorText error={backup.error} />;
+  const b = backup.data;
+  const failedLast =
+    b.last_error !== null &&
+    b.last_error !== undefined &&
+    (b.last_success_at === null ||
+      b.last_success_at === undefined ||
+      (b.last_attempt_at ?? "") > b.last_success_at);
+  return (
+    <div className="mt-4 flex flex-col gap-2 border-t pt-4 text-sm">
+      <p className="font-medium">Control-plane backup</p>
+      {b.last_success_at ? (
+        <p>
+          Last backup <RelativeTime iso={b.last_success_at} />: <code>{b.file}</code> (
+          {formatBytes(b.size_bytes)})
+        </p>
+      ) : (
+        <p className="text-muted-foreground">No backup yet. One runs nightly at 03:00.</p>
+      )}
+      {failedLast ? <Alert variant="warning">The last attempt failed: {b.last_error}</Alert> : null}
+      <p className="text-xs text-muted-foreground">
+        Seven are kept in <code>{b.dir}</code>. Copy them, and <code>setu.toml</code>, off this
+        box.
+      </p>
     </div>
   );
 }

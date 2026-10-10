@@ -113,6 +113,10 @@ export function useCreateServer() {
   });
 }
 
+export function usePanelBackup() {
+  return useQuery({ queryKey: ["panel", "backup"], queryFn: () => api.panelBackup() });
+}
+
 export function useRotateServerToken(id: string) {
   const queryClient = useQueryClient();
   return useMutation({

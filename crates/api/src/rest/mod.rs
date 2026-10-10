@@ -7,6 +7,7 @@ pub mod backups;
 pub mod docs;
 pub mod jobs;
 pub mod operators;
+pub mod panel;
 pub mod plans;
 pub mod servers;
 pub mod setup;
@@ -71,6 +72,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(auth::me))
         .route("/operators", get(operators::list).post(operators::create))
+        .route("/panel/backup", get(panel::backup_status))
         .route("/operators/{id}/password", put(operators::set_password))
         .route("/operators/{id}", delete(operators::delete))
         .route("/setup", get(setup::status).post(setup::create_owner))

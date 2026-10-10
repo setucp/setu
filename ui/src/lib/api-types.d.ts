@@ -431,6 +431,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/panel/backup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The last control-plane self-backup. */
+        get: operations["backup_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/plans": {
         parameters: {
             query?: never;
@@ -1372,6 +1389,20 @@ export interface components {
              */
             join_token: string;
             server: components["schemas"]["ServerOut"];
+        };
+        SelfBackupOut: {
+            /** @description Where dumps are written (`<data_dir>/backups/setu`). */
+            dir: string;
+            /** @description File name of the newest dump in `dir`. */
+            file?: string | null;
+            /** Format: date-time */
+            last_attempt_at?: string | null;
+            /** @description One line, no secrets (`pg_dump failed: exit status: 1`). */
+            last_error?: string | null;
+            /** Format: date-time */
+            last_success_at?: string | null;
+            /** Format: int64 */
+            size_bytes?: number | null;
         };
         ServerListOut: {
             servers: components["schemas"]["ServerOut"][];
@@ -2467,6 +2498,33 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    backup_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelfBackupOut"];
+                };
+            };
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

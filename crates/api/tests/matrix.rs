@@ -392,6 +392,8 @@ async fn route_matrix() {
         200,
     )
     .await;
+    ctx.row("GET", "/api/v1/panel/backup", None, 401, 200, 200, 200)
+        .await;
     ctx.row(
         "POST",
         "/api/v1/servers/does-not-exist/rotate-token",
