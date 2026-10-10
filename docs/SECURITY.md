@@ -226,6 +226,9 @@ The server token (`setu_srv_…`, 32 random bytes) is stored as a SHA-256
 hash on the control plane and in `/etc/setu/agent.toml` (`setu`, 0600,
 created 0600 rather than chmodded later) on the agent. Agent polling is
 rate-limited per server. Rotation: [OPERATIONS.md](OPERATIONS.md#rotating-a-server-token).
+An owner rotates a server's token with `POST /servers/{id}/rotate-token`,
+which issues a single-use join token under the rules above (valid one
+hour); the current server token keeps working until the agent re-joins.
 
 ## Secrets at rest
 
@@ -253,5 +256,5 @@ never travel on argv (join token, operator password, role passwords,
 - Enforced disk quotas (reported only).
 - Network isolation between sites on one box.
 - Encryption of local backups, off-box backups.
-- Rotation of `secret_key` and a command to rotate a server token.
+- Rotation of `secret_key`.
 - Telemetry: there is none.

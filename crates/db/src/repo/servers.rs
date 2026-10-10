@@ -345,7 +345,6 @@ impl<'a> Servers<'a> {
         Ok((server, server_token))
     }
 
-    /// Authenticate an agent request by its server token.
     /// Mint a fresh single-use join token (1 h) for a joined server
     /// (#8). `token_hash` is untouched, so the current server token keeps
     /// working until the agent joins with the new one (the first-use
@@ -381,6 +380,7 @@ impl<'a> Servers<'a> {
         ))
     }
 
+    /// Authenticate an agent request by its server token.
     pub async fn by_token(&self, server_token_plain: &str) -> Result<Option<Server>, AppError> {
         sqlx::query_as!(
             Server,
