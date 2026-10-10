@@ -176,3 +176,41 @@ async fn revoke_public_connect_is_issued() {
     assert!(input.contains("DROP DATABASE IF EXISTS \"site_abcd1234\" WITH (FORCE);"));
     assert!(input.contains("DROP ROLE IF EXISTS \"site_abcd1234\";"));
 }
+
+/// Every database and role name is `site_<short>` (`^site_[a-z0-9]{8}$`):
+/// anything else — `postgres`, `template1`, another app's database — is
+/// refused before psql runs (M11).
+#[tokio::test]
+async fn postgres_refuses_non_site_identifiers() {
+    let runner = FakeRunner::new();
+    let pg = PsqlSudo::new(runner.clone());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("x.dump");
+    std::fs::write(&file, b"PGDMP").expect("write");
+    for bad in [
+        "postgres",
+        "template1",
+        "site_ABCD1234",
+        "site_abcd123",
+        "site_abcd12345",
+        "vyasa",
+        "site_abcd_234",
+    ] {
+        pg.create_or_alter(bad, "site_abcd1234", PW)
+            .await
+            .expect_err(bad);
+        pg.create_or_alter("site_abcd1234", bad, PW)
+            .await
+            .expect_err(bad);
+        pg.drop(bad, "site_abcd1234").await.expect_err(bad);
+        pg.drop("site_abcd1234", bad).await.expect_err(bad);
+        pg.dump(bad, &file).await.expect_err(bad);
+        pg.restore_replace(bad, "site_abcd1234", &file)
+            .await
+            .expect_err(bad);
+        pg.restore_replace("site_abcd1234", bad, &file)
+            .await
+            .expect_err(bad);
+    }
+    assert!(runner.calls().is_empty(), "nothing reached psql");
+}

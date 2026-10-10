@@ -154,13 +154,15 @@ impl CommandRunner for FakeRunner {
     }
 }
 
-/// `site_<short>`-style identifiers only: `[A-Za-z0-9_]{1,63}`.
+/// Database and role names are exactly `site_<short>`
+/// (`^site_[a-z0-9]{8}$`): the agent never touches `postgres`,
+/// `template*` or anything a site does not own (M11).
 fn check_ident(name: &str, what: &str) -> anyhow::Result<()> {
-    let ok = !name.is_empty()
-        && name.len() <= 63
-        && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_');
-    if !ok {
-        anyhow::bail!("invalid postgres {what} name");
+    if !name
+        .strip_prefix("site_")
+        .is_some_and(setu_common::is_short_id)
+    {
+        anyhow::bail!("invalid postgres {what} name: must be site_<short id>");
     }
     Ok(())
 }
@@ -441,12 +443,20 @@ mod tests {
 
     #[test]
     fn valid_idents_pass() {
-        check_ident("site_abc123", "database").expect("valid");
+        check_ident("site_abc12345", "database").expect("valid");
     }
 
     #[test]
     fn hostile_idents_fail() {
-        for bad in ["", "a-b", "a b", "a\"; DROP", "x'.y"] {
+        for bad in [
+            "",
+            "a-b",
+            "a b",
+            "a\"; DROP",
+            "x'.y",
+            "site_abc123",
+            "postgres",
+        ] {
             check_ident(bad, "database").expect_err("must reject");
         }
     }
