@@ -1025,7 +1025,10 @@ mod tests {
 
     #[tokio::test]
     async fn failed_repo_setup_removes_the_pgdg_list() {
-        let sys = crate::install_system::RecordingCommands::new().failing_on("apt-get update");
+        // The list write itself fails: the repository step is after the
+        // index refresh, so only the list step can fail here.
+        let sys = crate::install_system::RecordingCommands::new()
+            .failing_on(crate::distro::PGDG_LIST_PATH);
         let mut plan = ubuntu_2404_plan();
         plan.repos = vec![crate::distro::AptRepo {
             list_line: "deb https://apt.example.test noble-pgdg main".into(),
