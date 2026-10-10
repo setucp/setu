@@ -48,6 +48,10 @@ pub enum AgentCmd {
         /// Panel upstream for `--panel-host`.
         #[arg(long, default_value = crate::caddy::DEFAULT_PANEL_UPSTREAM)]
         upstream: String,
+        /// On an unsupported distribution, use the Debian 12 package plan
+        /// (printed) instead of refusing.
+        #[arg(long)]
+        force_distro: bool,
     },
     /// Write the system artefacts only (root; not reachable through sudo):
     /// units, sudoers, firewall and Caddy, or with `--caddy-only` just
@@ -105,6 +109,7 @@ pub async fn run_agent(cmd: AgentCmd) -> anyhow::Result<()> {
             tls,
             panel_host,
             upstream,
+            force_distro,
         } => crate::install::install(&crate::install::InstallOpts {
             control_plane,
             join_token: crate::install::read_join_token().map_err(|e| anyhow::anyhow!("{e}"))?,
@@ -113,6 +118,7 @@ pub async fn run_agent(cmd: AgentCmd) -> anyhow::Result<()> {
             ca,
             tls_internal: tls == Some(TlsMode::Internal),
             panel: panel_route(panel_host, upstream),
+            force_distro,
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}")),
@@ -151,6 +157,7 @@ pub async fn run_agent(cmd: AgentCmd) -> anyhow::Result<()> {
                 ca,
                 tls_internal: false,
                 panel: None,
+                force_distro: false,
             })
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))

@@ -15,6 +15,7 @@ use setu_proto::{JoinRequest, JoinResponse};
 
 use crate::caddy::PanelRoute;
 use crate::config::AgentConfig;
+use crate::distro::{plan_for, Distro, KeyFetch, PackagePlan, Support};
 use crate::install_system::{InstallSystemOpts, RealCommands, SystemCommands};
 
 /// Golden sudoers, embedded so `install` and `check-sudoers.sh` agree.
@@ -42,6 +43,8 @@ pub struct InstallOpts {
     pub tls_internal: bool,
     /// `--panel-host` (+ `--upstream`): the `setu-panel` route.
     pub panel: Option<PanelRoute>,
+    /// `--force-distro`: on an unsupported distribution, use the Debian 12 plan.
+    pub force_distro: bool,
 }
 
 impl std::fmt::Debug for InstallOpts {
@@ -54,6 +57,7 @@ impl std::fmt::Debug for InstallOpts {
             .field("ca", &self.ca)
             .field("tls_internal", &self.tls_internal)
             .field("panel", &self.panel)
+            .field("force_distro", &self.force_distro)
             .finish()
     }
 }
@@ -114,8 +118,9 @@ pub async fn install(opts: &InstallOpts) -> Result<(), InstallError> {
     // Before any system change: a bad URL or CA fails fast.
     check_control_plane(&opts.control_plane, opts.insecure)?;
     crate::config::http_client(opts.ca.as_deref()).map_err(step("ca"))?;
+    let plan = host_plan(opts.force_distro)?;
     let sys = RealCommands;
-    ensure_packages(&sys).await?;
+    ensure_packages(&sys, &plan, &crate::distro::HttpsFetch).await?;
     ensure_user(&sys).await?;
     ensure_dirs(&sys).await?;
     ensure_postgres().await?;
@@ -147,6 +152,44 @@ pub async fn install_system_cmd(opts: &InstallSystemOpts) -> Result<(), InstallE
     crate::install_system::install_system(opts)
         .await
         .map_err(step("install_system"))
+}
+
+/// The package plan for this host (spec 0.1.2 §2). An unsupported
+/// distribution is refused unless `force`, which uses the Debian 12 plan
+/// and says so.
+pub fn host_plan(force: bool) -> Result<PackagePlan, InstallError> {
+    let distro = Distro::detect().map_err(step("distribution"))?;
+    plan_on(&distro, force)
+}
+
+/// [`host_plan`] for a given distribution.
+pub fn plan_on(distro: &Distro, force: bool) -> Result<PackagePlan, InstallError> {
+    match plan_for(distro) {
+        Support::Supported(plan) => Ok(plan),
+        Support::Unsupported { id, version } if !force => Err(InstallError::Step(
+            "distribution",
+            format!(
+                "unsupported distribution {id} {version}; Setu supports Ubuntu 22.04/24.04 and Debian 12/13 (--force-distro uses the Debian 12 plan)"
+            ),
+        )),
+        Support::Unsupported { id, version } => {
+            let debian12 = Distro {
+                id: "debian".to_string(),
+                version_id: "12".to_string(),
+                codename: Some("bookworm".to_string()),
+            };
+            match plan_for(&debian12) {
+                Support::Supported(plan) => {
+                    println!("using the Debian 12 plan for {id} {version} (--force-distro)");
+                    Ok(plan)
+                }
+                Support::Unsupported { .. } => Err(InstallError::Step(
+                    "distribution",
+                    "no Debian 12 plan".to_string(),
+                )),
+            }
+        }
+    }
 }
 
 /// Join only (re-join a configured host).
@@ -215,11 +258,17 @@ pub fn joined_config(
     config
 }
 
+/// `apt-get install -y` and the plan's distribution packages (no Caddy).
+fn install_argv(plan: &PackagePlan) -> Vec<&'static str> {
+    let mut argv: Vec<&'static str> = vec!["apt-get", "install", "-y"];
+    argv.extend(plan.packages.iter().copied());
+    argv
+}
+
 /// The Caddy apt repository, exactly as Caddy documents it
-/// (caddyserver.com/docs/install, "Debian, Ubuntu, Raspbian"), followed
-/// by the package set of spec §5. Each entry is one argv; the two
-/// downloads are `sh -c` pipelines.
-pub fn apt_commands() -> Vec<Vec<&'static str>> {
+/// (caddyserver.com/docs/install, "Debian, Ubuntu, Raspbian"). Each entry
+/// is one argv; the two downloads are `sh -c` pipelines.
+fn caddy_repo_steps() -> Vec<Vec<&'static str>> {
     vec![
         vec!["apt-get", "update"],
         vec![
@@ -251,18 +300,17 @@ pub fn apt_commands() -> Vec<Vec<&'static str>> {
             "/etc/apt/sources.list.d/caddy-stable.list",
         ],
         vec!["apt-get", "update"],
-        vec![
-            "apt-get",
-            "install",
-            "-y",
-            "sudo",
-            "gnupg",
-            "postgresql-16",
-            "caddy",
-            "nftables",
-            "zstd",
-        ],
     ]
+}
+
+/// The Caddy repository steps, then the distribution packages of `plan`
+/// with Caddy (spec §5 with the 0.1.2 plan).
+pub fn apt_commands(plan: &PackagePlan) -> Vec<Vec<&'static str>> {
+    let mut cmds = caddy_repo_steps();
+    let mut install = install_argv(plan);
+    install.push("caddy");
+    cmds.push(install);
+    cmds
 }
 
 /// Caddy's own Debian package from its GitHub release, used when Caddy's
@@ -281,25 +329,22 @@ const CADDY_DEB_PATH: &str = "/var/cache/apt/archives/setu-caddy_2.11.7_amd64.de
 /// (a failing source breaks every later `apt-get update`), install the
 /// spec packages except Caddy from the distribution, then Caddy's
 /// release `.deb`, verified before `apt-get` sees it.
-pub fn caddy_deb_fallback_commands() -> Vec<Vec<String>> {
+pub fn caddy_deb_fallback_commands(plan: &PackagePlan) -> Vec<Vec<String>> {
+    let mut cmds = caddy_only_fallback_commands();
+    let packages = install_argv(plan).into_iter().map(str::to_string).collect();
+    cmds.insert(2, packages);
+    cmds
+}
+
+/// The release-package part of the fallback (download, verify, install,
+/// remove), shared by both fallbacks.
+fn caddy_deb_steps() -> Vec<Vec<String>> {
     let v = |a: &[&str]| {
         a.iter()
             .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
     };
     vec![
-        v(&["rm", "-f", "/etc/apt/sources.list.d/caddy-stable.list"]),
-        v(&["apt-get", "update"]),
-        v(&[
-            "apt-get",
-            "install",
-            "-y",
-            "sudo",
-            "gnupg",
-            "postgresql-16",
-            "nftables",
-            "zstd",
-        ]),
         v(&[
             "curl",
             "-fsSL",
@@ -321,13 +366,27 @@ pub fn caddy_deb_fallback_commands() -> Vec<Vec<String>> {
     ]
 }
 
+/// The fallback for Caddy alone (`ensure_caddy_package`): Caddy's
+/// release package, no distribution packages.
+fn caddy_only_fallback_commands() -> Vec<Vec<String>> {
+    let v = |a: &[&str]| {
+        a.iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+    };
+    let mut cmds = vec![
+        v(&["rm", "-f", "/etc/apt/sources.list.d/caddy-stable.list"]),
+        v(&["apt-get", "update"]),
+    ];
+    cmds.extend(caddy_deb_steps());
+    cmds
+}
+
 /// [`apt_commands`] with the last step installing Caddy alone (the
 /// installer brings Postgres and the rest itself).
 pub fn caddy_apt_commands() -> Vec<Vec<&'static str>> {
-    let mut cmds = apt_commands();
-    if let Some(last) = cmds.last_mut() {
-        *last = vec!["apt-get", "install", "-y", "caddy"];
-    }
+    let mut cmds = caddy_repo_steps();
+    cmds.push(vec!["apt-get", "install", "-y", "caddy"]);
     cmds
 }
 
@@ -369,15 +428,18 @@ pub async fn ensure_caddy_package(sys: &dyn SystemCommands) -> Result<(), Instal
     if status.contains("install ok installed") {
         return Ok(());
     }
-    let fallback: Vec<Vec<String>> = caddy_deb_fallback_commands()
-        .into_iter()
-        .filter(|argv| !(argv.len() > 3 && argv[1] == "install" && argv[3] == "sudo"))
-        .collect();
-    apt_with_caddy_fallback(sys, &caddy_apt_commands(), &fallback).await
+    apt_with_caddy_fallback(sys, &caddy_apt_commands(), &caddy_only_fallback_commands()).await
 }
 
-async fn ensure_packages(sys: &dyn SystemCommands) -> Result<(), InstallError> {
-    apt_with_caddy_fallback(sys, &apt_commands(), &caddy_deb_fallback_commands()).await?;
+async fn ensure_packages(
+    sys: &dyn SystemCommands,
+    plan: &PackagePlan,
+    fetch: &dyn KeyFetch,
+) -> Result<(), InstallError> {
+    crate::distro::ensure_repos(plan, sys, fetch)
+        .await
+        .map_err(step("apt repositories"))?;
+    apt_with_caddy_fallback(sys, &apt_commands(plan), &caddy_deb_fallback_commands(plan)).await?;
     // policy-rc.d (containers, hardened hosts) can skip the deb's own
     // start; converge Postgres explicitly. Caddy is `install_system`'s.
     sys.run("systemctl", &["enable", "--now", "postgresql"])
@@ -725,9 +787,56 @@ mod tests {
         assert!(!AGENT_UNIT_ASSET.contains("ReadWritePaths="));
     }
 
+    fn ubuntu_2404_plan() -> PackagePlan {
+        plan_on(
+            &Distro {
+                id: "ubuntu".into(),
+                version_id: "24.04".into(),
+                codename: Some("noble".into()),
+            },
+            false,
+        )
+        .expect("supported")
+    }
+
+    /// Spec 0.1.2 §2 / Review Focus 3: an unsupported distribution is
+    /// refused unless forced, and the forced plan is Debian 12's.
+    #[test]
+    fn unsupported_distribution_is_refused_unless_forced() {
+        let fedora =
+            Distro::parse(include_str!("../tests/fixtures/os-release/fedora-40")).expect("parses");
+        let err = plan_on(&fedora, false).expect_err("refused");
+        assert!(
+            err.to_string()
+                .contains("unsupported distribution fedora 40"),
+            "{err}"
+        );
+        let forced = plan_on(&fedora, true).expect("forced");
+        let debian12 = plan_on(
+            &Distro::parse(include_str!("../tests/fixtures/os-release/debian-12")).expect("parses"),
+            false,
+        )
+        .expect("supported");
+        assert_eq!(forced, debian12);
+    }
+
+    #[test]
+    fn apt_installs_the_plan_packages_on_debian_13() {
+        let plan = plan_on(
+            &Distro::parse(include_str!("../tests/fixtures/os-release/debian-13")).expect("parses"),
+            false,
+        )
+        .expect("supported");
+        let cmds = apt_commands(&plan);
+        assert_eq!(
+            cmds.last().map(|c| c.join(" ")),
+            Some("apt-get install -y sudo gnupg ca-certificates curl postgresql-17 nftables zstd caddy".to_string())
+        );
+    }
+
     #[test]
     fn apt_adds_the_caddy_repo_before_installing_the_spec_packages() {
-        let cmds = apt_commands();
+        let cmds = apt_commands(&ubuntu_2404_plan());
         let joined: Vec<String> = cmds.iter().map(|c| c.join(" ")).collect();
         let key = joined
             .iter()
@@ -742,7 +851,7 @@ mod tests {
         assert_eq!(joined[install - 1], "apt-get update");
         assert_eq!(
             joined[install],
-            "apt-get install -y sudo gnupg postgresql-16 caddy nftables zstd"
+            "apt-get install -y sudo gnupg ca-certificates curl postgresql-16 nftables zstd caddy"
         );
     }
 
@@ -750,7 +859,9 @@ mod tests {
     async fn caddy_repo_failure_falls_back_to_the_verified_release_package() {
         let sys = crate::install_system::RecordingCommands::new()
             .failing_on("dl.cloudsmith.io/public/caddy/stable/debian.deb.txt");
-        ensure_packages(&sys).await.expect("fallback succeeds");
+        ensure_packages(&sys, &ubuntu_2404_plan(), &crate::distro::HttpsFetch)
+            .await
+            .expect("fallback succeeds");
         let calls = sys.calls();
         let fail = calls
             .iter()
@@ -758,9 +869,10 @@ mod tests {
             .expect("repo step ran");
         let rest = &calls[fail + 1..];
         assert_eq!(rest[0], "rm -f /etc/apt/sources.list.d/caddy-stable.list");
-        assert!(
-            rest.contains(&"apt-get install -y sudo gnupg postgresql-16 nftables zstd".to_string())
-        );
+        assert!(rest.contains(
+            &"apt-get install -y sudo gnupg ca-certificates curl postgresql-16 nftables zstd"
+                .to_string()
+        ));
         let get = rest
             .iter()
             .position(|c| c.starts_with("curl ") && c.ends_with(CADDY_DEB_URL))
@@ -774,9 +886,11 @@ mod tests {
             .position(|c| c == &format!("apt-get install -y {CADDY_DEB_PATH}"))
             .expect("install deb");
         assert!(get < check && check < inst, "{rest:?}");
-        assert!(rest
-            .iter()
-            .all(|c| !c.contains("install -y sudo gnupg postgresql-16 caddy")));
+        assert!(
+            rest.iter()
+                .all(|c| !c
+                    .contains("install -y sudo gnupg ca-certificates curl postgresql-16 caddy"))
+        );
         assert_eq!(
             calls.last().map(String::as_str),
             Some("systemctl enable --now postgresql")
@@ -820,7 +934,11 @@ mod tests {
     #[tokio::test]
     async fn distribution_apt_failure_is_not_retried() {
         let sys = crate::install_system::RecordingCommands::new().failing_on("debian-keyring");
-        assert!(ensure_packages(&sys).await.is_err());
+        assert!(
+            ensure_packages(&sys, &ubuntu_2404_plan(), &crate::distro::HttpsFetch)
+                .await
+                .is_err()
+        );
         assert!(sys.calls().iter().all(|c| !c.contains(CADDY_DEB_URL)));
     }
 
@@ -869,6 +987,7 @@ mod tests {
             ca: None,
             tls_internal: false,
             panel: None,
+            force_distro: false,
         };
         assert!(!format!("{opts:?}").contains("SECRET"));
     }

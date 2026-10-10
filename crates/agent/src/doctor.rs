@@ -50,6 +50,8 @@ pub trait Probe: Send + Sync {
     /// A sysctl's value (`fs.protected_hardlinks` → `/proc/sys/fs/…`).
     fn sysctl(&self, name: &str) -> Option<String>;
     async fn control_plane_ok(&self, config: &AgentConfig) -> bool;
+    /// `/etc/os-release` text, when readable.
+    fn os_release(&self) -> Option<String>;
 }
 
 /// The real host.
@@ -68,6 +70,10 @@ impl Probe for RealProbe {
             is_file: m.file_type().is_file(),
             is_dir: m.file_type().is_dir(),
         })
+    }
+
+    fn os_release(&self) -> Option<String> {
+        std::fs::read_to_string("/etc/os-release").ok()
     }
 
     fn sysctl(&self, name: &str) -> Option<String> {
@@ -105,6 +111,22 @@ pub fn helper_is_safe(file: Option<FileMeta>, parent: Option<FileMeta>) -> bool 
 }
 
 /// Every check, in table order.
+/// The `distro` check: this host's `os-release` names a supported
+/// distribution (spec 0.1.2 §2).
+fn distro_check(probe: &dyn Probe) -> (bool, String) {
+    match probe.os_release().map(|t| crate::distro::Distro::parse(&t)) {
+        Some(Ok(d)) => match crate::distro::plan_for(&d) {
+            crate::distro::Support::Supported(_) => {
+                (true, format!("supported {} {}", d.id, d.version_id))
+            }
+            crate::distro::Support::Unsupported { id, version } => {
+                (false, format!("unsupported {id} {version}"))
+            }
+        },
+        _ => (false, "cannot read /etc/os-release".to_string()),
+    }
+}
+
 pub async fn doctor_rows(
     config: &AgentConfig,
     sys: &dyn SystemCommands,
@@ -128,6 +150,8 @@ pub async fn doctor_rows(
         ),
         "/opt/setu/setu root:root 0755, not writable by setu",
     );
+    let (distro_ok, distro_detail) = distro_check(probe);
+    row("distro", distro_ok, &distro_detail);
     row(
         "sudoers",
         sys.run("visudo", &["-cf", SUDOERS_PATH]).await.is_ok(),
@@ -273,6 +297,7 @@ mod tests {
         metas: BTreeMap<&'static str, FileMeta>,
         sysctls: BTreeMap<&'static str, &'static str>,
         cp_ok: bool,
+        os_release: Option<&'static str>,
     }
 
     #[async_trait::async_trait]
@@ -285,6 +310,9 @@ mod tests {
         }
         async fn control_plane_ok(&self, _config: &AgentConfig) -> bool {
             self.cp_ok
+        }
+        fn os_release(&self) -> Option<String> {
+            self.os_release.map(str::to_string)
         }
     }
 
@@ -307,11 +335,13 @@ mod tests {
             ]),
             sysctls: BTreeMap::from([("fs.protected_hardlinks", "1")]),
             cp_ok: true,
+            os_release: Some(include_str!("../tests/fixtures/os-release/ubuntu-24.04")),
         }
     }
 
-    const NAMES: [&str; 12] = [
+    const NAMES: [&str; 13] = [
         "helper",
+        "distro",
         "sudoers",
         "site-template",
         "protected-hardlinks",
@@ -358,6 +388,7 @@ mod tests {
         caddy.admin().set_tcp_admin_open(true);
         let mut probe = healthy();
         probe.cp_ok = false;
+        probe.os_release = None;
         // Group-writable helper: `setu` could be in that group.
         probe.metas.insert(HELPER_PATH, meta(0, 0o775, false));
         probe.metas.remove(SITE_TEMPLATE_PATH);
