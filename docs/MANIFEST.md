@@ -58,8 +58,8 @@ the archive is extracted under the rules below.
 
 ```toml
 [run.binary."x86_64-linux"]
-url = "https://github.com/miniflux/v2/releases/download/2.2.0/miniflux-linux-amd64"
-sha256 = "…"
+url = "https://github.com/miniflux/v2/releases/download/2.3.3/miniflux-linux-amd64"
+sha256 = "237bf0aed05e86c235b6bcfbad843bfc7bcdd6a628ece672eae3d1e013ddd244"
 format = "binary"
 exec = "miniflux"
 ```
@@ -272,3 +272,21 @@ The corpus also holds a smaller `hello.toml` (with a `prompt` and a
 | `unknown_key.toml` | `error: unknown field 'colour' at [app] line 11` |
 | `vyasa_0_2_0.toml` | `ok` |
 | `workdir_bad.toml` | ``error: unknown variant `home`, expected one of `exec_dir`, `bin`, `data` line 14`` |
+
+## Examples
+
+Complete, provisioned-and-checked manifests live in
+[github.com/setucp/manifests](https://github.com/setucp/manifests):
+
+- [`miniflux/manifest.toml`](https://github.com/setucp/manifests/blob/main/miniflux/manifest.toml):
+  Miniflux, a Go feed reader shipped as a bare executable (`format =
+  "binary"`), configured entirely by environment (`LISTEN_ADDR`,
+  `DATABASE_URL`, `BASE_URL`), migrating and creating its admin on first
+  boot from a `once` password, everything kept in PostgreSQL (no `dirs`).
+- [`hello-axum/manifest.toml`](https://github.com/setucp/manifests/blob/main/hello-axum/manifest.toml):
+  the Rust sample above (`apps/hello`) as a `tar.gz` release with a
+  top-level folder, published in that repository's
+  [`hello-axum-0.1.0`](https://github.com/setucp/manifests/releases/tag/hello-axum-0.1.0)
+  release.
+
+The repository's README explains how to add one.
