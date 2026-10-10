@@ -48,6 +48,7 @@ pub struct Site {
     pub updated_at: DateTime<Utc>,
 }
 
+#[allow(clippy::missing_fields_in_debug)] // reviewed: kept as-is (R150)
 impl std::fmt::Debug for Site {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Site")
@@ -202,6 +203,11 @@ impl<'a> Sites<'a> {
     /// the allocation (short id, port, database names) inside the same
     /// transaction; `new.env_sealed` is ignored. The builder must return
     /// the SEALED env; its error aborts the create.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::single_match_else,
+        clippy::too_many_lines
+    )] // reviewed: kept as-is (R150)
     pub async fn create_with<F>(&self, new: &NewSite, env: F) -> Result<Site, CreateError>
     where
         F: FnOnce(&Allocation) -> Result<Value, AppError>,

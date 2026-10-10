@@ -52,6 +52,7 @@ pub fn render_env(vars: &[EnvPair]) -> Result<String, HelperError> {
     Ok(out)
 }
 
+#[allow(clippy::needless_pass_by_value)] // reviewed: kept as-is (R150)
 pub fn write_env(
     ctx: &Ctx,
     short: &str,

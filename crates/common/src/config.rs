@@ -178,7 +178,7 @@ impl Config {
         let proxies_raw: Vec<String> = match cfg.get_array("trusted_proxies") {
             Ok(values) => values
                 .into_iter()
-                .map(|v| v.into_string())
+                .map(config::Value::into_string)
                 .collect::<Result<_, _>>()
                 .map_err(|e| ConfigError::Load(e.to_string()))?,
             Err(_) => cfg

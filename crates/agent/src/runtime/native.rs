@@ -53,6 +53,7 @@ impl<H, P, C> NativeRuntime<H, P, C> {
     }
 
     /// Run `program` instead of `journalctl` (tests).
+    #[allow(clippy::return_self_not_must_use)] // reviewed: kept as-is (R150)
     pub fn with_journalctl(mut self, program: PathBuf) -> Self {
         self.journalctl = program;
         self

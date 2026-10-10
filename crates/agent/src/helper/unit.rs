@@ -159,6 +159,7 @@ pub fn render_dropin(input: &UnitInput) -> Result<String, HelperError> {
     Ok(text)
 }
 
+#[allow(clippy::needless_pass_by_value)] // reviewed: kept as-is (R150)
 pub fn write_unit(
     ctx: &Ctx,
     short: &str,
@@ -254,7 +255,7 @@ pub trait Systemctl: Send + Sync {
     /// Anything but `inactive`/`failed` counts as active.
     fn is_active(&self, unit: &str) -> Result<bool, HelperError> {
         let props = self.show(unit)?;
-        let state = props.get("ActiveState").map(String::as_str).unwrap_or("");
+        let state = props.get("ActiveState").map_or("", String::as_str);
         Ok(!matches!(state, "inactive" | "failed" | ""))
     }
 }
@@ -293,7 +294,11 @@ fn systemctl(args: &[&str]) -> Result<String, HelperError> {
 /// also enables the instance and `stop` also disables it; `restart`
 /// enables first (it starts a stopped unit too). Ledger R118.
 pub fn op_argv(op: UnitOp, unit: &str) -> Result<Vec<Vec<String>>, HelperError> {
-    let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let v = |a: &[&str]| {
+        a.iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+    };
     Ok(match op {
         UnitOp::Start => vec![v(&["enable", "--now", unit])],
         UnitOp::Stop => vec![v(&["disable", "--now", unit])],
@@ -339,6 +344,7 @@ impl FakeSystemctl {
         Self::default()
     }
 
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     fn lock(&self) -> std::sync::MutexGuard<'_, FakeInner> {
         self.inner.lock().expect("fake systemctl lock")
     }

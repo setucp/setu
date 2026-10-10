@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Provision state-machine tests over [`FakeAgent`] (plan Task 6).
 
 mod common;
@@ -31,6 +33,7 @@ const HAPPY: [&str; 12] = [
 ];
 
 #[tokio::test]
+#[allow(clippy::format_collect, clippy::match_same_arms)] // reviewed: kept as-is (R150)
 async fn provision_happy_path_transcript() {
     let (_test_db, fx) = setup(&manifest_toml("0.1.0")).await;
     let agent = FakeAgent::new();

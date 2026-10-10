@@ -54,7 +54,7 @@ garbage
     fn parses_only_listen_entries() {
         assert_eq!(parse_listening(TCP), [20000, 22]);
         assert_eq!(parse_listening(TCP6), [20002]);
-        assert!(parse_listening("").is_empty());
+        assert_eq!(parse_listening(""), [] as [u16; 0]);
     }
 
     #[test]

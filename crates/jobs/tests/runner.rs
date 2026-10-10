@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Runner tests: leases renewed while a job runs, a killed runner's job
 //! reclaimed by another, and at most two installs per server.
 

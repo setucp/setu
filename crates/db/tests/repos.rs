@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Repository tests over throwaway databases (`setu-testkit::TestDb`),
 //! plan Task 5. Each test gets its own database, so tests run in
 //! parallel safely.
@@ -477,6 +479,7 @@ async fn create_site_refuses_over_85_percent() {
 }
 
 #[tokio::test]
+#[allow(clippy::similar_names)] // reviewed: kept as-is (R150)
 async fn create_site_counts_control_plane_overhead() {
     let (_test, db) = test_db().await;
     let cp = online_server(&db, 2000, true).await;
@@ -698,7 +701,7 @@ async fn finish_requires_lease_holder() {
     let row = db.jobs().get(&job.id).await.unwrap();
     assert_eq!(row.status, "running");
     assert_eq!(row.locked_by.as_deref(), Some("w2"));
-    assert!(row.log.is_empty());
+    assert_eq!(row.log, "");
     assert!(row.payload.get("step").is_none());
 
     // w2 holds it: its writes land.
@@ -848,10 +851,7 @@ async fn expired_command_nulls_secret_fields() {
         .execute(db.pool())
         .await
         .unwrap();
-    db.commands()
-        .prune(Duration::from_secs(48 * 3600))
-        .await
-        .unwrap();
+    db.commands().prune(Duration::from_hours(48)).await.unwrap();
     assert_eq!(db.commands().get(&env.id).await.unwrap().status, "expired");
     assert_redacted(&db, &env.id).await;
 }
@@ -1031,11 +1031,7 @@ async fn prune_deletes_terminal_by_created_at() {
         )
         .await;
     }
-    let n = db
-        .commands()
-        .prune(Duration::from_secs(24 * 3600))
-        .await
-        .unwrap();
+    let n = db.commands().prune(Duration::from_hours(24)).await.unwrap();
     assert_eq!(n, 2);
     assert!(db.commands().get(&ids[0]).await.is_err());
     assert_eq!(db.commands().get(&ids[1]).await.unwrap().status, "done");

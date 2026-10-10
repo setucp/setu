@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! OpenAPI snapshot: the served document must equal the checked-in
 //! `openapi.json` at the workspace root (`UPDATE=1` rewrites it; the UI
 //! codegen reads that file, never a running server).

@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Join: one nonce per install, reused by the retry after a network
 //! error (spec §5).
 

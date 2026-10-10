@@ -73,7 +73,9 @@ pub struct SlotGuard {
 
 impl SiteSlots {
     fn lock(&self) -> std::sync::MutexGuard<'_, SlotsInner> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Join the end of `short`'s queue.

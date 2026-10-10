@@ -145,6 +145,7 @@ impl FakeUsers {
         Self::default()
     }
 
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     fn lock(&self) -> std::sync::MutexGuard<'_, FakeInner> {
         self.inner.lock().expect("fake users lock")
     }

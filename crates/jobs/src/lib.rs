@@ -64,6 +64,7 @@ impl InstallSlots {
     }
 
     /// The server's semaphore (created on first use).
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     pub fn installs_for(&self, server_id: &str) -> Arc<Semaphore> {
         let mut map = self.map.lock().expect("install slots lock");
         map.entry(server_id.to_string())
@@ -152,6 +153,7 @@ impl JobCtx {
     }
 
     /// Bind the context to job `job_id`, leased to `worker`.
+    #[allow(clippy::return_self_not_must_use)] // reviewed: kept as-is (R150)
     pub fn with_job(mut self, job_id: &str, worker: &str) -> Self {
         self.job_id = Some(job_id.to_string());
         self.worker = Some(worker.to_string());
@@ -184,6 +186,7 @@ impl JobCtx {
         AppError::conflict("job lease lost: another runner owns it")
     }
 
+    #[allow(clippy::return_self_not_must_use)] // reviewed: kept as-is (R150)
     pub fn with_verify_delay(mut self, delay: Duration) -> Self {
         self.verify_delay = delay;
         self
@@ -196,6 +199,7 @@ impl JobCtx {
 
     /// Register a plaintext secret: from now on it is replaced by `***`
     /// in every log line and step error of this context.
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     pub fn add_secret(&self, secret: &str) {
         if secret.len() < 4 {
             return; // too short to scrub without mangling ordinary text
@@ -207,6 +211,7 @@ impl JobCtx {
     }
 
     /// `text` with every registered secret replaced by `***`.
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     pub fn redact(&self, text: &str) -> String {
         let secrets = self.secrets.lock().expect("secrets lock");
         secrets
@@ -328,6 +333,7 @@ impl JobCtx {
     }
 }
 
+#[allow(clippy::missing_fields_in_debug)] // reviewed: kept as-is (R150)
 impl std::fmt::Debug for JobCtx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JobCtx")
@@ -568,6 +574,7 @@ pub(crate) fn resolve_input(
     }
 }
 
+#[allow(clippy::needless_pass_by_value)] // reviewed: kept as-is (R150)
 pub(crate) fn resolve_error(e: setu_manifest::ResolveError) -> AppError {
     match &e {
         setu_manifest::ResolveError::MissingPrompt(_) => {
@@ -647,8 +654,14 @@ pub(crate) fn open_env(
         out.push(setu_manifest::EnvVar {
             name: name.to_string(),
             value: plain,
-            secret: v.get("secret").and_then(|b| b.as_bool()).unwrap_or(false),
-            once: v.get("once").and_then(|b| b.as_bool()).unwrap_or(false),
+            secret: v
+                .get("secret")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            once: v
+                .get("once")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
         });
     }
     Ok(out)
@@ -702,8 +715,7 @@ pub(crate) fn stored_db_url<'a>(
 pub(crate) fn db_password(manifest: &Manifest, vars: &[setu_manifest::EnvVar]) -> String {
     stored_db_url(manifest, vars)
         .and_then(url_password)
-        .map(str::to_string)
-        .unwrap_or_else(random_db_password)
+        .map_or_else(random_db_password, str::to_string)
 }
 
 /// Stored DB copy of resolved env: secret values sealed (`v1:`), the rest

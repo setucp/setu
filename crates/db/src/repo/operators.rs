@@ -10,6 +10,7 @@ use crate::{map_db_error, AppError};
 /// 64-bit advisory-lock key for first-owner setup: first 8 bytes of
 /// `sha256("setu-setup")` as big-endian i64. Serialises the check+insert
 /// in `create_first_owner` across concurrently booting control planes.
+#[allow(clippy::unreadable_literal)] // reviewed: kept as-is (R150)
 const SETUP_LOCK_KEY: i64 = -8640242326146119732;
 
 /// One panel user. Holds credential material: `Debug` redacts it.

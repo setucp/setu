@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! `listen.rs` (plan Task 7, spec §8): the control plane on a unix socket.
 
 mod common;

@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Apps integration tests: validator endpoint and URL-publish SSRF guards.
 
 use setu_api::testing::TestServer;

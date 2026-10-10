@@ -83,13 +83,13 @@ impl Default for Timeouts {
     fn default() -> Self {
         Self {
             connect: std::time::Duration::from_secs(10),
-            total: std::time::Duration::from_secs(15 * 60),
+            total: std::time::Duration::from_mins(15),
         }
     }
 }
 
 /// Part files older than this are a dead agent's leftovers.
-const STALE_PART_AGE: std::time::Duration = std::time::Duration::from_secs(86_400);
+const STALE_PART_AGE: std::time::Duration = std::time::Duration::from_hours(24);
 
 /// Remove `<downloads_dir>/*.part` files older than a day (run at agent
 /// start: a killed agent never removed its in-flight part file). Returns
@@ -291,7 +291,7 @@ mod tests {
         for p in [&old, &fresh, &done] {
             std::fs::write(p, b"x").expect("write");
         }
-        let two_days = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 86_400);
+        let two_days = std::time::SystemTime::now() - std::time::Duration::from_hours(48);
         std::fs::File::options()
             .write(true)
             .open(&old)

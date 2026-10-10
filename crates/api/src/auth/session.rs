@@ -59,6 +59,7 @@ impl Session {
 impl<S: Send + Sync> FromRequestParts<S> for Session {
     type Rejection = AppError;
 
+    #[allow(clippy::unused_async_trait_impl)] // reviewed: kept as-is (R150)
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         Ok(parts
             .extensions
@@ -108,6 +109,7 @@ pub fn clear_cookie(secure: bool) -> HeaderValue {
     cookie_header("", 0, secure)
 }
 
+#[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
 fn cookie_header(value: &str, max_age: u64, secure: bool) -> HeaderValue {
     let secure = if secure { "; Secure" } else { "" };
     HeaderValue::from_str(&format!(

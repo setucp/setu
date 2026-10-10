@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Agent protocol integration tests (plan Task 8, spec §4): join,
 //! long-poll commands, results completing `DbAgentClient::call`, heartbeats
 //! and idempotent redelivery.
@@ -21,6 +23,7 @@ fn agent_client() -> reqwest::Client {
 }
 
 /// Register a server and join it; returns `(server_id, server_token)`.
+#[allow(clippy::unreadable_literal)] // reviewed: kept as-is (R150)
 async fn joined(srv: &TestServer, name: &str) -> (String, String) {
     let owner = srv.login_as_owner().await;
     let unique = format!("{name}-{}", setu_common::new_id()[..8].to_lowercase());

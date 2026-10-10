@@ -88,11 +88,13 @@ where
                 crate::helper_client::HelperIo::none(),
             )
             .await
-            .map(|o| RuntimeStatus::from_show(&o.json))
-            .unwrap_or_else(|_| RuntimeStatus {
-                sub: "unknown".to_string(),
-                ..Default::default()
-            });
+            .map_or_else(
+                |_| RuntimeStatus {
+                    sub: "unknown".to_string(),
+                    ..Default::default()
+                },
+                |o| RuntimeStatus::from_show(&o.json),
+            );
         units.push(UnitState {
             short_id: short.clone(),
             active: status.active,
@@ -147,7 +149,7 @@ pub fn sites_on_disk(sites_root: &std::path::Path) -> Vec<String> {
     let mut out: Vec<String> = std::fs::read_dir(sites_root)
         .map(|rd| {
             rd.filter_map(Result::ok)
-                .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
                 .filter_map(|e| e.file_name().into_string().ok())
                 .filter(|n| setu_common::is_short_id(n))
                 .collect()

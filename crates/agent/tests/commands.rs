@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! `commands::handle` (spec §5 semantics) and `dispatch::execute` over
 //! every `Command` variant, with the real helper code running in-process
 //! on a tempdir root (`LocalHelper` + fakes), plus the loop, heartbeat
@@ -170,6 +172,7 @@ fn journalctl_available() -> bool {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // reviewed: kept as-is (R150)
 async fn every_command_kind_is_handled() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
@@ -515,7 +518,7 @@ async fn route_commands_key_off_the_site_short_id() {
         setu_agent::execute("c5", &remove, &rt).await.ok,
         "idempotent"
     );
-    assert!(rt.caddy().admin().routes().is_empty());
+    assert_eq!(rt.caddy().admin().routes(), [] as [serde_json::Value; 0]);
 }
 
 /// `DeleteBackup` refuses a hostile id and is idempotent.
@@ -841,7 +844,7 @@ async fn heartbeat_includes_metrics() {
         .update_state("abcd1234", |r| r.port = 20001)
         .expect("state");
     let hb = setu_agent::heartbeat::collect_heartbeat(agent.runtime()).await;
-    assert!(!hb.boot_id.is_empty());
+    assert_ne!(hb.boot_id, "");
     assert_eq!(hb.units.len(), 1);
     assert!(hb.units[0].active && hb.units[0].pid == Some(42));
     assert_eq!(hb.metrics.len(), 1);
@@ -874,12 +877,11 @@ async fn fake_cp(cp: FakeCp) -> String {
     async fn poll(AxState(cp): AxState<FakeCp>) -> axum::response::Response {
         use axum::response::IntoResponse;
         let next = cp.queue.lock().expect("q").pop_front();
-        match next {
-            Some(env) => axum::Json(env).into_response(),
-            None => {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                StatusCode::NO_CONTENT.into_response()
-            }
+        if let Some(env) = next {
+            axum::Json(env).into_response()
+        } else {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            StatusCode::NO_CONTENT.into_response()
         }
     }
     async fn result(

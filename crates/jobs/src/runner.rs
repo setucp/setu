@@ -152,6 +152,7 @@ impl Worker {
         }
     }
 
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     async fn dispatch(&self, job: &Job) -> Result<(), AppError> {
         let job_id = job.id.clone();
         let ctx = JobCtx::build(

@@ -112,6 +112,7 @@ pub struct Ctx {
     pub units: Box<dyn Systemctl>,
 }
 
+#[allow(clippy::missing_fields_in_debug)] // reviewed: kept as-is (R150)
 impl std::fmt::Debug for Ctx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Ctx").field("root", &self.root).finish()

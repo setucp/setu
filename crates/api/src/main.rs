@@ -229,6 +229,7 @@ fn backup(out: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::unused_async)] // reviewed: kept as-is (R150)
 async fn openapi(out: &std::path::Path) -> Result<(), String> {
     let doc = setu_api::rest::docs::openapi_json_string();
     std::fs::write(out, doc).map_err(|e| format!("cannot write {}: {e}", out.display()))?;

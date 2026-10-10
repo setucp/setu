@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Sites/jobs/backups/logs integration tests (plan Task 9, spec §5/§6).
 //!
 //! Every test boots [`TestServer`] with a scripted [`FakeAgent`]; the
@@ -116,6 +118,7 @@ async fn publish(srv: &TestServer, owner: &reqwest::Client, toml: &str) {
 
 /// Register + join + heartbeat a server straight through the repos
 /// (no HTTP agent dance); returns the server id, online from now.
+#[allow(clippy::unreadable_literal)] // reviewed: kept as-is (R150)
 async fn online_server(srv: &TestServer, name: &str, memory_mb: u64) -> String {
     let (_pending, join_token) = srv
         .db
@@ -451,6 +454,7 @@ async fn update_site_409_while_job_running() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // reviewed: kept as-is (R150)
 async fn env_get_masks_secrets() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
@@ -739,9 +743,10 @@ async fn logs_sse_streams_lines() {
         if acc.contains("sse-alpha-1") && acc.contains("sse-alpha-2") {
             break;
         }
-        if tokio::time::Instant::now() > deadline {
-            panic!("SSE lines missing after 15 s, got: {acc:?}");
-        }
+        assert!(
+            tokio::time::Instant::now() <= deadline,
+            "SSE lines missing after 15 s, got: {acc:?}"
+        );
         let chunk = tokio::time::timeout(Duration::from_secs(5), resp.chunk())
             .await
             .expect("chunk arrives")
@@ -782,9 +787,10 @@ async fn job_log_sse_contains_steps() {
         if acc.contains("step finish: ok") {
             break;
         }
-        if tokio::time::Instant::now() > deadline {
-            panic!("job log missing finish line, got: {acc:?}");
-        }
+        assert!(
+            tokio::time::Instant::now() <= deadline,
+            "job log missing finish line, got: {acc:?}"
+        );
         let chunk = tokio::time::timeout(Duration::from_secs(5), resp.chunk())
             .await
             .expect("chunk arrives")

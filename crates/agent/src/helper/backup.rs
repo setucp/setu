@@ -43,6 +43,7 @@ fn open_site(ctx: &Ctx, short: &str) -> Result<std::os::fd::OwnedFd, HelperError
 /// not owned by `site_uid`, or with `st_nlink > 1`, are skipped and
 /// reported on stderr: the site user could have hard-linked a file it
 /// cannot read (root's, another site's) into its tree (M4).
+#[allow(clippy::cast_sign_loss, clippy::manual_let_else)] // reviewed: kept as-is (R150)
 fn append_tree<W: Write>(
     builder: &mut tar::Builder<W>,
     dir: BorrowedFd<'_>,
@@ -103,6 +104,7 @@ fn append_tree<W: Write>(
     Ok(())
 }
 
+#[allow(clippy::needless_pass_by_value)] // reviewed: kept as-is (R150)
 pub fn backup(
     ctx: &Ctx,
     short: &str,
@@ -136,7 +138,7 @@ pub fn backup(
         .into_inner()
         .map_err(|e| HelperError::io("tar", e))?;
     enc.finish()
-        .and_then(|w| w.flush())
+        .and_then(std::io::Write::flush)
         .map_err(|e| HelperError::io("zstd", e))?;
     Ok(serde_json::Value::Null)
 }
@@ -242,6 +244,7 @@ fn swap_in(
     Err(failure)
 }
 
+#[allow(clippy::needless_pass_by_value)] // reviewed: kept as-is (R150)
 pub fn restore(
     ctx: &Ctx,
     short: &str,

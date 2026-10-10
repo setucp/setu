@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Caddy admin adapter (spec §4 "Caddy", plan Task 10c): route ids
 //! `setu-site-<short>` / `setu-panel`, `GET /id` then `PATCH /id` or
 //! `POST …/servers/setu/routes`, never `PUT`; the socket client speaks
@@ -114,7 +116,7 @@ async fn caddy_remove_missing_is_ok() {
         .expect("create");
     caddy.remove_route(&id).await.expect("remove");
     caddy.remove_route(&id).await.expect("remove again");
-    assert!(caddy.admin().routes().is_empty());
+    assert_eq!(caddy.admin().routes(), [] as [serde_json::Value; 0]);
     let calls = methods_and_paths(caddy.admin());
     assert_eq!(
         calls
@@ -136,6 +138,7 @@ struct FakeCaddyServer {
 }
 
 impl FakeCaddyServer {
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)] // reviewed: kept as-is (R150)
     async fn start() -> Self {
         use axum::body::Bytes;
         use axum::http::{HeaderMap, Method, StatusCode, Uri};
@@ -221,7 +224,10 @@ async fn caddy_socket_client_talks_http1_over_unix() {
     let mut config = setu_agent::install_system::caddy_base_config(true, None).expect("base");
     config["apps"]["http"]["servers"]["setu"]["routes"] = serde_json::json!([]);
     caddy.load(&config).await.expect("load");
-    assert!(caddy.list_route_ids().await.expect("ids").is_empty());
+    assert_eq!(
+        caddy.list_route_ids().await.expect("ids"),
+        [] as [std::string::String; 0]
+    );
     assert_eq!(server.admin.config()["apps"]["tls"], config["apps"]["tls"]);
 
     let calls = methods_and_paths(&server.admin);

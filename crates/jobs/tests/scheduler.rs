@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Scheduler tests on a [`FixedClock`]: one nightly backup per site per
 //! day, and `delete_backup` jobs for copies past retention.
 

@@ -81,6 +81,7 @@ impl Server {
     }
 }
 
+#[allow(clippy::missing_fields_in_debug)] // reviewed: kept as-is (R150)
 impl std::fmt::Debug for Server {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let redact = |o: &Option<String>| o.as_ref().map(|_| "[redacted]");
@@ -119,6 +120,7 @@ pub struct JoinInput {
     pub disk_mb: i64,
 }
 
+#[allow(clippy::missing_fields_in_debug)] // reviewed: kept as-is (R150)
 impl std::fmt::Debug for JoinInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JoinInput")
@@ -197,6 +199,7 @@ impl<'a> Servers<'a> {
     /// Register a pending server and mint its single-use join token
     /// (valid 1 hour). Returns the row plus the plaintext token: the
     /// only time the plaintext exists.
+    #[allow(clippy::needless_continue)] // reviewed: kept as-is (R150)
     pub async fn create_pending(
         &self,
         name: &str,
@@ -235,6 +238,7 @@ impl<'a> Servers<'a> {
 
     /// Redeem a join token (see the module docs for the nonce rules).
     /// Returns the server and the plaintext server token.
+    #[allow(clippy::cast_precision_loss, clippy::similar_names)] // reviewed: kept as-is (R150)
     pub async fn join(
         &self,
         join_token_plain: &str,
@@ -379,6 +383,7 @@ impl<'a> Servers<'a> {
     /// on this server are ignored, so a compromised agent cannot inject
     /// another server's metrics. The sealed join token is dropped once
     /// its retry window has passed.
+    #[allow(clippy::cast_precision_loss)] // reviewed: kept as-is (R150)
     pub async fn heartbeat(
         &self,
         id: &str,

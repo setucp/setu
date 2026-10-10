@@ -267,6 +267,7 @@ impl<'de> Deserialize<'de> for EnvSpec {
             ));
         }
 
+        #[allow(clippy::items_after_statements)] // reviewed: kept as-is (R150)
         fn table(map: std::collections::BTreeMap<String, serde_json::Value>) -> serde_json::Value {
             serde_json::Value::Object(map.into_iter().collect())
         }

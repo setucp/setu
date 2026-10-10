@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! `install_system` (spec §4 "Not a helper verb", "Network", "Caddy";
 //! plan Task 10b): runs as real root from `setu agent install` and the
 //! installer; here against a `--root` tempdir with recording fakes.

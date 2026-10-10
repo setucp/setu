@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Delete and delete_backup over [`FakeAgent`] (plan Task 6).
 
 mod common;

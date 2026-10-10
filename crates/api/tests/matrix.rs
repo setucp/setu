@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Authz route matrix: every route × {anonymous, viewer, operator, owner}
 //! → the expected status (mirrors the plan's Task 7 matrix).
 
@@ -136,6 +138,7 @@ fn unique(suffix: &str) -> String {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // reviewed: kept as-is (R150)
 async fn route_matrix() {
     let ctx = Ctx::new().await;
 

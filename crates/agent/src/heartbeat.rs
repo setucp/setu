@@ -215,6 +215,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unreadable_literal)] // reviewed: kept as-is (R150)
     fn df_output_parses_last_number() {
         assert_eq!(parse_df_avail("Avail\n  123456\n"), 123456);
         assert_eq!(parse_df_avail("garbage"), 0);

@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! `PsqlSudo` over a recording `FakeRunner` (plan Task 10c): exact argv,
 //! password only on stdin, redacted errors, REVOKE, and the replacing
 //! restore order.

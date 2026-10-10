@@ -124,6 +124,7 @@ pub struct CreateSiteRequest {
 }
 
 // Holds prompt answers: `Debug` prints their names only.
+#[allow(clippy::missing_fields_in_debug)] // reviewed: kept as-is (R150)
 impl std::fmt::Debug for CreateSiteRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CreateSiteRequest")
@@ -221,6 +222,7 @@ pub struct JobResponse {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+#[allow(clippy::struct_excessive_bools)] // reviewed: kept as-is (R150)
 pub struct EnvEntryOut {
     pub name: String,
     /// Plaintext for non-secret vars, [`MASKED_VALUE`] for secrets.
@@ -267,8 +269,14 @@ fn stored_env(site: &setu_db::Site) -> Vec<StoredVar> {
             Some(StoredVar {
                 name: v.get("name")?.as_str()?.to_string(),
                 value: v.get("value")?.as_str()?.to_string(),
-                secret: v.get("secret").and_then(|b| b.as_bool()).unwrap_or(false),
-                once: v.get("once").and_then(|b| b.as_bool()).unwrap_or(false),
+                secret: v
+                    .get("secret")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                once: v
+                    .get("once")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
             })
         })
         .collect()
@@ -397,6 +405,7 @@ async fn refuse_reserved_domain(state: &AppState, domain: &str) -> Result<(), Ap
         (status = 409, body = super::ErrorBody),
     )
 )]
+#[allow(clippy::too_many_lines)] // reviewed: kept as-is (R150)
 pub async fn create(
     State(state): State<AppState>,
     session: Session,

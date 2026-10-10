@@ -54,7 +54,10 @@ impl RuntimeStatus {
             n_restarts: n("NRestarts")
                 .and_then(|x| u32::try_from(x).ok())
                 .unwrap_or(0),
-            data_bytes: v.get("data_bytes").and_then(|x| x.as_u64()).unwrap_or(0),
+            data_bytes: v
+                .get("data_bytes")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
         }
     }
 }

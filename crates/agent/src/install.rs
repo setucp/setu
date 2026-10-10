@@ -221,7 +221,11 @@ const CADDY_DEB_PATH: &str = "/var/cache/apt/archives/setu-caddy_2.11.7_amd64.de
 /// spec packages except Caddy from the distribution, then Caddy's
 /// release `.deb`, verified before `apt-get` sees it.
 pub fn caddy_deb_fallback_commands() -> Vec<Vec<String>> {
-    let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let v = |a: &[&str]| {
+        a.iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+    };
     vec![
         v(&["rm", "-f", "/etc/apt/sources.list.d/caddy-stable.list"]),
         v(&["apt-get", "update"]),
@@ -428,10 +432,12 @@ fn hostname() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+#[allow(clippy::cast_possible_truncation)] // reviewed: kept as-is (R150)
 fn cpu_cores() -> u32 {
     std::fs::read_to_string("/proc/cpuinfo")
-        .map(|t| t.lines().filter(|l| l.starts_with("processor")).count() as u32)
-        .unwrap_or(1)
+        .map_or(1, |t| {
+            t.lines().filter(|l| l.starts_with("processor")).count() as u32
+        })
         .max(1)
 }
 

@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Auth integration tests (plan Task 7, spec §7): the session cookie,
 //! logout and password changes ending sessions, the login limiter per
 //! client IP, which `X-Forwarded-For` is believed, and the `Origin`
@@ -100,6 +102,7 @@ async fn login_sets_cookie_and_me_works() {
 }
 
 #[tokio::test]
+#[allow(clippy::similar_names)] // reviewed: kept as-is (R150)
 async fn cookie_is_secure_only_for_https_public_url() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;

@@ -182,7 +182,7 @@ pub(crate) mod sse {
     /// Longest life of one SSE response; the stream then ends with a
     /// `reconnect` event and the client opens a new one (a forgotten tab
     /// cannot hold an agent poll loop open forever).
-    pub const MAX_LIFETIME: Duration = Duration::from_secs(30 * 60);
+    pub const MAX_LIFETIME: Duration = Duration::from_mins(30);
 
     /// An SSE comment: ignored by `EventSource`, but the write fails once
     /// the client is gone, which is how an idle stream notices.

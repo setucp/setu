@@ -15,7 +15,7 @@ use crate::notifier::Notifier;
 /// Failed logins per source IP within [`RATE_LIMIT_WINDOW`]; at
 /// [`MAX_LOGIN_FAILURES`] the next attempt is rejected with 429.
 const MAX_LOGIN_FAILURES: usize = 10;
-const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(15 * 60);
+const RATE_LIMIT_WINDOW: Duration = Duration::from_mins(15);
 /// Hard cap on tracked IPs so a distributed scan cannot grow the map
 /// without bound; the oldest entry is evicted first.
 const MAX_LOGIN_IPS: usize = 10_000;
@@ -45,6 +45,7 @@ pub struct AppState {
     agent_poll_limit: usize,
 }
 
+#[allow(clippy::missing_fields_in_debug)] // reviewed: kept as-is (R150)
 impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppState")
@@ -83,6 +84,7 @@ impl AppState {
 
     /// Override the per-server poll ceiling (tests set a tiny limit to
     /// exercise the 429 path without issuing 600 requests).
+    #[allow(clippy::return_self_not_must_use)] // reviewed: kept as-is (R150)
     pub fn with_agent_poll_limit(mut self, limit: usize) -> Self {
         self.agent_poll_limit = limit;
         self
@@ -212,7 +214,7 @@ mod tests {
         let now = Instant::now();
         let old = now
             .checked_sub(RATE_LIMIT_WINDOW + Duration::from_secs(1))
-            .unwrap_or_else(|| now - Duration::from_secs(1));
+            .unwrap_or_else(|| now.checked_sub(Duration::from_secs(1)).unwrap());
         table.insert(ip(0, 1), vec![old]);
         table.insert(ip(0, 2), vec![old, now]);
         prune_login_table(&mut table, now);
@@ -225,6 +227,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_truncation)] // reviewed: kept as-is (R150)
     fn oldest_ip_is_the_eviction_candidate() {
         let now = Instant::now();
         let mut table: HashMap<IpAddr, Vec<Instant>> = HashMap::new();

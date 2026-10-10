@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Update state-machine tests over [`FakeAgent`] (plan Task 6).
 
 mod common;
@@ -49,7 +51,10 @@ const UPDATE: [&str; 8] = [
 ];
 
 fn update_kinds() -> Vec<String> {
-    UPDATE.iter().map(|s| s.to_string()).collect()
+    UPDATE
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect()
 }
 
 #[tokio::test]

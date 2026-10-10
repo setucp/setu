@@ -21,6 +21,12 @@ Follow-ups from the first release (spec
   the installer restarts `setu` and the local agent only when the binary
   changed. Re-running `setu agent install` is not needed.
 
+### Internal
+
+- Workspace lints: `clippy::pedantic`, `unwrap_used`, `expect_used` as
+  warnings; CI runs clippy with `--all-features` and fails on any
+  warning (#10).
+
 ## 0.1.0 — 2026-10-10
 
 First release (MVP): a control panel for single-binary web apps on

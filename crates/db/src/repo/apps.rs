@@ -39,6 +39,7 @@ impl<'a> Apps<'a> {
     /// validated manifest JSON object (`{ app: { id, name, version,
     /// homepage? }, … }`). Re-publishing the same version replaces the
     /// stored manifest; the original `published_at` is kept.
+    #[allow(clippy::redundant_closure_for_method_calls)] // reviewed: kept as-is (R150)
     pub async fn upsert_version(&self, manifest: &Value) -> Result<AppVersion, AppError> {
         let app = manifest
             .get("app")
@@ -132,6 +133,7 @@ impl<'a> Apps<'a> {
         .ok_or_else(|| AppError::not_found("app not found"))
     }
 
+    #[allow(clippy::redundant_closure_for_method_calls)] // reviewed: kept as-is (R150)
     pub async fn versions(&self, app_id: &str) -> Result<Vec<AppVersion>, AppError> {
         sqlx::query_as!(
             AppVersionRow,
@@ -145,6 +147,7 @@ impl<'a> Apps<'a> {
         .map(|rows| rows.into_iter().map(|r| r.into_version()).collect())
     }
 
+    #[allow(clippy::redundant_closure_for_method_calls)] // reviewed: kept as-is (R150)
     pub async fn version(&self, app_id: &str, version: &str) -> Result<AppVersion, AppError> {
         sqlx::query_as!(
             AppVersionRow,

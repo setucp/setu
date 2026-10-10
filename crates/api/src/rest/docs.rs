@@ -165,6 +165,7 @@ pub struct ApiDoc;
 /// The canonical document bytes: pretty JSON plus one trailing newline.
 /// Both `setu openapi` and the snapshot test use this function so the
 /// checked-in file and the served document can never drift.
+#[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
 pub fn openapi_json_string() -> String {
     format!(
         "{}\n",

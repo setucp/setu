@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! `reconcile::run`: Caddy rebuilt from `state.json` and `agent.toml`.
 
 use setu_agent::caddy::{CaddyAdmin, PanelRoute, ROUTES_PATH};
@@ -80,7 +82,7 @@ async fn reconcile_restores_missing_routes_including_panel_and_removes_stale() {
         let routes = caddy.admin().routes();
         let ids: Vec<&str> = routes.iter().filter_map(|r| r["@id"].as_str()).collect();
         let mut sorted = ids.clone();
-        sorted.sort();
+        sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), ids.len(), "no duplicate @id: {ids:?}");
         assert_eq!(
