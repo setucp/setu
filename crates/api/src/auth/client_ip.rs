@@ -101,6 +101,7 @@ impl ClientIp {
 impl FromRequestParts<AppState> for ClientIp {
     type Rejection = AppError;
 
+    #[allow(clippy::unused_async_trait_impl)] // reviewed: kept as-is (R150)
     async fn from_request_parts(
         parts: &mut Parts,
         state: &AppState,

@@ -45,6 +45,7 @@ pub struct ControlPlane {
     wait_secs: u64,
 }
 
+#[allow(clippy::missing_fields_in_debug)] // reviewed: kept as-is (R150)
 impl std::fmt::Debug for ControlPlane {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ControlPlane")

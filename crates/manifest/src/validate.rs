@@ -158,6 +158,7 @@ const DIR_RULE: &str = "must match [a-z][a-z0-9-]{0,31}";
 /// Run the semantic rules over an already-parsed manifest, collecting
 /// every failure. `src` is the original TOML source, used only to
 /// attach line numbers.
+#[allow(clippy::too_many_lines)] // reviewed: kept as-is (R150)
 pub fn validate(manifest: &Manifest, src: &str) -> Vec<ManifestError> {
     let mut errors = Vec::new();
     let mut push = |path: String, line: Option<usize>, message: String| {
@@ -336,7 +337,7 @@ pub fn validate(manifest: &Manifest, src: &str) -> Vec<ManifestError> {
                 if from.from == EnvSource::Dir {
                     match &from.dir {
                         Some(dir) if !validate::dir(dir) => {
-                            push(path, line, format!("env.{name} dir \"{dir}\" {DIR_RULE}"))
+                            push(path, line, format!("env.{name} dir \"{dir}\" {DIR_RULE}"));
                         }
                         Some(dir) if manifest.needs.dirs.iter().any(|d| d == dir) => {}
                         Some(dir) => push(

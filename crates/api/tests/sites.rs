@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Sites/jobs/backups/logs integration tests (plan Task 9, spec §5/§6).
 //!
 //! Every test boots [`TestServer`] with a scripted [`FakeAgent`]; the
@@ -116,6 +118,7 @@ async fn publish(srv: &TestServer, owner: &reqwest::Client, toml: &str) {
 
 /// Register + join + heartbeat a server straight through the repos
 /// (no HTTP agent dance); returns the server id, online from now.
+#[allow(clippy::unreadable_literal)] // reviewed: kept as-is (R150)
 async fn online_server(srv: &TestServer, name: &str, memory_mb: u64) -> String {
     let (_pending, join_token) = srv
         .db
@@ -451,6 +454,7 @@ async fn update_site_409_while_job_running() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // reviewed: kept as-is (R150)
 async fn env_get_masks_secrets() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
@@ -619,9 +623,13 @@ async fn delete_site_runs_delete_job_and_removes_row() {
     let del_body: Value = del.json().await.expect("delete body is json");
     let del_job = del_body["job"]["id"].as_str().expect("job id").to_string();
 
-    // The delete job removes the site row (cascading its own job row);
-    // poll until the job row is gone, then the site must 404 too.
-    poll_job(&srv, &owner, &del_job).await;
+    // The delete job removes the site row; its job row stays (site_id
+    // NULL, migration 0002) and ends done. The site must 404 too.
+    let finished = poll_job(&srv, &owner, &del_job)
+        .await
+        .expect("delete job row kept");
+    assert_eq!(finished["status"], json!("done"), "{finished}");
+    assert_eq!(finished["site_id"], Value::Null);
     for _ in 0..40 {
         let got = owner
             .get(srv.url(&format!("/api/v1/sites/{site_id}")))
@@ -739,9 +747,10 @@ async fn logs_sse_streams_lines() {
         if acc.contains("sse-alpha-1") && acc.contains("sse-alpha-2") {
             break;
         }
-        if tokio::time::Instant::now() > deadline {
-            panic!("SSE lines missing after 15 s, got: {acc:?}");
-        }
+        assert!(
+            tokio::time::Instant::now() <= deadline,
+            "SSE lines missing after 15 s, got: {acc:?}"
+        );
         let chunk = tokio::time::timeout(Duration::from_secs(5), resp.chunk())
             .await
             .expect("chunk arrives")
@@ -782,9 +791,10 @@ async fn job_log_sse_contains_steps() {
         if acc.contains("step finish: ok") {
             break;
         }
-        if tokio::time::Instant::now() > deadline {
-            panic!("job log missing finish line, got: {acc:?}");
-        }
+        assert!(
+            tokio::time::Instant::now() <= deadline,
+            "job log missing finish line, got: {acc:?}"
+        );
         let chunk = tokio::time::timeout(Duration::from_secs(5), resp.chunk())
             .await
             .expect("chunk arrives")
@@ -1899,4 +1909,92 @@ async fn delete_backup_serialises_with_the_sites_jobs() {
     poll_job(&srv, &owner, &rj).await.expect("restart done");
     let resp = owner.delete(&url).send().await.expect("delete");
     assert_eq!(resp.status(), reqwest::StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn site_list_carries_latest_metrics() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let viewer = srv.login_as("viewer").await;
+    let (site_id, server_id) = running_site(&srv, &owner, "listmetric").await;
+    let short = srv.db.sites().get(&site_id).await.expect("site").short_id;
+    srv.db
+        .metrics()
+        .insert_batch(
+            &server_id,
+            &[setu_proto::SiteMetric {
+                short_id: short,
+                at: chrono::Utc::now(),
+                cpu_seconds: 3.0,
+                memory_bytes: 184 << 20,
+                disk_bytes: 9 << 20,
+            }],
+        )
+        .await
+        .expect("insert");
+    let body: Value = viewer
+        .get(srv.url("/api/v1/sites"))
+        .send()
+        .await
+        .expect("list sends")
+        .json()
+        .await
+        .expect("json");
+    let row = body["sites"]
+        .as_array()
+        .expect("sites")
+        .iter()
+        .find(|s| s["id"] == json!(site_id))
+        .expect("our site");
+    assert_eq!(row["status"], json!("running"), "site fields are flattened");
+    assert_eq!(row["metrics"]["memory_bytes"], json!(184 << 20));
+    assert_eq!(row["metrics"]["disk_bytes"], json!(9 << 20));
+}
+
+#[tokio::test]
+async fn get_site_includes_admin_url() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_id, _) = running_site(&srv, &owner, "admin").await;
+    let site = get_site(&srv, &owner, &site_id).await;
+    let domain = site["domain"].as_str().expect("domain");
+    // hello_toml declares admin_path = "/".
+    assert_eq!(site["admin_url"], json!(format!("https://{domain}/")));
+}
+
+/// Review Focus 4: only `prompt` rules, never a value of any rule.
+#[tokio::test]
+async fn version_prompts_lists_only_prompt_rules_and_no_values() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let viewer = srv.login_as("viewer").await;
+    publish(&srv, &owner, &hello_toml("0.1.0")).await;
+
+    let resp = viewer
+        .get(srv.url("/api/v1/apps/hello/versions/0.1.0/prompts"))
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let text = resp.text().await.expect("body");
+    let body: Value = serde_json::from_str(&text).expect("json");
+    assert_eq!(
+        body,
+        json!({"prompts": [{"name": "HELLO_NAME", "label": "Display name", "secret": true}]})
+    );
+    assert!(
+        !text.contains("hello-world"),
+        "a literal value leaked: {text}"
+    );
+    assert!(!text.contains("\"value\""), "{text}");
+
+    let missing = viewer
+        .get(srv.url("/api/v1/apps/hello/versions/9.9.9/prompts"))
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
 }

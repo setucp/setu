@@ -7,7 +7,7 @@
       "name": "AGPL-3.0-only",
       "identifier": "AGPL-3.0-only"
     },
-    "version": "0.1.0"
+    "version": "0.1.1"
   },
   "paths": {
     "/agent/v1/commands": {
@@ -401,6 +401,67 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AppVersionListOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/apps/{id}/versions/{version}/prompts": {
+      "get": {
+        "tags": [
+          "super::apps"
+        ],
+        "summary": "The `prompt` rules of one version, by name (viewer and above). Other\nrules (`value`, `generate`, `from`) are never included, and neither\nis any stored answer.",
+        "operationId": "version_prompts",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "App id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "App version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptListOut"
                 }
               }
             }
@@ -962,6 +1023,71 @@
         }
       }
     },
+    "/api/v1/operators/{id}": {
+      "delete": {
+        "tags": [
+          "super::operators"
+        ],
+        "summary": "Delete an operator (owner only). Refuses yourself and the last owner\n(409, R149); every session of that operator ends with the row.",
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Operator id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/operators/{id}/password": {
       "put": {
         "tags": [
@@ -1025,6 +1151,37 @@
             }
           },
           "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/panel/backup": {
+      "get": {
+        "tags": [
+          "super::panel"
+        ],
+        "summary": "The last control-plane self-backup.",
+        "operationId": "backup_status",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfBackupOut"
+                }
+              }
+            }
+          },
+          "401": {
             "description": "",
             "content": {
               "application/json": {
@@ -1544,6 +1701,78 @@
             }
           },
           "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/servers/{id}/rotate-token": {
+      "post": {
+        "tags": [
+          "super::servers"
+        ],
+        "summary": "Rotate a server's token (owner only, #8): issue a join token; the\nserver shows `rejoining` until its agent joins with it.",
+        "operationId": "rotate_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Server id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateTokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
             "description": "",
             "content": {
               "application/json": {
@@ -4371,6 +4600,40 @@
           }
         }
       },
+      "PromptListOut": {
+        "type": "object",
+        "required": [
+          "prompts"
+        ],
+        "properties": {
+          "prompts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptOut"
+            }
+          }
+        }
+      },
+      "PromptOut": {
+        "type": "object",
+        "description": "One `prompt` env rule of an app version: what an operator is asked\nfor. Carries no value, ever (#7).",
+        "required": [
+          "name",
+          "label",
+          "secret"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          }
+        }
+      },
       "PublishRequest": {
         "type": "object",
         "properties": {
@@ -4445,6 +4708,75 @@
           "password": {
             "type": "string",
             "description": "The caller's own password (re-authentication)."
+          }
+        }
+      },
+      "RotateTokenResponse": {
+        "type": "object",
+        "description": "`POST /servers/{id}/rotate-token`: the new join token (shown once)\nand the command to run on the server. Holds a credential: `Debug`\nredacts it.",
+        "required": [
+          "server",
+          "join_token",
+          "join_command"
+        ],
+        "properties": {
+          "join_command": {
+            "type": "string",
+            "description": "`setu agent join` (reads the control plane from agent.toml)."
+          },
+          "join_token": {
+            "type": "string",
+            "description": "Single-use join token (valid 1 hour). Give it to `setu agent join`\nas `SETU_JOIN_TOKEN` or on stdin; the current server token keeps\nworking until that join."
+          },
+          "server": {
+            "$ref": "#/components/schemas/ServerOut"
+          }
+        }
+      },
+      "SelfBackupOut": {
+        "type": "object",
+        "required": [
+          "dir"
+        ],
+        "properties": {
+          "dir": {
+            "type": "string",
+            "description": "Where dumps are written (`<data_dir>/backups/setu`)."
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File name of the newest dump in `dir`."
+          },
+          "last_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One line, no secrets (`pg_dump failed: exit status: 1`)."
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
           }
         }
       },
@@ -4639,6 +4971,13 @@
           {
             "type": "object",
             "properties": {
+              "admin_url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "`https://<domain><app.admin_path>`, or `null` when the manifest\nnames no usable path (or the version row is missing)."
+              },
               "metrics": {
                 "oneOf": [
                   {
@@ -4652,7 +4991,7 @@
             }
           }
         ],
-        "description": "`GET /sites/{id}`: the site plus its latest metric sample."
+        "description": "`GET /sites/{id}`: the site plus its latest metric sample and admin page."
       },
       "SiteJobResponse": {
         "type": "object",
@@ -4669,6 +5008,29 @@
           }
         }
       },
+      "SiteListItemOut": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SiteOut"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "metrics": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SiteMetricOut"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "One row of `GET /sites`: the site plus its newest 1-minute sample\n(`null` before the first heartbeat after provisioning)."
+      },
       "SiteListOut": {
         "type": "object",
         "required": [
@@ -4678,7 +5040,7 @@
           "sites": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/SiteOut"
+              "$ref": "#/components/schemas/SiteListItemOut"
             }
           }
         }

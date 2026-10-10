@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Validator corpus (plan Task 3): every `*.toml` has a `*.expect` holding
 //! `ok` or the single `error: <message> line <n>` the validator reports.
 

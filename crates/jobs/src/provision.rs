@@ -70,6 +70,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
     }
 }
 
+#[allow(clippy::too_many_lines)] // reviewed: kept as-is (R150)
 async fn machine(ctx: &JobCtx, site: &Site, steps: &Steps) -> Result<(), (&'static str, AppError)> {
     let server = site.server_id.as_str();
     let short = site.short_id.clone();
@@ -203,7 +204,11 @@ async fn validate(ctx: &JobCtx, site: &Site) -> Result<Prep, AppError> {
         )));
     }
     let server = ctx.db.servers().get(&site.server_id).await?;
-    if server.status(ctx.clock.now()) != setu_db::ServerStatus::Online {
+    // `rejoining` is an online server holding an outstanding join token.
+    if !matches!(
+        server.status(ctx.clock.now()),
+        setu_db::ServerStatus::Online | setu_db::ServerStatus::Rejoining
+    ) {
         return Err(AppError::validation(format!(
             "server {} is offline",
             server.name
@@ -276,8 +281,7 @@ async fn verify(ctx: &JobCtx, site: &Site) -> Result<(), AppError> {
             },
         )
         .await;
-    let active =
-        matches!(&status, Ok(out) if out.get("active").and_then(|a| a.as_bool()) == Some(true));
+    let active = matches!(&status, Ok(out) if out.get("active").and_then(serde_json::Value::as_bool) == Some(true));
     if active {
         return Ok(());
     }

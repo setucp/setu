@@ -38,6 +38,7 @@ fn err(id: &str, log: &str, e: impl std::fmt::Display) -> CommandResult {
 
 /// Execute one command to a result. Covers every `Command` variant; there
 /// is no fallthrough arm, so adding a variant breaks compilation here.
+#[allow(clippy::too_many_lines)] // reviewed: kept as-is (R150)
 pub async fn execute<H, P, C>(
     cmd_id: &str,
     cmd: &Command,

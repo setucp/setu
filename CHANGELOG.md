@@ -3,6 +3,70 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
+## 0.1.1 — 2026-10-10
+
+Follow-ups from the first release (spec
+`docs/specs/2026-10-10-setu-0.1.1-design.md`, issues #2–#10).
+
+### Manifests
+
+- Raw single-binary releases: a `run.binary` target may say
+  `format = "binary"`; the helper verifies the download and installs it
+  as `bin/<version>/<exec>` mode 0755 (`exec` is one file name). The
+  sample manifests (Miniflux, hello-axum) use it.
+
+### Upgrading
+
+- On a panel box: `install.sh --version 0.1.1` with the original flags;
+  the installer restarts `setu` and the local agent only when the binary
+  changed. Re-running `setu agent install` is not needed.
+
+### Panel
+
+- Owners can delete an operator in Settings → Operators (#2). The
+  owner cannot delete themselves or the last owner; the deleted
+  operator's sessions end at once.
+
+- The sites list carries each site's newest metric sample (one
+  query); Memory and Disk show `used / limit` with the Limits tab's
+  bars (#3).
+
+- The site overview links the app's admin page next to the domain,
+  from the manifest's `admin_path` (`admin_url` on `GET /sites/{id}`,
+  `null` when the path is not absolute) (#4).
+
+### Agent
+
+- Heartbeats measure each site's data directory (`du`) at most every
+  ten minutes; memory and CPU are still read every beat. The helper's
+  `unit show` takes `data_bytes: false` to skip the walk (#5).
+
+### Control plane
+
+- Nightly self-backup: `setu serve` runs `pg_dump -Fc` of its own
+  database into `<data_dir>/backups/setu/`, keeps seven, and Settings →
+  Panel shows the last successful one (`GET /api/v1/panel/backup`) (#9).
+
+- Server token rotation: `POST /api/v1/servers/{id}/rotate-token` (owner)
+  issues a single-use join token and marks the server `rejoining`; the
+  old token keeps working until `setu agent join` runs with the new one
+  (#8). `setu agent join` re-joins without `--control-plane` (it reads
+  agent.toml), keeps the other settings and restarts the agent.
+
+- `GET /api/v1/apps/{id}/versions/{version}/prompts` lists a version's
+  prompt variables (`name`, `label`, `secret`; never a value). The update
+  dialog asks one labelled field per prompt instead of `NAME=value`
+  lines (#7).
+- A deleted site's jobs keep their rows (`jobs.site_id` becomes NULL,
+  migration `0002`), so the delete job ends `done` with its log in Jobs
+  and the runner no longer logs `not_found` after a delete (#6).
+
+### Internal
+
+- Workspace lints: `clippy::pedantic`, `unwrap_used`, `expect_used` as
+  warnings; CI runs clippy with `--all-features` and fails on any
+  warning (#10).
+
 ## 0.1.0 — 2026-10-10
 
 First release (MVP): a control panel for single-binary web apps on

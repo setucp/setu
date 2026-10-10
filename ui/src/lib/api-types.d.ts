@@ -150,6 +150,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/apps/{id}/versions/{version}/prompts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The `prompt` rules of one version, by name (viewer and above). Other
+         *     rules (`value`, `generate`, `from`) are never included, and neither
+         *     is any stored answer.
+         */
+        get: operations["version_prompts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit": {
         parameters: {
             query?: never;
@@ -369,6 +390,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operators/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete an operator (owner only). Refuses yourself and the last owner
+         *     (409, R149); every session of that operator ends with the row.
+         */
+        delete: operations["delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operators/{id}/password": {
         parameters: {
             query?: never;
@@ -383,6 +424,23 @@ export interface paths {
          *     your own starts a fresh session for this browser.
          */
         put: operations["set_password"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/panel/backup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The last control-plane self-backup. */
+        get: operations["backup_status"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -477,6 +535,26 @@ export interface paths {
          *     its running sites are untouched.
          */
         post: operations["cordon"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/servers/{id}/rotate-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate a server's token (owner only, #8): issue a join token; the
+         *     server shows `rejoining` until its agent joins with it.
+         */
+        post: operations["rotate_token"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1261,6 +1339,18 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        PromptListOut: {
+            prompts: components["schemas"]["PromptOut"][];
+        };
+        /**
+         * @description One `prompt` env rule of an app version: what an operator is asked
+         *     for. Carries no value, ever (#7).
+         */
+        PromptOut: {
+            label: string;
+            name: string;
+            secret: boolean;
+        };
         PublishRequest: {
             /** @description Pasted manifest TOML. Exactly one of `toml` / `url` is required. */
             toml?: string | null;
@@ -1283,6 +1373,36 @@ export interface components {
         RevealRequest: {
             /** @description The caller's own password (re-authentication). */
             password: string;
+        };
+        /**
+         * @description `POST /servers/{id}/rotate-token`: the new join token (shown once)
+         *     and the command to run on the server. Holds a credential: `Debug`
+         *     redacts it.
+         */
+        RotateTokenResponse: {
+            /** @description `setu agent join` (reads the control plane from agent.toml). */
+            join_command: string;
+            /**
+             * @description Single-use join token (valid 1 hour). Give it to `setu agent join`
+             *     as `SETU_JOIN_TOKEN` or on stdin; the current server token keeps
+             *     working until that join.
+             */
+            join_token: string;
+            server: components["schemas"]["ServerOut"];
+        };
+        SelfBackupOut: {
+            /** @description Where dumps are written (`<data_dir>/backups/setu`). */
+            dir: string;
+            /** @description File name of the newest dump in `dir`. */
+            file?: string | null;
+            /** Format: date-time */
+            last_attempt_at?: string | null;
+            /** @description One line, no secrets (`pg_dump failed: exit status: 1`). */
+            last_error?: string | null;
+            /** Format: date-time */
+            last_success_at?: string | null;
+            /** Format: int64 */
+            size_bytes?: number | null;
         };
         ServerListOut: {
             servers: components["schemas"]["ServerOut"][];
@@ -1342,16 +1462,28 @@ export interface components {
             /** @description The configured `public_url`, shown by the wizard. */
             public_url: string;
         };
-        /** @description `GET /sites/{id}`: the site plus its latest metric sample. */
+        /** @description `GET /sites/{id}`: the site plus its latest metric sample and admin page. */
         SiteDetailOut: components["schemas"]["SiteOut"] & {
+            /**
+             * @description `https://<domain><app.admin_path>`, or `null` when the manifest
+             *     names no usable path (or the version row is missing).
+             */
+            admin_url?: string | null;
             metrics?: null | components["schemas"]["SiteMetricOut"];
         };
         SiteJobResponse: {
             job: components["schemas"]["JobOut"];
             site: components["schemas"]["SiteOut"];
         };
+        /**
+         * @description One row of `GET /sites`: the site plus its newest 1-minute sample
+         *     (`null` before the first heartbeat after provisioning).
+         */
+        SiteListItemOut: components["schemas"]["SiteOut"] & {
+            metrics?: null | components["schemas"]["SiteMetricOut"];
+        };
         SiteListOut: {
-            sites: components["schemas"]["SiteOut"][];
+            sites: components["schemas"]["SiteListItemOut"][];
         };
         /** @description One per-site metrics sample. */
         SiteMetric: {
@@ -1776,6 +1908,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AppVersionListOut"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    version_prompts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description App id */
+                id: string;
+                /** @description App version */
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptListOut"];
                 };
             };
             401: {
@@ -2227,6 +2399,58 @@ export interface operations {
             };
         };
     };
+    delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Operator id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     set_password: {
         parameters: {
             query?: never;
@@ -2274,6 +2498,33 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    backup_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelfBackupOut"];
+                };
+            };
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2674,6 +2925,60 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    rotate_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Server id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotateTokenResponse"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -1,3 +1,5 @@
+// Test double / test harness: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Test helpers: throwaway Postgres databases, one per test.
 
 use sqlx::postgres::PgPoolOptions;
@@ -23,9 +25,10 @@ pub fn pg_url() -> String {
             format!("postgres://setu:setu@127.0.0.1:{port}/postgres")
         }
     };
-    if explicit_port(&url) == Some(5432) {
-        panic!("refusing to run tests against port 5432");
-    }
+    assert!(
+        explicit_port(&url) != Some(5432),
+        "refusing to run tests against port 5432"
+    );
     url
 }
 

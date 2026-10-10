@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Provision state-machine tests over [`FakeAgent`] (plan Task 6).
 
 mod common;
@@ -31,6 +33,7 @@ const HAPPY: [&str; 12] = [
 ];
 
 #[tokio::test]
+#[allow(clippy::format_collect, clippy::match_same_arms)] // reviewed: kept as-is (R150)
 async fn provision_happy_path_transcript() {
     let (_test_db, fx) = setup(&manifest_toml("0.1.0")).await;
     let agent = FakeAgent::new();
@@ -315,4 +318,45 @@ async fn provision_validate_checks_port_free() {
     provision::run(&ctx, &fx.site_id)
         .await
         .expect("free port provisions");
+}
+
+/// A rotated (rejoining) server whose agent still heartbeats is online
+/// enough to take provisioning: `rejoining` only stands in for `online`.
+#[tokio::test]
+async fn rejoining_server_still_accepts_provisioning() {
+    let (_test_db, fx) = setup(&manifest_toml("0.1.0")).await;
+    fx.db
+        .servers()
+        .rotate_join_token(&fx.server_id)
+        .await
+        .unwrap();
+    fx.db
+        .servers()
+        .heartbeat(
+            &fx.server_id,
+            &setu_db::HeartbeatInput {
+                agent_version: "0.1.1",
+                boot_id: None,
+                load1: 0.1,
+                mem_free_mb: 4096,
+                disk_free_mb: 50_000,
+                metrics: &[],
+            },
+        )
+        .await
+        .unwrap();
+    let agent = FakeAgent::new();
+    let (ctx, _job_id, _logs) = job_ctx(
+        &fx.db,
+        &agent,
+        "provision_site",
+        &fx.site_id,
+        serde_json::json!({}),
+    )
+    .await;
+
+    provision::run(&ctx, &fx.site_id)
+        .await
+        .expect("a rotated, heartbeating server must provision");
+    assert_eq!(kinds(&agent.transcript()), HAPPY);
 }

@@ -15,8 +15,8 @@ pub use repo::{
     AgentCommand, Allocation, App, AppVersion, Apps, Audit, AuditEntry, Backup, Backups, Commands,
     CreateError, HeartbeatInput, HeartbeatOutcome, Job, Jobs, JoinError, JoinInput, LatestMetric,
     Metrics, NewPlan, NewSite, Operator, Operators, Plan, Plans, Server, ServerStatus, Servers,
-    Session, Sessions, Settings, Site, Sites, WaitError, NOTIFY_CHANNEL, SETUP_TOKEN_HASH,
-    TLS_INTERNAL,
+    Session, Sessions, Settings, Site, Sites, WaitError, NOTIFY_CHANNEL, SELF_BACKUP,
+    SETUP_TOKEN_HASH, TLS_INTERNAL,
 };
 pub use setu_common::{AppError, ErrorCode};
 

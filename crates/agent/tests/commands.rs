@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! `commands::handle` (spec §5 semantics) and `dispatch::execute` over
 //! every `Command` variant, with the real helper code running in-process
 //! on a tempdir root (`LocalHelper` + fakes), plus the loop, heartbeat
@@ -170,6 +172,7 @@ fn journalctl_available() -> bool {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // reviewed: kept as-is (R150)
 async fn every_command_kind_is_handled() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
@@ -515,7 +518,7 @@ async fn route_commands_key_off_the_site_short_id() {
         setu_agent::execute("c5", &remove, &rt).await.ok,
         "idempotent"
     );
-    assert!(rt.caddy().admin().routes().is_empty());
+    assert_eq!(rt.caddy().admin().routes(), [] as [serde_json::Value; 0]);
 }
 
 /// `DeleteBackup` refuses a hostile id and is idempotent.
@@ -840,8 +843,12 @@ async fn heartbeat_includes_metrics() {
         .runtime()
         .update_state("abcd1234", |r| r.port = 20001)
         .expect("state");
-    let hb = setu_agent::heartbeat::collect_heartbeat(agent.runtime()).await;
-    assert!(!hb.boot_id.is_empty());
+    let hb = setu_agent::heartbeat::collect_heartbeat(
+        agent.runtime(),
+        &mut setu_agent::heartbeat::DataBytesCache::default(),
+    )
+    .await;
+    assert_ne!(hb.boot_id, "");
     assert_eq!(hb.units.len(), 1);
     assert!(hb.units[0].active && hb.units[0].pid == Some(42));
     assert_eq!(hb.metrics.len(), 1);
@@ -874,12 +881,11 @@ async fn fake_cp(cp: FakeCp) -> String {
     async fn poll(AxState(cp): AxState<FakeCp>) -> axum::response::Response {
         use axum::response::IntoResponse;
         let next = cp.queue.lock().expect("q").pop_front();
-        match next {
-            Some(env) => axum::Json(env).into_response(),
-            None => {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                StatusCode::NO_CONTENT.into_response()
-            }
+        if let Some(env) = next {
+            axum::Json(env).into_response()
+        } else {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            StatusCode::NO_CONTENT.into_response()
         }
     }
     async fn result(
@@ -997,4 +1003,57 @@ async fn result_is_persisted_before_post() {
     assert_eq!(helper.calls_for(Verb::Unit).len(), 1, "new-1 ran once");
     let saved = setu_agent::State::load(&config.state_path).expect("state");
     assert!(saved.recent.iter().all(|r| r.posted));
+}
+
+#[tokio::test]
+async fn heartbeat_measures_data_bytes_once_per_window() {
+    use setu_agent::heartbeat::{collect_heartbeat_at, DataBytesCache, DATA_BYTES_TTL};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let helper = FakeHelper::new();
+    let show = |mem: &str, bytes: Option<u64>| {
+        let mut v = serde_json::json!({
+            "ActiveState": "active", "SubState": "running", "MainPID": "42",
+            "MemoryCurrent": mem, "CPUUsageNSec": "1000000000", "NRestarts": "0"
+        });
+        if let Some(b) = bytes {
+            v["data_bytes"] = serde_json::json!(b);
+        }
+        v
+    };
+    helper.push_json(Verb::Unit, show("1048576", Some(4096)));
+    helper.push_json(Verb::Unit, show("2097152", None));
+    helper.push_json(Verb::Unit, show("3145728", Some(8192)));
+    let agent = fake_agent(dir.path(), helper.clone());
+    agent
+        .runtime()
+        .update_state("abcd1234", |r| r.port = 20001)
+        .expect("state");
+    let measured = || {
+        helper
+            .calls_for(Verb::Unit)
+            .iter()
+            .filter(|c| c.input.get("data_bytes") != Some(&serde_json::json!(false)))
+            .count()
+    };
+
+    let mut cache = DataBytesCache::default();
+    let t0 = Instant::now();
+    collect_heartbeat_at(agent.runtime(), &mut cache, t0).await;
+    let second =
+        collect_heartbeat_at(agent.runtime(), &mut cache, t0 + Duration::from_secs(15)).await;
+    assert_eq!(measured(), 1, "two beats inside the window issue one du");
+    assert_eq!(second.metrics[0].disk_bytes, 4096, "cached figure reused");
+    assert_eq!(
+        second.metrics[0].memory_bytes, 2_097_152,
+        "memory refreshed every beat"
+    );
+
+    let third = collect_heartbeat_at(
+        agent.runtime(),
+        &mut cache,
+        t0 + DATA_BYTES_TTL + Duration::from_secs(1),
+    )
+    .await;
+    assert_eq!(measured(), 2, "measured again after the window");
+    assert_eq!(third.metrics[0].disk_bytes, 8192);
 }

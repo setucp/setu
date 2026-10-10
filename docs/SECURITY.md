@@ -68,7 +68,7 @@ agent doctor` checks both). The agent calls it only as `sudo -n
 | `write-env [{name, value}]` | `/srv/setu/sites/<short>/env`, root:root 0600 |
 | `install {version, sha256[, format, exec]}` | verify `/var/lib/setu/downloads/<sha256>.tar.gz` (the name is kept for a raw binary too), then extract it to `bin/<version>/`, or with `format: "binary"` copy it to `bin/<version>/<exec>` (`exec` one file name), 0755 |
 | `switch-version {version}` | atomic swap of the `bin/current` symlink |
-| `unit {op}` | `start` = `systemctl enable --now`, `stop` = `disable --now`, `restart` = `enable` + `restart`, `show` = unit properties + `du -sb data/` (R118) |
+| `unit {op}` | `start` = `systemctl enable --now`, `stop` = `disable --now`, `restart` = `enable` + `restart`, `show` = unit properties + `du -sb data/` (R118); `data_bytes: false` (bool, default true) skips the `du` walk (#5) |
 | `backup {dirs}` | `tar.zst` of `data/<dir>`… to stdout |
 | `restore {dirs}` + stream | unit must be inactive; staging, chown to the site user, swap into `data/` |
 | `site-remove {}` | `disable --now`, remove the drop-in, `userdel`, remove the tree |
@@ -160,6 +160,10 @@ password).
   `SameSite=Lax`, `Secure` when `public_url` is https; 7 days, sliding.
   Login always issues a fresh session (no fixation); a password change
   ends every session of that operator (R102).
+  Deleting an operator (owner only) refuses yourself and the last
+  owner with 409, ends every session of theirs and is audited as
+  `operator.delete`; concurrent deletions are serialised by an advisory
+  lock, so two owners deleting each other cannot both succeed (R149).
 - Roles: `owner` > `operator` > `viewer`; every route × role is pinned
   by `crates/api/tests/matrix.rs`. Every mutation writes `audit_log`
   (operator, action, target kind and id, client IP).
@@ -222,6 +226,9 @@ The server token (`setu_srv_…`, 32 random bytes) is stored as a SHA-256
 hash on the control plane and in `/etc/setu/agent.toml` (`setu`, 0600,
 created 0600 rather than chmodded later) on the agent. Agent polling is
 rate-limited per server. Rotation: [OPERATIONS.md](OPERATIONS.md#rotating-a-server-token).
+An owner rotates a server's token with `POST /servers/{id}/rotate-token`,
+which issues a single-use join token under the rules above (valid one
+hour); the current server token keeps working until the agent re-joins.
 
 ## Secrets at rest
 
@@ -249,5 +256,5 @@ never travel on argv (join token, operator password, role passwords,
 - Enforced disk quotas (reported only).
 - Network isolation between sites on one box.
 - Encryption of local backups, off-box backups.
-- Rotation of `secret_key` and a command to rotate a server token.
+- Rotation of `secret_key`.
 - Telemetry: there is none.

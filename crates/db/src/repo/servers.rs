@@ -23,6 +23,7 @@ pub const JOIN_RETRY_WINDOW_SECS: i64 = 60;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServerStatus {
     Pending,
+    Rejoining,
     Online,
     Offline,
 }
@@ -31,6 +32,7 @@ impl ServerStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
+            Self::Rejoining => "rejoining",
             Self::Online => "online",
             Self::Offline => "offline",
         }
@@ -74,13 +76,22 @@ impl Server {
         if self.joined_at.is_none() {
             return ServerStatus::Pending;
         }
-        match self.last_seen_at {
-            Some(seen) if (now - seen).num_seconds() <= ONLINE_WINDOW_SECS => ServerStatus::Online,
-            _ => ServerStatus::Offline,
+        let seen_recently = self
+            .last_seen_at
+            .is_some_and(|seen| (now - seen).num_seconds() <= ONLINE_WINDOW_SECS);
+        if !seen_recently {
+            return ServerStatus::Offline;
         }
+        // A rotated join token is outstanding (R144): computed, never stored.
+        // Only a server that would otherwise be online reads as rejoining.
+        if self.join_nonce.is_none() && self.join_expires_at.is_some_and(|e| e > now) {
+            return ServerStatus::Rejoining;
+        }
+        ServerStatus::Online
     }
 }
 
+#[allow(clippy::missing_fields_in_debug)] // reviewed: kept as-is (R150)
 impl std::fmt::Debug for Server {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let redact = |o: &Option<String>| o.as_ref().map(|_| "[redacted]");
@@ -119,6 +130,7 @@ pub struct JoinInput {
     pub disk_mb: i64,
 }
 
+#[allow(clippy::missing_fields_in_debug)] // reviewed: kept as-is (R150)
 impl std::fmt::Debug for JoinInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JoinInput")
@@ -197,6 +209,7 @@ impl<'a> Servers<'a> {
     /// Register a pending server and mint its single-use join token
     /// (valid 1 hour). Returns the row plus the plaintext token: the
     /// only time the plaintext exists.
+    #[allow(clippy::needless_continue)] // reviewed: kept as-is (R150)
     pub async fn create_pending(
         &self,
         name: &str,
@@ -235,6 +248,7 @@ impl<'a> Servers<'a> {
 
     /// Redeem a join token (see the module docs for the nonce rules).
     /// Returns the server and the plaintext server token.
+    #[allow(clippy::cast_precision_loss, clippy::similar_names)] // reviewed: kept as-is (R150)
     pub async fn join(
         &self,
         join_token_plain: &str,
@@ -331,6 +345,41 @@ impl<'a> Servers<'a> {
         Ok((server, server_token))
     }
 
+    /// Mint a fresh single-use join token (1 h) for a joined server
+    /// (#8). `token_hash` is untouched, so the current server token keeps
+    /// working until the agent joins with the new one (the first-use
+    /// branch of [`Self::join`] then replaces it). A second rotation
+    /// before that join replaces the pending join token. `conflict` when
+    /// the server never joined (use its original join token).
+    pub async fn rotate_join_token(&self, id: &str) -> Result<(Server, String), AppError> {
+        let plain = token("setu_join_");
+        let row = sqlx::query_as!(
+            Server,
+            "UPDATE servers SET
+                 join_token_hash = $2,
+                 join_expires_at = now() + make_interval(secs => $3),
+                 join_nonce = NULL, join_token_sealed = NULL
+             WHERE id = $1 AND joined_at IS NOT NULL
+             RETURNING id, short_id, name, hostname, public_ip, token_hash, join_token_hash,
+                join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,
+                boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,
+                is_control_plane, created_at, load1, mem_free_mb, disk_free_mb",
+            id,
+            hash_token(&plain),
+            JOIN_TOKEN_TTL_SECS,
+        )
+        .fetch_optional(self.pool)
+        .await
+        .map_err(map_db_error)?;
+        if let Some(server) = row {
+            return Ok((server, plain));
+        }
+        self.get(id).await?;
+        Err(AppError::conflict(
+            "server has not joined yet: use its original join token",
+        ))
+    }
+
     /// Authenticate an agent request by its server token.
     pub async fn by_token(&self, server_token_plain: &str) -> Result<Option<Server>, AppError> {
         sqlx::query_as!(
@@ -379,6 +428,7 @@ impl<'a> Servers<'a> {
     /// on this server are ignored, so a compromised agent cannot inject
     /// another server's metrics. The sealed join token is dropped once
     /// its retry window has passed.
+    #[allow(clippy::cast_precision_loss)] // reviewed: kept as-is (R150)
     pub async fn heartbeat(
         &self,
         id: &str,

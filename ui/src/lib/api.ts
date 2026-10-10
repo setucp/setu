@@ -53,6 +53,14 @@ export function useApps() {
   return useQuery({ queryKey: ["apps"], queryFn: () => api.listApps() });
 }
 
+export function useVersionPrompts(appId: string, version: string | null) {
+  return useQuery({
+    queryKey: ["apps", appId, "versions", version, "prompts"],
+    queryFn: () => api.versionPrompts(appId, version ?? ""),
+    enabled: version !== null && version !== "",
+  });
+}
+
 export function useAppVersions(appId: string | null) {
   return useQuery({
     queryKey: ["apps", appId, "versions"],
@@ -99,6 +107,20 @@ export function useCreateServer() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (name: string) => api.createServer(name),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["servers"] });
+    },
+  });
+}
+
+export function usePanelBackup() {
+  return useQuery({ queryKey: ["panel", "backup"], queryFn: () => api.panelBackup() });
+}
+
+export function useRotateServerToken(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.rotateServerToken(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["servers"] });
     },
@@ -288,6 +310,16 @@ export function useCreateOperator() {
       password: string;
       role: string;
     }) => api.createOperator(email, password, role),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["operators"] });
+    },
+  });
+}
+
+export function useDeleteOperator() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteOperator(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["operators"] });
     },

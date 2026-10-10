@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Backups stream: the helper's `backup` stdout and `pg_dump`'s stdout go
 //! to a file, the `restore` archive and `pg_restore`'s input come from a
 //! file — never a whole buffer in the agent (I3). One test in its own

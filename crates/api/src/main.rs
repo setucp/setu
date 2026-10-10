@@ -167,8 +167,19 @@ async fn serve() -> Result<(), String> {
         clock.clone(),
         setu_jobs::RunnerConfig::default(),
     );
-    let _scheduler =
-        setu_jobs::Scheduler::spawn(db.clone(), clock, setu_jobs::SchedulerConfig::default());
+    let _scheduler = setu_jobs::Scheduler::spawn(
+        db.clone(),
+        clock.clone(),
+        setu_jobs::SchedulerConfig::default(),
+    );
+    // Nightly pg_dump of Setu's own database (0.1.1 #9, R145).
+    let _self_backup = setu_api::self_backup::spawn(
+        db.clone(),
+        clock,
+        config.database_url.clone(),
+        config.data_dir.clone(),
+        setu_jobs::SchedulerConfig::default(),
+    );
     let app = setu_api::rest::router(state);
     let bound = setu_api::listen::bind(&config.listen)
         .await
@@ -229,6 +240,7 @@ fn backup(out: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::unused_async)] // reviewed: kept as-is (R150)
 async fn openapi(out: &std::path::Path) -> Result<(), String> {
     let doc = setu_api::rest::docs::openapi_json_string();
     std::fs::write(out, doc).map_err(|e| format!("cannot write {}: {e}", out.display()))?;

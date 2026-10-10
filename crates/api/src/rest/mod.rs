@@ -7,6 +7,7 @@ pub mod backups;
 pub mod docs;
 pub mod jobs;
 pub mod operators;
+pub mod panel;
 pub mod plans;
 pub mod servers;
 pub mod setup;
@@ -71,15 +72,22 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(auth::me))
         .route("/operators", get(operators::list).post(operators::create))
+        .route("/panel/backup", get(panel::backup_status))
         .route("/operators/{id}/password", put(operators::set_password))
+        .route("/operators/{id}", delete(operators::delete))
         .route("/setup", get(setup::status).post(setup::create_owner))
         .route("/setup/local-server", post(setup::local_server))
         .route("/servers", get(servers::list).post(servers::create))
         .route("/servers/{id}", get(servers::get).delete(servers::delete))
         .route("/servers/{id}/cordon", post(servers::cordon))
+        .route("/servers/{id}/rotate-token", post(servers::rotate_token))
         .route("/apps", get(apps::list).post(apps::publish))
         .route("/apps/validate", post(apps::validate))
         .route("/apps/{id}/versions", get(apps::versions))
+        .route(
+            "/apps/{id}/versions/{version}/prompts",
+            get(apps::version_prompts),
+        )
         .route("/plans", get(plans::list).post(plans::create))
         .route("/plans/{id}", get(plans::get).put(plans::update))
         .route("/sites", get(sites::list).post(sites::create))
@@ -182,7 +190,7 @@ pub(crate) mod sse {
     /// Longest life of one SSE response; the stream then ends with a
     /// `reconnect` event and the client opens a new one (a forgotten tab
     /// cannot hold an agent poll loop open forever).
-    pub const MAX_LIFETIME: Duration = Duration::from_secs(30 * 60);
+    pub const MAX_LIFETIME: Duration = Duration::from_mins(30);
 
     /// An SSE comment: ignored by `EventSource`, but the write fails once
     /// the client is gone, which is how an idle stream notices.

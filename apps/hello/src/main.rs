@@ -223,6 +223,7 @@ fn router(state: AppState) -> Router {
 }
 
 #[tokio::main]
+#[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
 async fn main() {
     let cfg = AppConfig::load();
     let db = match std::env::var("DATABASE_URL") {

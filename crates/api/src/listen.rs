@@ -58,8 +58,7 @@ impl Bound {
         match self {
             Bound::Tcp(l) => l
                 .local_addr()
-                .map(|a| a.to_string())
-                .unwrap_or_else(|_| "tcp".to_string()),
+                .map_or_else(|_| "tcp".to_string(), |a| a.to_string()),
             Bound::Unix(_, path) => format!("unix:{}", path.display()),
         }
     }

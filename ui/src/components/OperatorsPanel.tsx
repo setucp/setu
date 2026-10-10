@@ -1,7 +1,13 @@
 import * as React from "react";
-import { KeyRound, UserPlus } from "lucide-react";
+import { KeyRound, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
-import { useCreateOperator, useMe, useOperators, useSetOperatorPassword } from "@/lib/api";
+import {
+  useCreateOperator,
+  useDeleteOperator,
+  useMe,
+  useOperators,
+  useSetOperatorPassword,
+} from "@/lib/api";
 import { ApiError, type AuditEntry, type Operator } from "@/lib/client";
 import { ErrorText } from "./ErrorText";
 import { RelativeTime } from "./RelativeTime";
@@ -10,7 +16,7 @@ import { Alert } from "./ui/alert";
 import { Avatar } from "./ui/avatar";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import { Modal } from "./ui/dialog";
+import { Modal, useConfirm } from "./ui/dialog";
 import { Field } from "./ui/field";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
@@ -25,28 +31,55 @@ const roleVariant: Record<string, "info" | "secondary" | "outline"> = {
 };
 
 /**
- * Operators: list, create, and a password change per row. The API has no
- * operator update or delete endpoint, so the panel offers exactly these.
- * Your own password needs the current one; the owner sets anyone else's
- * (R102). Every session of the target ends on change.
+ * Operators: list, create, a password change per row, and (owner only)
+ * delete for anyone but yourself and the last owner. Your own password
+ * needs the current one; the owner sets anyone else's (R102). Every
+ * session of the target ends on change or delete.
  */
 export function OperatorsPanel() {
   const operators = useOperators();
   const me = useMe();
   const [open, setOpen] = React.useState(false);
   const [passwordFor, setPasswordFor] = React.useState<Operator | null>(null);
+  const del = useDeleteOperator();
+  const confirm = useConfirm();
 
   if (operators.isPending) return <SkeletonRows rows={2} label="Loading operators…" />;
   if (operators.error instanceof ApiError) return <ErrorText error={operators.error} />;
   const rows: Operator[] = operators.data ?? [];
 
-  const action = (o: Operator) =>
-    me.data?.id === o.id || me.data?.role === "owner" ? (
-      <Button type="button" variant="ghost" size="sm" onClick={() => setPasswordFor(o)}>
-        <KeyRound aria-hidden="true" />
-        Change password
-      </Button>
-    ) : null;
+  function remove(o: Operator) {
+    void (async () => {
+      const ok = await confirm({
+        title: `Delete ${o.email}?`,
+        description: `${o.email} is signed out everywhere and can no longer sign in. Their audit entries stay.`,
+        confirmLabel: `Delete ${o.email}`,
+        destructive: true,
+      });
+      if (!ok) return;
+      del.mutate(o.id, {
+        onSuccess: () => toast.success(`Deleted ${o.email}`),
+        onError: (err) => toast.error(err instanceof ApiError ? err.message : "Delete failed"),
+      });
+    })();
+  }
+
+  const action = (o: Operator) => (
+    <span className="flex justify-end gap-1">
+      {me.data?.id === o.id || me.data?.role === "owner" ? (
+        <Button type="button" variant="ghost" size="sm" onClick={() => setPasswordFor(o)}>
+          <KeyRound aria-hidden="true" />
+          Change password
+        </Button>
+      ) : null}
+      {me.data?.role === "owner" && me.data.id !== o.id ? (
+        <Button type="button" variant="ghost-destructive" size="sm" onClick={() => remove(o)}>
+          <Trash2 aria-hidden="true" />
+          Delete
+        </Button>
+      ) : null}
+    </span>
+  );
 
   const columns: Column<Operator>[] = [
     {

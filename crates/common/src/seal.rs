@@ -70,6 +70,7 @@ impl Sealer {
     /// Infallible by design (the plan fixes this signature): the nonce comes
     /// from the OS RNG and encryption with a valid key and fresh nonce cannot
     /// fail, so the two `expect`s below fire only on OS-level entropy failure.
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     pub fn seal(&self, plain: &str) -> String {
         let mut nonce_bytes = [0u8; 12];
         rand::rngs::OsRng
@@ -133,6 +134,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)] // reviewed: kept as-is (R150)
     fn seal_then_open_round_trips() {
         let sealer = Sealer::new(&test_key());
         let sealed = sealer.seal("hello-secret");
@@ -145,6 +147,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)] // reviewed: kept as-is (R150)
     fn open_rejects_tampered() {
         let sealer = Sealer::new(&test_key());
         let sealed = sealer.seal("tamper-me");
@@ -157,7 +160,7 @@ mod tests {
         let err = sealer
             .open(&tampered)
             .expect_err("tampered value must fail");
-        assert!(!format!("{err}").is_empty());
+        assert_ne!(format!("{err}"), "");
     }
 
     #[test]

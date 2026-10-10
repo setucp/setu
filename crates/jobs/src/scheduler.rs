@@ -47,11 +47,11 @@ impl Default for SchedulerConfig {
         Self {
             backup_hour: 3,
             jitter_min: 20,
-            catch_up: Duration::from_secs(2 * 3600),
+            catch_up: Duration::from_hours(2),
             keep_scheduled: 7,
-            pre_keep: Duration::from_secs(30 * 24 * 3600),
-            metrics_keep: Duration::from_secs(30 * 24 * 3600),
-            commands_keep: Duration::from_secs(24 * 3600),
+            pre_keep: Duration::from_hours(720),
+            metrics_keep: Duration::from_hours(720),
+            commands_keep: Duration::from_hours(24),
             utc_offset: None,
             tick: Duration::from_secs(60),
         }
@@ -181,6 +181,7 @@ impl Scheduler {
 /// Today's (local) due time of `site_id`'s nightly backup:
 /// `backup_hour:00` plus a jitter in `[-jitter_min, +jitter_min]`
 /// minutes derived from the site id (stable across restarts).
+#[allow(clippy::cast_sign_loss)] // reviewed: kept as-is (R150)
 pub fn due_at(now: DateTime<Utc>, site_id: &str, config: &SchedulerConfig) -> DateTime<Utc> {
     let offset = config.utc_offset.unwrap_or_else(|| {
         chrono::Local
@@ -192,8 +193,7 @@ pub fn due_at(now: DateTime<Utc>, site_id: &str, config: &SchedulerConfig) -> Da
     let base = offset
         .from_local_datetime(&local_day.and_time(at))
         .single()
-        .map(|d| d.with_timezone(&Utc))
-        .unwrap_or(now);
+        .map_or(now, |d| d.with_timezone(&Utc));
     let span = i64::from(config.jitter_min) * 2 + 1;
     let hash = site_id.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
         (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)

@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Setup wizard integration tests (plan Task 7, spec §7–§8): the boot
 //! setup token, the token-gated single-use owner creation, and the
 //! local-server step's install command.
@@ -180,6 +182,7 @@ async fn setup_requires_token_and_creates_owner_once() {
 }
 
 #[tokio::test]
+#[allow(clippy::unreadable_literal)] // reviewed: kept as-is (R150)
 async fn local_server_command_targets_loopback_or_public_url() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;

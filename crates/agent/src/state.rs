@@ -138,7 +138,9 @@ impl StateStore {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// A copy of the current state.

@@ -18,6 +18,7 @@ pub fn cgroup_path(control_group: &str) -> Option<PathBuf> {
 }
 
 /// CPU seconds from `cpu.stat` (`usage_usec`).
+#[allow(clippy::cast_precision_loss)] // reviewed: kept as-is (R150)
 pub fn read_cpu_seconds(cgroup: &Path) -> Option<f64> {
     let text = std::fs::read_to_string(cgroup.join("cpu.stat")).ok()?;
     text.lines().find_map(|line| {
@@ -46,6 +47,7 @@ pub struct SiteMetric {
     pub disk_bytes: u64,
 }
 
+#[allow(clippy::cast_precision_loss)] // reviewed: kept as-is (R150)
 pub fn read_site_metric(status: &crate::runtime::RuntimeStatus) -> SiteMetric {
     let cg = status.control_group.as_deref().and_then(cgroup_path);
     let cpu = status
@@ -85,6 +87,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unreadable_literal)] // reviewed: kept as-is (R150)
     fn show_values_win_with_cgroup_fallback() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("cpu.stat"), "usage_usec 2500000\n").expect("write");

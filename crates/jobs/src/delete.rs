@@ -1,7 +1,9 @@
 //! Delete state machine (spec §6), named steps resumed from the job's
 //! cursor: `backup` (`pre_delete`, kept 30 days), `remove_route`, `stop`,
-//! `drop_database`, `site_remove`, `finish` (the row is deleted; its
-//! backups keep `site_name` and `domain`, `site_id` becomes NULL).
+//! `drop_database`, `site_remove`, `finish` (the row is deleted; this
+//! job keeps its row with `site_id` NULL, so it ends `done` with its log;
+//! its backups keep `site_name` and `domain`, `site_id` becomes NULL; the
+//! sealed payload fields of the site's jobs are nulled first).
 //!
 //! A failed `pre_delete` backup aborts the delete with the site
 //! untouched, except for a `failed` site, which may never have had a
@@ -90,10 +92,16 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
             return Err(mark_failed(ctx, site_id, name, e).await);
         }
     }
-    if let Err(e) = steps
-        .run(ctx, "finish", ctx.db.sites().delete(site_id))
-        .await
-    {
+    // Scrub before the row goes: the FK then unlinks the kept job rows,
+    // and they could no longer be found by site (M1).
+    let finish = async {
+        ctx.db
+            .jobs()
+            .scrub_payload_secrets_for_site(site_id)
+            .await?;
+        ctx.db.sites().delete(site_id).await
+    };
+    if let Err(e) = steps.run(ctx, "finish", finish).await {
         return Err(mark_failed(ctx, site_id, "finish", e).await);
     }
     Ok(())

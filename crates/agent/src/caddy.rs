@@ -186,6 +186,7 @@ impl<T> CaddyClient<T> {
 
 impl CaddySocket {
     /// Client for the admin socket at `socket`.
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     pub fn new(socket: impl AsRef<Path>) -> Self {
         Self::with_transport(UnixTransport {
             socket: socket.as_ref().to_path_buf(),
@@ -194,6 +195,7 @@ impl CaddySocket {
     }
 
     /// Probe another address for [`CaddyAdmin::tcp_admin_open`] (tests).
+    #[allow(clippy::return_self_not_must_use)] // reviewed: kept as-is (R150)
     pub fn with_tcp_admin_addr(mut self, addr: SocketAddr) -> Self {
         self.transport.tcp_admin = addr;
         self
@@ -459,6 +461,7 @@ fn has_duplicate_ids(v: &serde_json::Value) -> bool {
 
 impl FakeAdmin {
     /// Up, holding the base config from `assets/caddy-base.json`.
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     pub fn new() -> Self {
         let config = serde_json::from_str(crate::install_system::CADDY_BASE_ASSET)
             .expect("caddy-base.json is valid JSON");
@@ -473,7 +476,9 @@ impl FakeAdmin {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, FakeState> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn set_up(&self, up: bool) {
@@ -508,6 +513,7 @@ impl FakeAdmin {
 
     /// Serve one request against the model (also used by a test server
     /// that exposes it over a real socket).
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     pub fn handle(&self, method: &str, path: &str, body: &[u8]) -> (u16, Vec<u8>) {
         let mut st = self.lock();
         let parsed: Option<serde_json::Value> = if body.is_empty() {

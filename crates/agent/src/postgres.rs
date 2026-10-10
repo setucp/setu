@@ -106,10 +106,12 @@ impl FakeRunner {
     }
 
     /// Queue the reply for the next call.
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     pub fn push(&self, reply: RunOutput) {
         self.replies.lock().expect("fake runner").push_back(reply);
     }
 
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     pub fn calls(&self) -> Vec<RecordedCall> {
         self.calls.lock().expect("fake runner").clone()
     }
@@ -117,6 +119,7 @@ impl FakeRunner {
 
 #[async_trait::async_trait]
 impl CommandRunner for FakeRunner {
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     async fn run(&self, argv: &[String], stdin: &[u8]) -> anyhow::Result<RunOutput> {
         self.calls
             .lock()
@@ -221,7 +224,7 @@ impl<R: CommandRunner> PsqlSudo<R> {
         ["sudo", "-n", "-u", "postgres", prog]
             .iter()
             .chain(args)
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect()
     }
 
@@ -383,6 +386,7 @@ impl FakePostgres {
         Self::default()
     }
 
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     fn lock(&self) -> std::sync::MutexGuard<'_, FakeInner> {
         self.inner.lock().expect("fake postgres lock")
     }

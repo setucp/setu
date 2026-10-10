@@ -68,6 +68,7 @@ impl Recording {
     }
 
     /// Every request so far, in order.
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     pub fn ops(&self) -> Vec<OwnOp> {
         self.ops.lock().expect("recording lock").clone()
     }
@@ -97,6 +98,7 @@ impl Recording {
 }
 
 impl Ownership for Recording {
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     fn chown(
         &self,
         _fd: BorrowedFd<'_>,
@@ -112,6 +114,7 @@ impl Ownership for Recording {
         Ok(())
     }
 
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     fn chmod(&self, fd: BorrowedFd<'_>, path: &Path, mode: u32) -> Result<(), HelperError> {
         self.ops.lock().expect("recording lock").push(OwnOp::Chmod {
             path: path.to_path_buf(),

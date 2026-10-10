@@ -20,7 +20,7 @@ holding `ok` or the one expected error line). `POST
 | `[app] version` | yes | semver, and `^[0-9A-Za-z.+-]{1,64}$` (it names `bin/<version>/`) |
 | `[app] homepage` | yes | URL shown in the catalogue |
 | `[app] health` | yes | path starting with `/`; `GET 127.0.0.1:<port><health>` must answer 2xx when ready |
-| `[app] admin_path` | yes | link shown after provisioning (`"/"` when the app has none) |
+| `[app] admin_path` | yes | the site page links to `https://<domain><admin_path>` (`"/"` when the app has none); must start with one `/` |
 | `[app] startup_grace_s` | no | 1–3600, default 90: how long health may fail after a start; it is the health timeout of provision, update and restore |
 | `[run] kind` | yes | `"binary"`; `"image"` validates (with `[run.image] image`) but is refused at provisioning until phase 2 |
 | `[run] workdir` | no | `"exec_dir"` (default), `"bin"` or `"data"`, see below |

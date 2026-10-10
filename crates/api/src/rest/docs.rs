@@ -10,22 +10,24 @@ use utoipa::OpenApi;
 use crate::auth::{require_role, Role, Session};
 
 use super::apps::{
-    AppListOut, AppOut, AppVersionListOut, AppVersionOut, ManifestErrorOut, PublishRequest,
-    PublishResponse, ValidateRequest, ValidateResponse,
+    AppListOut, AppOut, AppVersionListOut, AppVersionOut, ManifestErrorOut, PromptListOut,
+    PromptOut, PublishRequest, PublishResponse, ValidateRequest, ValidateResponse,
 };
 use super::auth::{LoginRequest, OperatorOut};
 use super::backups::{BackupJobResponse, BackupListOut, BackupOut};
 use super::jobs::{AuditEntryOut, AuditListOut, AuditQuery, JobListOut, JobsQuery};
 use super::operators::{CreateOperatorRequest, OperatorListOut, SetPasswordRequest};
+use super::panel::SelfBackupOut;
 use super::plans::{CreatePlanRequest, PlanLimitsIn, PlanListOut, PlanOut, UpdatePlanRequest};
 use super::servers::{
-    CordonRequest, CreateServerRequest, CreateServerResponse, ServerListOut, ServerOut,
+    CordonRequest, CreateServerRequest, CreateServerResponse, RotateTokenResponse, ServerListOut,
+    ServerOut,
 };
 use super::setup::{LocalServerRequest, LocalServerResponse, SetupRequest, SetupStatusOut};
 use super::sites::{
     CreateSiteRequest, CreateSiteResponse, EnvEntryOut, EnvGetOut, EnvPutRequest, JobOut,
-    JobResponse, RevealOut, RevealRequest, SiteDetailOut, SiteJobResponse, SiteListOut,
-    SiteMetricOut, SiteOut, UpdateSiteRequest,
+    JobResponse, RevealOut, RevealRequest, SiteDetailOut, SiteJobResponse, SiteListItemOut,
+    SiteListOut, SiteMetricOut, SiteOut, UpdateSiteRequest,
 };
 use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
 
@@ -33,7 +35,7 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
 #[openapi(
     info(
         title = "Setu API",
-        version = "0.1.0",
+        version = "0.1.1",
         description = "Control-plane REST API for single-binary web apps"
     ),
     paths(
@@ -45,6 +47,7 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::operators::list,
         super::operators::create,
         super::operators::set_password,
+        super::operators::delete,
         super::setup::status,
         super::setup::create_owner,
         super::setup::local_server,
@@ -53,10 +56,13 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::servers::get,
         super::servers::delete,
         super::servers::cordon,
+        super::servers::rotate_token,
         super::apps::list,
         super::apps::validate,
         super::apps::publish,
         super::apps::versions,
+        super::apps::version_prompts,
+        super::panel::backup_status,
         super::plans::list,
         super::plans::create,
         super::plans::get,
@@ -105,6 +111,8 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         CreateServerRequest,
         CreateServerResponse,
         CordonRequest,
+        RotateTokenResponse,
+        SelfBackupOut,
         SetupStatusOut,
         SetupRequest,
         LocalServerRequest,
@@ -125,6 +133,9 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         UpdatePlanRequest,
         SiteOut,
         SiteListOut,
+        SiteListItemOut,
+        PromptOut,
+        PromptListOut,
         SiteDetailOut,
         SiteMetricOut,
         JobOut,
@@ -165,6 +176,7 @@ pub struct ApiDoc;
 /// The canonical document bytes: pretty JSON plus one trailing newline.
 /// Both `setu openapi` and the snapshot test use this function so the
 /// checked-in file and the served document can never drift.
+#[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
 pub fn openapi_json_string() -> String {
     format!(
         "{}\n",

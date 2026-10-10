@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+#[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
 fn re(pattern: &str) -> Regex {
     Regex::new(pattern).expect("static validation regex compiles")
 }

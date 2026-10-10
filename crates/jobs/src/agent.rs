@@ -129,8 +129,10 @@ impl AgentClient for DbAgentClient {
 }
 
 /// Test doubles: [`FakeAgent`] and [`FixedClock`].
+// Test double: a poisoned lock means a test already panicked (R146).
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 pub mod testing {
-    use super::*;
+    use super::{async_trait, AgentClient, AgentError, Arc, Command, CommandResult};
     use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
     use std::time::Duration;

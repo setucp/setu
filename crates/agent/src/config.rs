@@ -114,9 +114,7 @@ impl AgentConfig {
     /// `SETU_AGENT_SERVER_TOKEN` env vars win over the file.
     pub fn load(path: Option<&std::path::Path>) -> Result<Self, ConfigError> {
         let mut cfg = Self::default();
-        let at = path
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_else(Self::default_path);
+        let at = path.map_or_else(Self::default_path, std::path::Path::to_path_buf);
         match std::fs::read_to_string(&at) {
             Ok(text) => {
                 let file: Self = toml::from_str(&text)

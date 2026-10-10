@@ -62,11 +62,15 @@ pub enum AgentCmd {
         #[arg(long, default_value = crate::caddy::DEFAULT_PANEL_UPSTREAM)]
         upstream: String,
     },
-    /// Join the control plane (no system setup); token from
-    /// `SETU_JOIN_TOKEN` or stdin.
+    /// Join the control plane, or re-join after `rotate-token`: the token
+    /// from `SETU_JOIN_TOKEN` or stdin; `--control-plane` defaults to
+    /// agent.toml's; `--ca` defaults to agent.toml's and `insecure` is
+    /// kept when agent.toml has it; every other agent.toml field is kept,
+    /// and a running agent is restarted to pick up the new server token
+    /// (R148).
     Join {
         #[arg(long)]
-        control_plane: String,
+        control_plane: Option<String>,
         #[arg(long)]
         insecure: bool,
         #[arg(long)]
@@ -130,17 +134,27 @@ pub async fn run_agent(cmd: AgentCmd) -> anyhow::Result<()> {
             insecure,
             ca,
             config,
-        } => crate::install::join(&crate::install::InstallOpts {
-            control_plane,
-            join_token: crate::install::read_join_token().map_err(|e| anyhow::anyhow!("{e}"))?,
-            config_path: config,
-            insecure,
-            ca,
-            tls_internal: false,
-            panel: None,
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}")),
+        } => {
+            let path = config
+                .clone()
+                .unwrap_or_else(crate::config::AgentConfig::default_path);
+            let existing = crate::config::AgentConfig::load(Some(&path))
+                .map_err(|e| anyhow::anyhow!("cannot load agent config: {e}"))?;
+            let (insecure, ca) = crate::install::rejoin_transport(insecure, ca, &existing);
+            crate::install::join(&crate::install::InstallOpts {
+                control_plane: crate::install::rejoin_control_plane(control_plane, &existing)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?,
+                join_token: crate::install::read_join_token()
+                    .map_err(|e| anyhow::anyhow!("{e}"))?,
+                config_path: config,
+                insecure,
+                ca,
+                tls_internal: false,
+                panel: None,
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+        }
         AgentCmd::Doctor { config } => crate::doctor::doctor(config.as_deref())
             .await
             .map_err(|e| anyhow::anyhow!("{e}")),

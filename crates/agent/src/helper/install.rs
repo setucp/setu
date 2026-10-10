@@ -220,6 +220,7 @@ fn open_bin(ctx: &Ctx, short: &str) -> Result<std::os::fd::OwnedFd, HelperError>
     walk_nofollow(root.as_fd(), &comps)
 }
 
+#[allow(clippy::needless_pass_by_value)] // reviewed: kept as-is (R150)
 pub fn install(
     ctx: &Ctx,
     short: &str,
@@ -314,6 +315,7 @@ pub fn install(
     Ok(json!({ "version": input.version, "changed": true }))
 }
 
+#[allow(clippy::needless_pass_by_value)] // reviewed: kept as-is (R150)
 pub fn switch_version(
     ctx: &Ctx,
     short: &str,

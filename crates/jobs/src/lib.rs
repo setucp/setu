@@ -64,6 +64,7 @@ impl InstallSlots {
     }
 
     /// The server's semaphore (created on first use).
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     pub fn installs_for(&self, server_id: &str) -> Arc<Semaphore> {
         let mut map = self.map.lock().expect("install slots lock");
         map.entry(server_id.to_string())
@@ -152,6 +153,7 @@ impl JobCtx {
     }
 
     /// Bind the context to job `job_id`, leased to `worker`.
+    #[allow(clippy::return_self_not_must_use)] // reviewed: kept as-is (R150)
     pub fn with_job(mut self, job_id: &str, worker: &str) -> Self {
         self.job_id = Some(job_id.to_string());
         self.worker = Some(worker.to_string());
@@ -184,6 +186,7 @@ impl JobCtx {
         AppError::conflict("job lease lost: another runner owns it")
     }
 
+    #[allow(clippy::return_self_not_must_use)] // reviewed: kept as-is (R150)
     pub fn with_verify_delay(mut self, delay: Duration) -> Self {
         self.verify_delay = delay;
         self
@@ -200,7 +203,11 @@ impl JobCtx {
         if secret.len() < 4 {
             return; // too short to scrub without mangling ordinary text
         }
-        let mut secrets = self.secrets.lock().expect("secrets lock");
+        // A poisoned lock still holds the list: read through it (M4).
+        let mut secrets = self
+            .secrets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !secrets.iter().any(|s| s == secret) {
             secrets.push(secret.to_string());
         }
@@ -208,7 +215,10 @@ impl JobCtx {
 
     /// `text` with every registered secret replaced by `***`.
     pub fn redact(&self, text: &str) -> String {
-        let secrets = self.secrets.lock().expect("secrets lock");
+        let secrets = self
+            .secrets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         secrets
             .iter()
             .fold(text.to_string(), |acc, s| acc.replace(s.as_str(), "***"))
@@ -328,6 +338,7 @@ impl JobCtx {
     }
 }
 
+#[allow(clippy::missing_fields_in_debug)] // reviewed: kept as-is (R150)
 impl std::fmt::Debug for JobCtx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JobCtx")
@@ -568,6 +579,7 @@ pub(crate) fn resolve_input(
     }
 }
 
+#[allow(clippy::needless_pass_by_value)] // reviewed: kept as-is (R150)
 pub(crate) fn resolve_error(e: setu_manifest::ResolveError) -> AppError {
     match &e {
         setu_manifest::ResolveError::MissingPrompt(_) => {
@@ -647,8 +659,14 @@ pub(crate) fn open_env(
         out.push(setu_manifest::EnvVar {
             name: name.to_string(),
             value: plain,
-            secret: v.get("secret").and_then(|b| b.as_bool()).unwrap_or(false),
-            once: v.get("once").and_then(|b| b.as_bool()).unwrap_or(false),
+            secret: v
+                .get("secret")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            once: v
+                .get("once")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
         });
     }
     Ok(out)
@@ -702,8 +720,7 @@ pub(crate) fn stored_db_url<'a>(
 pub(crate) fn db_password(manifest: &Manifest, vars: &[setu_manifest::EnvVar]) -> String {
     stored_db_url(manifest, vars)
         .and_then(url_password)
-        .map(str::to_string)
-        .unwrap_or_else(random_db_password)
+        .map_or_else(random_db_password, str::to_string)
 }
 
 /// Stored DB copy of resolved env: secret values sealed (`v1:`), the rest
@@ -737,4 +754,34 @@ fn env_json(
             })
             .collect(),
     )
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test module (R146)
+mod secrets_tests {
+    use super::*;
+
+    /// M4: a panic while the secrets lock is held must not make every
+    /// later redaction panic: the poisoned lock is read through.
+    #[tokio::test]
+    async fn a_poisoned_secrets_lock_still_redacts() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://setu@127.0.0.1:1/setu").unwrap();
+        let ctx = JobCtx::build(
+            Db::new(pool),
+            Arc::new(crate::agent::testing::FakeAgent::new()),
+            setu_common::Sealer::new(&setu_common::SecretKey::from_hex(&"ab".repeat(32)).unwrap()),
+            Arc::new(crate::clock::SystemClock),
+            InstallSlots::default(),
+            Box::new(|_: &str| {}),
+        );
+        ctx.add_secret("hunter2-secret");
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = ctx.secrets.lock().unwrap();
+            panic!("poison the lock");
+        }));
+        assert!(ctx.secrets.is_poisoned(), "the lock is poisoned");
+        assert_eq!(ctx.redact("x hunter2-secret"), "x ***");
+        ctx.add_secret("another-secret");
+        assert_eq!(ctx.redact("another-secret"), "***");
+    }
 }

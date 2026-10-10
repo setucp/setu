@@ -70,7 +70,16 @@ impl SiteOut {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SiteListOut {
-    pub sites: Vec<SiteOut>,
+    pub sites: Vec<SiteListItemOut>,
+}
+
+/// One row of `GET /sites`: the site plus its newest 1-minute sample
+/// (`null` before the first heartbeat after provisioning).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SiteListItemOut {
+    #[serde(flatten)]
+    pub site: SiteOut,
+    pub metrics: Option<SiteMetricOut>,
 }
 
 /// One job row. `payload` is never rendered (it may carry prompt
@@ -124,6 +133,7 @@ pub struct CreateSiteRequest {
 }
 
 // Holds prompt answers: `Debug` prints their names only.
+#[allow(clippy::missing_fields_in_debug)] // reviewed: kept as-is (R150)
 impl std::fmt::Debug for CreateSiteRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CreateSiteRequest")
@@ -170,12 +180,38 @@ pub struct SiteMetricOut {
     pub disk_bytes: i64,
 }
 
-/// `GET /sites/{id}`: the site plus its latest metric sample.
+impl SiteMetricOut {
+    pub fn from_latest(m: &setu_db::LatestMetric) -> Self {
+        Self {
+            at: m.at,
+            cpu_seconds: m.cpu_seconds,
+            memory_bytes: m.memory_bytes,
+            disk_bytes: m.disk_bytes,
+        }
+    }
+}
+
+/// The app's admin page on the site: `https://<domain><admin_path>` when
+/// the manifest's `admin_path` is an absolute path (one leading slash,
+/// no whitespace or control characters); `None` otherwise (#4).
+pub fn admin_url(domain: &str, admin_path: &str) -> Option<String> {
+    let ok = admin_path.starts_with('/')
+        && !admin_path.starts_with("//")
+        && !admin_path
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control());
+    ok.then(|| format!("https://{domain}{admin_path}"))
+}
+
+/// `GET /sites/{id}`: the site plus its latest metric sample and admin page.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SiteDetailOut {
     #[serde(flatten)]
     pub site: SiteOut,
     pub metrics: Option<SiteMetricOut>,
+    /// `https://<domain><app.admin_path>`, or `null` when the manifest
+    /// names no usable path (or the version row is missing).
+    pub admin_url: Option<String>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -221,6 +257,7 @@ pub struct JobResponse {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+#[allow(clippy::struct_excessive_bools)] // reviewed: kept as-is (R150)
 pub struct EnvEntryOut {
     pub name: String,
     /// Plaintext for non-secret vars, [`MASKED_VALUE`] for secrets.
@@ -267,8 +304,14 @@ fn stored_env(site: &setu_db::Site) -> Vec<StoredVar> {
             Some(StoredVar {
                 name: v.get("name")?.as_str()?.to_string(),
                 value: v.get("value")?.as_str()?.to_string(),
-                secret: v.get("secret").and_then(|b| b.as_bool()).unwrap_or(false),
-                once: v.get("once").and_then(|b| b.as_bool()).unwrap_or(false),
+                secret: v
+                    .get("secret")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                once: v
+                    .get("once")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
             })
         })
         .collect()
@@ -332,8 +375,16 @@ pub async fn list(
 ) -> Result<impl IntoResponse, AppError> {
     require_role(&session, Role::Viewer).await?;
     let sites = state.db.sites().list().await?;
+    let ids: Vec<String> = sites.iter().map(|s| s.id.clone()).collect();
+    let latest = state.db.metrics().latest_for_sites(&ids).await?;
     Ok(Json(SiteListOut {
-        sites: sites.iter().map(SiteOut::from_row).collect(),
+        sites: sites
+            .iter()
+            .map(|s| SiteListItemOut {
+                site: SiteOut::from_row(s),
+                metrics: latest.get(&s.id).map(SiteMetricOut::from_latest),
+            })
+            .collect(),
     }))
 }
 
@@ -397,6 +448,7 @@ async fn refuse_reserved_domain(state: &AppState, domain: &str) -> Result<(), Ap
         (status = 409, body = super::ErrorBody),
     )
 )]
+#[allow(clippy::too_many_lines)] // reviewed: kept as-is (R150)
 pub async fn create(
     State(state): State<AppState>,
     session: Session,
@@ -555,15 +607,23 @@ pub async fn get(
         .metrics()
         .latest_for_site(&site.id)
         .await?
-        .map(|m| SiteMetricOut {
-            at: m.at,
-            cpu_seconds: m.cpu_seconds,
-            memory_bytes: m.memory_bytes,
-            disk_bytes: m.disk_bytes,
-        });
+        .map(|m| SiteMetricOut::from_latest(&m));
+    let admin = match state
+        .db
+        .apps()
+        .version(&site.app_id, &site.app_version)
+        .await
+    {
+        Ok(v) => load_manifest(&v)
+            .ok()
+            .and_then(|m| admin_url(&site.domain, &m.app.admin_path)),
+        Err(e) if e.code == ErrorCode::NotFound => None,
+        Err(e) => return Err(e),
+    };
     Ok(Json(SiteDetailOut {
         site: SiteOut::from_row(&site),
         metrics,
+        admin_url: admin,
     }))
 }
 
@@ -1198,4 +1258,28 @@ pub async fn logs(
         ],
         Body::from_stream(rx),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::admin_url;
+
+    #[test]
+    fn admin_url_joins_domain_and_absolute_path() {
+        assert_eq!(
+            admin_url("blog.example.com", "/"),
+            Some("https://blog.example.com/".into())
+        );
+        assert_eq!(
+            admin_url("blog.example.com", "/admin/login"),
+            Some("https://blog.example.com/admin/login".into())
+        );
+    }
+
+    #[test]
+    fn admin_url_is_none_for_relative_or_odd_paths() {
+        for bad in ["", "admin", "//evil.example", "/a b", "/a\nb"] {
+            assert_eq!(admin_url("blog.example.com", bad), None, "{bad:?}");
+        }
+    }
 }

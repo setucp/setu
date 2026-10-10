@@ -1,5 +1,6 @@
-//! `GET/POST /api/v1/operators` — owner only (spec §7, authz matrix) —
-//! and `PUT /api/v1/operators/{id}/password` (yourself with your current
+//! `GET/POST /api/v1/operators` and `DELETE /api/v1/operators/{id}` —
+//! owner only (spec §7, authz matrix; delete refuses yourself and the
+//! last owner, R149) — and `PUT /api/v1/operators/{id}/password` (yourself with your current
 //! password, or the owner for anyone). A password change deletes every
 //! session of that operator (spec §3).
 
@@ -190,4 +191,40 @@ pub async fn set_password(
         return Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, header)]).into_response());
     }
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// Delete an operator (owner only). Refuses yourself and the last owner
+/// (409, R149); every session of that operator ends with the row.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/operators/{id}",
+    params(("id" = String, Path, description = "Operator id")),
+    responses(
+        (status = 204),
+        (status = 401, body = super::ErrorBody),
+        (status = 403, body = super::ErrorBody),
+        (status = 404, body = super::ErrorBody),
+        (status = 409, body = super::ErrorBody),
+    )
+)]
+pub async fn delete(
+    State(state): State<AppState>,
+    session: Session,
+    ip: ClientIp,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = require_role(&session, Role::Owner).await?;
+    if caller.id == id {
+        return Err(AppError::conflict("you cannot delete yourself"));
+    }
+    let gone = state.db.operators().delete(&id).await?;
+    audit(
+        &state.db,
+        Some(&caller.id),
+        "operator.delete",
+        Some(&gone.email),
+        ip.as_deref(),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
 }

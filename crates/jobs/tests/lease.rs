@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! A run that lost its job lease stops: no further writes, every later
 //! step fails at once with `conflict` (M2).
 

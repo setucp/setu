@@ -33,6 +33,12 @@ install and retries the join once, with the same nonce, only when no
 HTTP response arrived, so a lost response is recoverable (the control
 plane returns the same server token for the same nonce within 60 s).
 
+`setu agent join` (no install) re-joins a host that has joined before,
+after a token rotation: `--control-plane` defaults to agent.toml's, the
+other fields of agent.toml are kept (`insecure` is only ever switched
+on), and the running agent is restarted with `systemctl try-restart`
+(#8). It needs the rotated join token, from the Servers page.
+
 What `agent install` does, idempotently and in this order:
 
 1. **Packages**: adds Caddy's official apt repository and installs
@@ -114,7 +120,9 @@ by `***` in its log and error. Poll errors back off 1 s → 30 s.
 Heartbeat (its own task, every 15 s): `boot_id` (kernel boot id plus a
 per-process id, so an agent restart lets the control plane requeue
 commands it had delivered), load, free memory and disk, unit states,
-and per-site CPU, memory and data size from the helper's `unit show`.
+and per-site CPU and memory from the helper's `unit show` every beat.
+Per-site data size (`du -sb data/`) is measured at most every ten
+minutes and reused in between (`DATA_BYTES_TTL`, #5).
 
 ### `state.json`
 

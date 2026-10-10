@@ -41,6 +41,7 @@ pub struct AgentCommand {
     pub attempts: i32,
 }
 
+#[allow(clippy::missing_fields_in_debug)] // reviewed: kept as-is (R150)
 impl std::fmt::Debug for AgentCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentCommand")

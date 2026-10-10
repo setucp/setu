@@ -168,8 +168,7 @@ pub fn tmp_name(prefix: &str) -> OsString {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_nanos());
     OsString::from(format!(".setu-{prefix}-{}-{nanos}", std::process::id()))
 }
 

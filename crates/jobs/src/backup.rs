@@ -23,6 +23,7 @@ pub async fn run(ctx: &JobCtx, site_id: &str, kind: &str) -> Result<String, AppE
 /// the job payload (resume), else create a `pending` row of `kind` and
 /// record its id there before calling the agent. A row already
 /// `completed` is not taken again.
+#[allow(clippy::similar_names)] // reviewed: kept as-is (R150)
 pub(crate) async fn take(
     ctx: &JobCtx,
     site: &Site,
@@ -30,14 +31,13 @@ pub(crate) async fn take(
     payload_key: &str,
 ) -> Result<String, AppError> {
     let manifest = load_manifest(&ctx.db, &site.app_id, &site.app_version).await?;
-    let row = match ctx.payload_str(payload_key).await {
-        Some(id) => ctx.db.backups().get(&id).await?,
-        None => {
-            let row = ctx.db.backups().create(site, kind).await?;
-            ctx.payload_set(payload_key, serde_json::json!(row.id))
-                .await?;
-            row
-        }
+    let row = if let Some(id) = ctx.payload_str(payload_key).await {
+        ctx.db.backups().get(&id).await?
+    } else {
+        let row = ctx.db.backups().create(site, kind).await?;
+        ctx.payload_set(payload_key, serde_json::json!(row.id))
+            .await?;
+        row
     };
     if row.status == "completed" {
         return Ok(row.id);
@@ -55,7 +55,7 @@ pub(crate) async fn take(
         .await;
     match taken {
         Ok(output) => {
-            let size = output.get("size_bytes").and_then(|v| v.as_i64());
+            let size = output.get("size_bytes").and_then(serde_json::Value::as_i64);
             ctx.db
                 .backups()
                 .set_status(&row.id, "completed", size)

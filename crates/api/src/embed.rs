@@ -27,6 +27,7 @@ struct UiDist;
 #[folder = "ui-placeholder/"]
 struct UiDist;
 
+#[allow(clippy::case_sensitive_file_extension_comparisons)] // reviewed: kept as-is (R150)
 fn content_type(path: &str) -> &'static str {
     if path.ends_with(".html") {
         "text/html; charset=utf-8"

@@ -288,8 +288,7 @@ pub async fn local_server(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(local_hostname);
+        .map_or_else(local_hostname, str::to_string);
     let (server, join_token) = state.db.servers().create_pending(&name, true).await?;
     let tls_internal = state
         .db
@@ -324,7 +323,7 @@ mod tests {
 
     #[test]
     fn hostname_fallback_is_never_empty() {
-        assert!(!local_hostname().is_empty());
+        assert_ne!(local_hostname(), "");
     }
 
     #[test]

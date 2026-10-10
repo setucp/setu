@@ -204,7 +204,17 @@ impl Worker {
                 })?;
                 crate::restore::run(&ctx, &site("restore_site")?, &backup_id).await
             }
-            "delete_site" => crate::delete::run(&ctx, &site("delete_site")?).await,
+            "delete_site" => {
+                if let Some(site_id) = job.site_id.as_deref() {
+                    crate::delete::run(&ctx, site_id).await
+                } else {
+                    // `finish` removed the row (FK SET NULL, R147): a job
+                    // reclaimed after that is complete.
+                    ctx.log("step finish: ok (the site row is already gone)")
+                        .await;
+                    Ok(())
+                }
+            }
             "delete_backup" => {
                 let backup_id = payload_str("backup_id").ok_or_else(|| {
                     AppError::validation("delete_backup job needs payload.backup_id")
@@ -216,7 +226,9 @@ impl Worker {
                 crate::env_update::run(&ctx, &site("env_update")?, &changes).await
             }
             kind @ ("restart_site" | "stop_site" | "start_site") => {
-                let op = crate::lifecycle::Op::from_job_kind(kind).expect("lifecycle kind");
+                let op = crate::lifecycle::Op::from_job_kind(kind).ok_or_else(|| {
+                    AppError::validation(format!("unknown lifecycle kind {kind}"))
+                })?;
                 crate::lifecycle::run(&ctx, &site(kind)?, op).await
             }
             other => Err(AppError::validation(format!("unknown job kind {other}"))),

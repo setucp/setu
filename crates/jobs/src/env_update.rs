@@ -22,6 +22,7 @@ pub const STEPS: &[&str] = &["validate", "env", "write_env", "restart", "finish"
 
 /// Apply `changes` (plaintext name → value) to the site's env, rewrite
 /// the env file and restart.
+#[allow(clippy::assigning_clones)] // reviewed: kept as-is (R150)
 pub async fn run(
     ctx: &JobCtx,
     site_id: &str,

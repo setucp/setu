@@ -45,6 +45,18 @@ describe("site detail", () => {
     expect(screen.getByText("300.0 MiB")).toBeInTheDocument();
   });
 
+  it("overview links the app's admin next to the domain", () => {
+    renderWithClient(<SiteOverview site={{ ...detail, admin_url: "https://blog.example.com/admin" }} />);
+    const admin = screen.getByRole("link", { name: /admin/i });
+    expect(admin).toHaveAttribute("href", "https://blog.example.com/admin");
+    expect(admin).toHaveAttribute("target", "_blank");
+  });
+
+  it("overview shows no admin link when the manifest names no usable path", () => {
+    renderWithClient(<SiteOverview site={{ ...detail, admin_url: null }} />);
+    expect(screen.queryByRole("link", { name: /admin/i })).not.toBeInTheDocument();
+  });
+
   it("overview says when no metrics sample exists yet", () => {
     renderWithClient(<SiteOverview site={{ ...detail, metrics: null }} />);
     expect(screen.getByText(/no sample yet/i)).toBeInTheDocument();

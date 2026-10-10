@@ -151,7 +151,68 @@ pub async fn install_system_cmd(opts: &InstallSystemOpts) -> Result<(), InstallE
 
 /// Join only (re-join a configured host).
 pub async fn join(opts: &InstallOpts) -> Result<(), InstallError> {
-    join_control_plane(opts).await
+    join_control_plane(opts).await?;
+    // The running agent still holds the token this join just invalidated:
+    // restart it (a no-op when it is stopped) (R148).
+    RealCommands
+        .run("systemctl", &["try-restart", "setu-agent.service"])
+        .await
+        .map_err(step("restart agent"))?;
+    Ok(())
+}
+
+/// `--control-plane` for `join`: the flag, else agent.toml's when this
+/// host has joined before (a re-join after `rotate-token`, R148).
+pub fn rejoin_control_plane(
+    cli: Option<String>,
+    existing: &AgentConfig,
+) -> Result<String, InstallError> {
+    match cli {
+        Some(url) => Ok(url),
+        None if !existing.server_id.is_empty() => Ok(existing.control_plane.clone()),
+        None => Err(InstallError::Step(
+            "control plane",
+            "no agent.toml with a server id: pass --control-plane".to_string(),
+        )),
+    }
+}
+
+/// `(insecure, ca)` for a join: flags add to agent.toml's settings and
+/// never remove them, so a re-join without `--ca` keeps the configured
+/// CA and a configured `insecure` stays on (I1).
+pub fn rejoin_transport(
+    insecure: bool,
+    ca: Option<PathBuf>,
+    existing: &AgentConfig,
+) -> (bool, Option<PathBuf>) {
+    (
+        insecure || existing.insecure,
+        ca.or_else(|| existing.ca.clone()),
+    )
+}
+
+/// agent.toml after a (re-)join: identity and control plane replaced,
+/// `--insecure` only ever switched on, `--ca` / `--panel-host` only when
+/// given; everything else (paths, intervals, panel route) kept (R148).
+pub fn joined_config(
+    mut config: AgentConfig,
+    base: String,
+    joined: JoinResponse,
+    insecure: bool,
+    ca: Option<PathBuf>,
+    panel: Option<PanelRoute>,
+) -> AgentConfig {
+    config.control_plane = base;
+    config.server_id = joined.server_id;
+    config.server_token = joined.server_token;
+    config.insecure = config.insecure || insecure;
+    if ca.is_some() {
+        config.ca = ca;
+    }
+    if panel.is_some() {
+        config.panel = panel;
+    }
+    config
 }
 
 /// The Caddy apt repository, exactly as Caddy documents it
@@ -221,7 +282,11 @@ const CADDY_DEB_PATH: &str = "/var/cache/apt/archives/setu-caddy_2.11.7_amd64.de
 /// spec packages except Caddy from the distribution, then Caddy's
 /// release `.deb`, verified before `apt-get` sees it.
 pub fn caddy_deb_fallback_commands() -> Vec<Vec<String>> {
-    let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let v = |a: &[&str]| {
+        a.iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+    };
     vec![
         v(&["rm", "-f", "/etc/apt/sources.list.d/caddy-stable.list"]),
         v(&["apt-get", "update"]),
@@ -428,10 +493,12 @@ fn hostname() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+#[allow(clippy::cast_possible_truncation)] // reviewed: kept as-is (R150)
 fn cpu_cores() -> u32 {
     std::fs::read_to_string("/proc/cpuinfo")
-        .map(|t| t.lines().filter(|l| l.starts_with("processor")).count() as u32)
-        .unwrap_or(1)
+        .map_or(1, |t| {
+            t.lines().filter(|l| l.starts_with("processor")).count() as u32
+        })
         .max(1)
 }
 
@@ -516,18 +583,13 @@ async fn join_control_plane(opts: &InstallOpts) -> Result<(), InstallError> {
         .config_path
         .clone()
         .unwrap_or_else(AgentConfig::default_path);
-    let mut config =
+    let config =
         AgentConfig::load(Some(&path)).map_err(|e| InstallError::Step("config", e.to_string()))?;
-    config.control_plane = base;
-    config.server_id = joined.server_id;
-    config.server_token = joined.server_token;
-    config.insecure = opts.insecure;
-    if let Some(ca) = &opts.ca {
-        config.ca = Some(install_ca(ca, &path)?);
-    }
-    if opts.panel.is_some() {
-        config.panel = opts.panel.clone();
-    }
+    let ca = match &opts.ca {
+        Some(src) => Some(install_ca(src, &path)?),
+        None => None,
+    };
+    let config = joined_config(config, base, joined, opts.insecure, ca, opts.panel.clone());
     // Created 0600 from the start (temp + rename), then handed to `setu`.
     config
         .save(&path)
@@ -548,6 +610,95 @@ async fn join_control_plane(opts: &InstallOpts) -> Result<(), InstallError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review Focus 2: a re-join changes the identity only.
+    #[test]
+    fn joined_config_keeps_agent_toml_except_identity() {
+        let existing = AgentConfig {
+            control_plane: "https://panel.example.com".into(),
+            server_id: "srv-old".into(),
+            server_token: "setu_srv_old".into(),
+            insecure: true,
+            ca: Some(PathBuf::from("/etc/setu/ca.pem")),
+            panel: Some(PanelRoute {
+                host: "panel.example.com".into(),
+                upstream: "127.0.0.1:7000".into(),
+            }),
+            reconcile_secs: 77,
+            ..AgentConfig::default()
+        };
+        let joined = JoinResponse {
+            server_id: "srv-old".into(),
+            server_token: "setu_srv_new".into(),
+        };
+        let out = joined_config(
+            existing.clone(),
+            "https://panel.example.com".into(),
+            joined,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(out.server_token, "setu_srv_new");
+        assert_eq!(out.server_id, "srv-old");
+        assert!(out.insecure, "never switched off by a re-join");
+        assert_eq!(out.ca, existing.ca);
+        assert_eq!(
+            out.panel.as_ref().map(|p| p.host.as_str()),
+            Some("panel.example.com")
+        );
+        assert_eq!(out.reconcile_secs, 77);
+        assert_eq!(out.state_path, existing.state_path);
+    }
+
+    #[test]
+    fn rejoin_control_plane_defaults_to_agent_toml() {
+        let mut cfg = AgentConfig::default();
+        assert!(
+            rejoin_control_plane(None, &cfg).is_err(),
+            "nothing joined yet"
+        );
+        cfg.server_id = "srv1".into();
+        cfg.control_plane = "https://panel.example.com".into();
+        assert_eq!(
+            rejoin_control_plane(None, &cfg).unwrap(),
+            "https://panel.example.com"
+        );
+        assert_eq!(
+            rejoin_control_plane(Some("https://other.example.com".into()), &cfg).unwrap(),
+            "https://other.example.com"
+        );
+    }
+
+    /// I1: a re-join without `--ca` / `--insecure` keeps agent.toml's CA
+    /// and insecure setting, both for the URL check and the HTTP client.
+    #[test]
+    fn rejoin_reuses_ca_and_insecure_from_agent_toml() {
+        let existing = AgentConfig {
+            control_plane: "http://panel.internal.example".into(),
+            server_id: "srv1".into(),
+            insecure: true,
+            ca: Some(PathBuf::from("/nonexistent-setu-test/ca.pem")),
+            ..AgentConfig::default()
+        };
+        let (insecure, ca) = rejoin_transport(false, None, &existing);
+        assert!(insecure, "insecure is read from agent.toml");
+        assert_eq!(ca, existing.ca, "a configured ca is never dropped");
+        // The URL check accepts plain http only because of the kept flag.
+        assert!(check_control_plane(&existing.control_plane, insecure).is_ok());
+        assert!(check_control_plane(&existing.control_plane, false).is_err());
+        // The client is built with the kept CA: a missing file fails there.
+        let err = crate::config::http_client(ca.as_deref()).expect_err("ca is read");
+        assert!(err.to_string().contains("/nonexistent-setu-test/ca.pem"));
+        // Flags can only add to the file, never switch it off.
+        let (insecure, ca) = rejoin_transport(
+            false,
+            Some(PathBuf::from("/x.pem")),
+            &AgentConfig::default(),
+        );
+        assert!(!insecure);
+        assert_eq!(ca, Some(PathBuf::from("/x.pem")));
+    }
 
     #[test]
     fn site_template_uses_instance_specifiers() {

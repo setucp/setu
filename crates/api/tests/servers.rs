@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Servers integration tests: authz, install command, cordon.
 
 use setu_api::testing::TestServer;

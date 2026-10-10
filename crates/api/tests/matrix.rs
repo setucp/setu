@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Authz route matrix: every route × {anonymous, viewer, operator, owner}
 //! → the expected status (mirrors the plan's Task 7 matrix).
 
@@ -136,6 +138,7 @@ fn unique(suffix: &str) -> String {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // reviewed: kept as-is (R150)
 async fn route_matrix() {
     let ctx = Ctx::new().await;
 
@@ -217,6 +220,16 @@ async fn route_matrix() {
         "PUT",
         "/api/v1/operators/does-not-exist/password",
         Some(json!({"password": "new-password-1"})),
+        401,
+        403,
+        403,
+        404,
+    )
+    .await;
+    ctx.row(
+        "DELETE",
+        "/api/v1/operators/does-not-exist",
+        None,
         401,
         403,
         403,
@@ -377,6 +390,28 @@ async fn route_matrix() {
         200,
         200,
         200,
+    )
+    .await;
+    ctx.row("GET", "/api/v1/panel/backup", None, 401, 200, 200, 200)
+        .await;
+    ctx.row(
+        "POST",
+        "/api/v1/servers/does-not-exist/rotate-token",
+        Some(json!({})),
+        401,
+        403,
+        403,
+        404,
+    )
+    .await;
+    ctx.row(
+        "GET",
+        "/api/v1/apps/does-not-exist/versions/0.0.0/prompts",
+        None,
+        401,
+        404,
+        404,
+        404,
     )
     .await;
     ctx.row(

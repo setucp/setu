@@ -61,6 +61,7 @@ fn context(args: &HelperArgs, under_sudo: bool) -> Result<Ctx, HelperError> {
 }
 
 /// Testable body of [`main`].
+#[allow(clippy::needless_pass_by_value)] // reviewed: kept as-is (R150)
 pub fn run_cli(
     args: HelperArgs,
     under_sudo: bool,

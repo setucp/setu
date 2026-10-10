@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Shared fixtures for the jobs integration tests: throwaway DB,
 //! online server, catalogue version, plan, and a `provisioning` site.
 //!
@@ -112,6 +114,7 @@ pub struct Fx {
 
 /// Throwaway DB with an online server, one catalogue version, the
 /// default plan, and a `provisioning` site for that version.
+#[allow(clippy::unreadable_literal)] // reviewed: kept as-is (R150)
 pub async fn setup(manifest_src: &str) -> (setu_testkit::TestDb, Fx) {
     let test_db = setu_testkit::TestDb::new().await;
     let db = Db::new(test_db.pool.clone());
@@ -229,6 +232,7 @@ pub async fn add_site(db: &Db, like: &str, domain: &str) -> String {
 
 /// `sites.create_with` generating the env once from the allocation,
 /// exactly as `POST /sites` does.
+#[allow(clippy::default_trait_access)] // reviewed: kept as-is (R150)
 pub async fn create_site(db: &Db, new: &NewSite) -> setu_db::Site {
     let version = db
         .apps()

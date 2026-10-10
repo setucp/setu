@@ -24,6 +24,7 @@ pub struct Streamed {
 }
 
 /// Create `path` (0600, truncating) for a streamed stdout.
+#[allow(clippy::unused_async)] // reviewed: kept as-is (R150)
 pub async fn create_private(path: &Path) -> std::io::Result<tokio::fs::File> {
     use std::os::unix::fs::OpenOptionsExt as _;
     let file = std::fs::OpenOptions::new()
@@ -40,6 +41,7 @@ pub async fn create_private(path: &Path) -> std::io::Result<tokio::fs::File> {
 /// the file `stdout_to` (synced) or capture it. Input and output run
 /// concurrently, so neither pipe can deadlock the other. A missing
 /// `stdin_from` fails before the process starts.
+#[allow(clippy::similar_names)] // reviewed: kept as-is (R150)
 pub async fn run(
     argv: &[String],
     stdin_prefix: Vec<u8>,
@@ -96,18 +98,15 @@ pub async fn run(
         Ok::<(), std::io::Error>(())
     };
     let read_out = async {
-        match output {
-            Some(mut file) => {
-                let n = tokio::io::copy(&mut stdout, &mut file).await?;
-                file.flush().await?;
-                file.sync_all().await?;
-                Ok::<_, std::io::Error>((Vec::new(), n))
-            }
-            None => {
-                let mut buf = Vec::new();
-                stdout.read_to_end(&mut buf).await?;
-                Ok((buf, 0))
-            }
+        if let Some(mut file) = output {
+            let n = tokio::io::copy(&mut stdout, &mut file).await?;
+            file.flush().await?;
+            file.sync_all().await?;
+            Ok::<_, std::io::Error>((Vec::new(), n))
+        } else {
+            let mut buf = Vec::new();
+            stdout.read_to_end(&mut buf).await?;
+            Ok((buf, 0))
         }
     };
     let read_err = async {

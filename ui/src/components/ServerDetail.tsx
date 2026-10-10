@@ -1,7 +1,8 @@
-import { Ban, CircleCheck, Cpu, Gauge, HeartPulse, Tag } from "lucide-react";
+import * as React from "react";
+import { Ban, CircleCheck, Cpu, Gauge, HeartPulse, KeyRound, Tag } from "lucide-react";
 import { toast } from "sonner";
-import { useCordonServer } from "@/lib/api";
-import { ApiError, type Server, type Site } from "@/lib/client";
+import { useCordonServer, useMe, useRotateServerToken } from "@/lib/api";
+import { ApiError, type RotateTokenResponse, type Server, type Site } from "@/lib/client";
 import { AppLink } from "./AppLink";
 import { ErrorText } from "./ErrorText";
 import { PageHeader } from "./PageHeader";
@@ -12,7 +13,8 @@ import { StatusBadge, StatusDot } from "./StatusBadge";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
-import { useConfirm } from "./ui/dialog";
+import { CopyField } from "./CopyButton";
+import { Modal, useConfirm } from "./ui/dialog";
 
 function describeValue(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
@@ -27,8 +29,26 @@ function describeValue(value: unknown): string {
 export function ServerDetail({ server, sites }: { server: Server; sites: Site[] }) {
   const owned = sites.filter((s) => s.server_id === server.id);
   const cordon = useCordonServer(server.id);
+  const me = useMe();
+  const rotate = useRotateServerToken(server.id);
+  const [issued, setIssued] = React.useState<RotateTokenResponse | null>(null);
   const confirm = useConfirm();
   const next = !server.cordoned;
+
+  function rotateToken() {
+    void (async () => {
+      const ok = await confirm({
+        title: `Rotate the token of ${server.name}?`,
+        description: `A new join token is issued. The current token keeps working until you run setu agent join on ${server.name} with the new one.`,
+        confirmLabel: "Issue a join token",
+      });
+      if (!ok) return;
+      rotate.mutate(undefined, {
+        onSuccess: (res) => setIssued(res),
+        onError: (err) => toast.error(err instanceof ApiError ? err.message : "Rotation failed"),
+      });
+    })();
+  }
 
   function toggle() {
     void (async () => {
@@ -65,17 +85,41 @@ export function ServerDetail({ server, sites }: { server: Server; sites: Site[] 
         }
         description={<span className="font-mono text-xs">{describeValue(server.host)}</span>}
         actions={
-          <Button type="button" variant="outline" loading={cordon.isPending} onClick={toggle}>
-            {cordon.isPending ? null : server.cordoned ? (
-              <CircleCheck aria-hidden="true" />
-            ) : (
-              <Ban aria-hidden="true" />
-            )}
-            {server.cordoned ? "Uncordon" : "Cordon"}
-          </Button>
+          <span className="flex flex-wrap gap-2">
+            {me.data?.role === "owner" ? (
+              <Button type="button" variant="outline" loading={rotate.isPending} onClick={rotateToken}>
+                <KeyRound aria-hidden="true" />
+                Rotate token
+              </Button>
+            ) : null}
+            <Button type="button" variant="outline" loading={cordon.isPending} onClick={toggle}>
+              {cordon.isPending ? null : server.cordoned ? (
+                <CircleCheck aria-hidden="true" />
+              ) : (
+                <Ban aria-hidden="true" />
+              )}
+              {server.cordoned ? "Uncordon" : "Cordon"}
+            </Button>
+          </span>
         }
       />
       <ErrorText error={cordon.isError ? cordon.error : null} />
+      <Modal
+        open={issued !== null}
+        onClose={() => setIssued(null)}
+        title="New join token"
+        description="Shown once. Valid for one hour."
+        footer={<Button onClick={() => setIssued(null)}>Done</Button>}
+      >
+        <div className="flex flex-col gap-3 text-sm">
+          <CopyField value={issued?.join_token ?? ""} label="Join token" />
+          <p>
+            On {server.name}, as root: <code>{issued?.join_command}</code>, and paste the token
+            when it asks (or set <code>SETU_JOIN_TOKEN</code>). The agent keeps its settings and
+            restarts.
+          </p>
+        </div>
+      </Modal>
 
       <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard icon={<HeartPulse aria-hidden="true" />} label="Last heartbeat" value={<RelativeTime iso={server.last_seen_at} />} />

@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Auth integration tests (plan Task 7, spec §7): the session cookie,
 //! logout and password changes ending sessions, the login limiter per
 //! client IP, which `X-Forwarded-For` is believed, and the `Origin`
@@ -100,6 +102,7 @@ async fn login_sets_cookie_and_me_works() {
 }
 
 #[tokio::test]
+#[allow(clippy::similar_names)] // reviewed: kept as-is (R150)
 async fn cookie_is_secure_only_for_https_public_url() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
@@ -487,4 +490,65 @@ async fn own_password_change_is_rate_limited() {
         .await
         .expect("put sends");
     assert_eq!(limited.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn delete_operator_refusals_audit_and_session_teardown() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner_op = srv
+        .create_operator("owner", "correct-horse-1", "owner")
+        .await;
+    let owner = new_client();
+    srv.login(&owner, &owner_op.email, "correct-horse-1").await;
+    let viewer = srv.login_as("viewer").await;
+    let target = srv
+        .create_operator("ops", "correct-horse-1", "operator")
+        .await;
+    let target_client = new_client();
+    srv.login(&target_client, &target.email, "correct-horse-1")
+        .await;
+    let url = |id: &str| srv.url(&format!("/api/v1/operators/{id}"));
+
+    let r = viewer
+        .delete(url(&target.id))
+        .send()
+        .await
+        .expect("delete sends");
+    assert_eq!(r.status(), reqwest::StatusCode::FORBIDDEN, "owner only");
+    let r = owner
+        .delete(url(&owner_op.id))
+        .send()
+        .await
+        .expect("delete sends");
+    assert_eq!(r.status(), reqwest::StatusCode::CONFLICT, "not yourself");
+    let r = owner
+        .delete(url("does-not-exist"))
+        .send()
+        .await
+        .expect("delete sends");
+    assert_eq!(r.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let r = owner
+        .delete(url(&target.id))
+        .send()
+        .await
+        .expect("delete sends");
+    assert_eq!(r.status(), reqwest::StatusCode::NO_CONTENT);
+    let me = target_client
+        .get(srv.url("/api/v1/auth/me"))
+        .send()
+        .await
+        .expect("me sends");
+    assert_eq!(
+        me.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "sessions destroyed"
+    );
+    let audit = srv.db.audit().list_recent(50).await.expect("audit");
+    let row = audit
+        .iter()
+        .find(|a| a.action == "operator.delete")
+        .expect("audited");
+    assert_eq!(row.target_id.as_deref(), Some(target.email.as_str()));
 }

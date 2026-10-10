@@ -3,9 +3,13 @@ import type { components } from "./api-types";
 export type Operator = components["schemas"]["OperatorOut"];
 export type Site = components["schemas"]["SiteOut"];
 export type SiteDetail = components["schemas"]["SiteDetailOut"];
+export type SiteListItem = components["schemas"]["SiteListItemOut"];
 export type SiteMetric = components["schemas"]["SiteMetricOut"];
+export type Prompt = components["schemas"]["PromptOut"];
 export type RevealOut = components["schemas"]["RevealOut"];
 export type Server = components["schemas"]["ServerOut"];
+export type RotateTokenResponse = components["schemas"]["RotateTokenResponse"];
+export type SelfBackup = components["schemas"]["SelfBackupOut"];
 export type AppInfo = components["schemas"]["AppOut"];
 export type AppVersion = components["schemas"]["AppVersionOut"];
 export type Job = components["schemas"]["JobOut"];
@@ -124,8 +128,8 @@ export const api = {
     return request("/api/v1/auth/me");
   },
 
-  async listSites(): Promise<Site[]> {
-    const body = await request<{ sites: Site[] }>("/api/v1/sites");
+  async listSites(): Promise<SiteListItem[]> {
+    const body = await request<{ sites: SiteListItem[] }>("/api/v1/sites");
     return body.sites;
   },
 
@@ -151,6 +155,14 @@ export const api = {
   async listApps(): Promise<AppInfo[]> {
     const body = await request<{ apps: AppInfo[] }>("/api/v1/apps");
     return body.apps;
+  },
+
+  /** The `prompt` rules of one version: name, label, secret. Never a value. */
+  async versionPrompts(appId: string, version: string): Promise<Prompt[]> {
+    const body = await request<{ prompts: Prompt[] }>(
+      `/api/v1/apps/${encodeURIComponent(appId)}/versions/${encodeURIComponent(version)}/prompts`,
+    );
+    return body.prompts;
   },
 
   async appVersions(appId: string): Promise<AppVersion[]> {
@@ -187,6 +199,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name }),
     });
+  },
+
+  /** The control plane's own nightly database backup (viewer and above). */
+  panelBackup(): Promise<SelfBackup> {
+    return request("/api/v1/panel/backup");
+  },
+
+  /** Owner only: a new single-use join token (1 h) for a joined server. */
+  rotateServerToken(id: string): Promise<RotateTokenResponse> {
+    return request(`/api/v1/servers/${encodeURIComponent(id)}/rotate-token`, { method: "POST" });
   },
 
   cordonServer(id: string, cordoned: boolean): Promise<Server> {
@@ -315,6 +337,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ email, password, role }),
     });
+  },
+
+  /** Owner only. Refused for yourself and the last owner (409). */
+  deleteOperator(id: string): Promise<void> {
+    return request(`/api/v1/operators/${encodeURIComponent(id)}`, { method: "DELETE" });
   },
 
   /** Own password needs `current_password`; the owner sets anyone else's. */

@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! `setu helper` verbs, unprivileged: a tempdir root, `Recording`
 //! ownership, `FakeUsers`, `FakeSystemctl` (plan Task 10b).
 
@@ -260,8 +262,8 @@ fn helper_rejects_bad_site_id() {
         }
     }
     assert!(snapshot(t.root()).is_empty(), "nothing may be written");
-    assert!(t.users.calls().is_empty());
-    assert!(t.units.calls().is_empty());
+    assert_eq!(t.users.calls(), [] as [std::string::String; 0]);
+    assert_eq!(t.units.calls(), [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -846,7 +848,7 @@ fn install_requires_regular_download_file() {
     std::fs::write(&name, b"not the archive").expect("write");
     let err = t.run(Verb::Install, S, input.clone()).expect_err("hash");
     assert!(matches!(err, HelperError::Refused(_)), "{err:?}");
-    assert!(names(&t.site("bin")).is_empty());
+    assert_eq!(names(&t.site("bin")), [] as [std::string::String; 0]);
     // The real thing works.
     std::fs::write(&name, &good).expect("write");
     t.run(Verb::Install, S, input).expect("install");
@@ -1367,5 +1369,23 @@ fn backup_skips_foreign_owned_and_hardlinked_files() {
     assert!(
         archived_files(&archive).is_empty(),
         "foreign-owned files skipped"
+    );
+}
+
+#[test]
+fn unit_show_skips_du_when_data_bytes_is_false() {
+    let t = setup();
+    t.create(&["media"]);
+    std::fs::write(t.site("data/media/a.bin"), vec![0u8; 4096]).expect("write");
+    t.run(Verb::Unit, S, json!({"op": "start"})).expect("start");
+    let show = t
+        .run(Verb::Unit, S, json!({"op": "show", "data_bytes": false}))
+        .expect("show");
+    assert_eq!(show["ActiveState"], "active");
+    assert!(show.get("data_bytes").is_none(), "no du walk: {show}");
+    let measured = t.run(Verb::Unit, S, json!({"op": "show"})).expect("show");
+    assert!(
+        measured["data_bytes"].as_u64().expect("bytes") >= 4096,
+        "default still measures"
     );
 }

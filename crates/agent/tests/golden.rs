@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Golden privileged artefacts (spec §4, plan Task 10b): the committed
 //! assets must equal these texts byte for byte. A change here is a
 //! security-review event, not a refactor.

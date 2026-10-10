@@ -1,9 +1,9 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { SitesTable } from "@/components/SitesTable";
-import type { Plan, Server, Site } from "@/lib/client";
+import type { Plan, Server, SiteListItem } from "@/lib/client";
 
-const sites: Site[] = [
+const sites: SiteListItem[] = [
   {
     id: "site1",
     name: "blog",
@@ -19,6 +19,12 @@ const sites: Site[] = [
     failed_step: null,
     created_at: "2026-10-01T00:00:00Z",
     updated_at: "2026-10-01T00:00:00Z",
+    metrics: {
+      at: "2026-10-01T00:00:00Z",
+      cpu_seconds: 1,
+      memory_bytes: 184 * 1024 * 1024,
+      disk_bytes: 1024 * 1024 * 1024,
+    },
   },
   {
     id: "site2",
@@ -35,6 +41,7 @@ const sites: Site[] = [
     failed_step: "health",
     created_at: "2026-10-02T00:00:00Z",
     updated_at: "2026-10-02T00:00:00Z",
+    metrics: null,
   },
 ];
 
@@ -70,7 +77,7 @@ describe("sites list", () => {
     const link = within(row).getByRole("link", { name: "blog" });
     expect(link).toHaveAttribute("href", "/sites/site1");
     expect(within(row).getByText("running")).toBeInTheDocument();
-    expect(within(row).getByText("512M")).toBeInTheDocument();
+    expect(within(row).getByText("184.0 MiB / 512M")).toBeInTheDocument();
   });
 
   it("marks failed sites distinctly", () => {
@@ -83,5 +90,15 @@ describe("sites list", () => {
   it("renders an empty state when there are no sites", () => {
     render(<SitesTable sites={[]} plans={plans} servers={servers} />);
     expect(screen.getByText(/no sites yet/i)).toBeInTheDocument();
+  });
+  it("memory and disk show usage over the plan limit", () => {
+    render(<SitesTable sites={sites} plans={plans} servers={servers} />);
+    const blog = screen.getByRole("row", { name: /blog/ });
+    expect(within(blog).getByText("184.0 MiB / 512M")).toBeInTheDocument();
+    expect(within(blog).getByText("1.0 GiB / 5.0G")).toBeInTheDocument();
+    expect(within(blog).getAllByRole("progressbar")).toHaveLength(2);
+    const shop = screen.getByRole("row", { name: /shop/ });
+    expect(within(shop).getByText("— / 512M")).toBeInTheDocument();
+    expect(within(shop).queryAllByRole("progressbar")).toHaveLength(0);
   });
 });

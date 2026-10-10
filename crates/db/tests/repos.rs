@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Repository tests over throwaway databases (`setu-testkit::TestDb`),
 //! plan Task 5. Each test gets its own database, so tests run in
 //! parallel safely.
@@ -477,6 +479,7 @@ async fn create_site_refuses_over_85_percent() {
 }
 
 #[tokio::test]
+#[allow(clippy::similar_names)] // reviewed: kept as-is (R150)
 async fn create_site_counts_control_plane_overhead() {
     let (_test, db) = test_db().await;
     let cp = online_server(&db, 2000, true).await;
@@ -698,7 +701,7 @@ async fn finish_requires_lease_holder() {
     let row = db.jobs().get(&job.id).await.unwrap();
     assert_eq!(row.status, "running");
     assert_eq!(row.locked_by.as_deref(), Some("w2"));
-    assert!(row.log.is_empty());
+    assert_eq!(row.log, "");
     assert!(row.payload.get("step").is_none());
 
     // w2 holds it: its writes land.
@@ -848,10 +851,7 @@ async fn expired_command_nulls_secret_fields() {
         .execute(db.pool())
         .await
         .unwrap();
-    db.commands()
-        .prune(Duration::from_secs(48 * 3600))
-        .await
-        .unwrap();
+    db.commands().prune(Duration::from_hours(48)).await.unwrap();
     assert_eq!(db.commands().get(&env.id).await.unwrap().status, "expired");
     assert_redacted(&db, &env.id).await;
 }
@@ -1031,11 +1031,7 @@ async fn prune_deletes_terminal_by_created_at() {
         )
         .await;
     }
-    let n = db
-        .commands()
-        .prune(Duration::from_secs(24 * 3600))
-        .await
-        .unwrap();
+    let n = db.commands().prune(Duration::from_hours(24)).await.unwrap();
     assert_eq!(n, 2);
     assert!(db.commands().get(&ids[0]).await.is_err());
     assert_eq!(db.commands().get(&ids[1]).await.unwrap().status, "done");
@@ -1089,4 +1085,266 @@ async fn settings_and_backups_round_trip() {
     let b = db.backups().get(&scheduled[0].id).await.unwrap();
     assert!(b.site_id.is_none());
     assert_eq!(b.domain, "a.example.com");
+}
+
+#[tokio::test]
+async fn delete_operator_removes_sessions_and_unknown_is_not_found() {
+    let (_test, db) = test_db().await;
+    let a = db
+        .operators()
+        .create("a@x.io", "h1", "owner")
+        .await
+        .unwrap();
+    let b = db
+        .operators()
+        .create("b@x.io", "h1", "viewer")
+        .await
+        .unwrap();
+    let b1 = db.sessions().create(&b.id).await.unwrap();
+
+    let gone = db.operators().delete(&b.id).await.expect("delete viewer");
+    assert_eq!(gone.email, "b@x.io");
+    assert!(
+        db.sessions().load(&b1).await.unwrap().is_none(),
+        "session ended"
+    );
+    assert!(db.operators().by_id(&b.id).await.unwrap().is_none());
+    let err = db
+        .operators()
+        .delete(&b.id)
+        .await
+        .expect_err("already gone");
+    assert_eq!(err.code, ErrorCode::NotFound);
+    let err = db.operators().delete(&a.id).await.expect_err("last owner");
+    assert_eq!(err.code, ErrorCode::Conflict);
+}
+
+/// Review Focus 1: two owners delete each other at once; exactly one wins.
+#[tokio::test]
+async fn delete_operator_never_removes_the_last_owner_under_race() {
+    for round in 0..5 {
+        let (_test, db) = test_db().await;
+        let a = db.operators().create("a@x.io", "h", "owner").await.unwrap();
+        let b = db.operators().create("b@x.io", "h", "owner").await.unwrap();
+        let ops = db.operators();
+        let (ra, rb) = tokio::join!(ops.delete(&b.id), ops.delete(&a.id));
+        assert_eq!(
+            usize::from(ra.is_ok()) + usize::from(rb.is_ok()),
+            1,
+            "round {round}: exactly one delete succeeds"
+        );
+        let err = ra.err().or(rb.err()).expect("one refusal");
+        assert_eq!(err.code, ErrorCode::Conflict, "round {round}");
+        let owners = db.operators().list().await.unwrap();
+        assert_eq!(owners.iter().filter(|o| o.role == "owner").count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn latest_for_sites_returns_the_newest_sample_per_site() {
+    let (_test, db) = test_db().await;
+    let s = site(&db).await;
+    let now = chrono::Utc::now();
+    let sample = |at, mem: u64| setu_proto::SiteMetric {
+        short_id: s.short_id.clone(),
+        at,
+        cpu_seconds: 1.0,
+        memory_bytes: mem,
+        disk_bytes: 7 << 20,
+    };
+    db.metrics()
+        .insert_batch(
+            &s.server_id,
+            &[
+                sample(now - chrono::Duration::minutes(2), 1 << 20),
+                sample(now, 3 << 20),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let map = db
+        .metrics()
+        .latest_for_sites(&[s.id.clone(), "no-such-site".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(map.len(), 1, "sites without samples are absent");
+    assert_eq!(map[&s.id].memory_bytes, 3 << 20, "the newest sample");
+    assert!(db.metrics().latest_for_sites(&[]).await.unwrap().is_empty());
+}
+
+/// Review Focus 3: NULL site ids never collide in the partial unique
+/// index; a site's own active-job guard still holds.
+#[tokio::test]
+async fn jobs_without_a_site_never_collide_in_the_active_index() {
+    let (_test, db) = test_db().await;
+    let s = site(&db).await;
+    for _ in 0..3 {
+        db.jobs()
+            .enqueue("delete_backup", None, Some(&s.server_id), None)
+            .await
+            .expect("site-less jobs coexist");
+    }
+    db.jobs()
+        .enqueue("backup_site", Some(&s.id), Some(&s.server_id), None)
+        .await
+        .expect("first");
+    let err = db
+        .jobs()
+        .enqueue("backup_site", Some(&s.id), Some(&s.server_id), None)
+        .await
+        .expect_err("second active job for the site");
+    assert_eq!(err.code, ErrorCode::Conflict);
+    let job = db
+        .jobs()
+        .active_for_site(&s.id)
+        .await
+        .unwrap()
+        .expect("active");
+    db.sites().delete(&s.id).await.expect("delete site");
+    let kept = db
+        .jobs()
+        .get(&job.id)
+        .await
+        .expect("job row survives its site");
+    assert_eq!(kept.site_id, None);
+}
+
+/// Review Focus 2: the old token works until the agent joins with the
+/// rotated join token; then only the new one does.
+#[tokio::test]
+async fn rotate_keeps_the_old_token_until_the_rejoin() {
+    let (_test, db) = test_db().await;
+    let (pending, first_join) = db.servers().create_pending("web", false).await.unwrap();
+    let (_, old) = db
+        .servers()
+        .join(&first_join, &join_input("n1", 4096), &sealer())
+        .await
+        .unwrap();
+
+    let (rotating, join2) = db
+        .servers()
+        .rotate_join_token(&pending.id)
+        .await
+        .expect("rotate");
+    assert!(join2.starts_with("setu_join_"));
+    assert_eq!(
+        rotating.status(chrono::Utc::now()),
+        setu_db::ServerStatus::Rejoining
+    );
+    assert!(
+        db.servers().by_token(&old).await.unwrap().is_some(),
+        "old token still valid"
+    );
+    assert!(
+        matches!(
+            db.servers()
+                .join(&first_join, &join_input("n9", 4096), &sealer())
+                .await,
+            Err(JoinError::Unknown)
+        ),
+        "the original join token is gone"
+    );
+
+    // A second rotation before the join replaces the first.
+    let (_, join3) = db
+        .servers()
+        .rotate_join_token(&pending.id)
+        .await
+        .expect("rotate again");
+    assert!(matches!(
+        db.servers()
+            .join(&join2, &join_input("n2", 4096), &sealer())
+            .await,
+        Err(JoinError::Unknown)
+    ));
+    let (joined, new) = db
+        .servers()
+        .join(&join3, &join_input("n3", 4096), &sealer())
+        .await
+        .expect("rejoin");
+    assert_eq!(joined.id, pending.id, "same server row");
+    assert_ne!(new, old);
+    assert!(
+        db.servers().by_token(&old).await.unwrap().is_none(),
+        "old token invalid after the join"
+    );
+    assert_eq!(
+        db.servers().by_token(&new).await.unwrap().map(|s| s.id),
+        Some(pending.id.clone())
+    );
+    assert_eq!(
+        joined.status(chrono::Utc::now()),
+        setu_db::ServerStatus::Online
+    );
+}
+
+#[tokio::test]
+async fn rotated_join_retry_with_same_nonce_returns_same_token() {
+    let (_test, db) = test_db().await;
+    let server = online_server(&db, 4096, false).await;
+    let (_, join2) = db.servers().rotate_join_token(&server.id).await.unwrap();
+    let (_, t1) = db
+        .servers()
+        .join(&join2, &join_input("re-1", 4096), &sealer())
+        .await
+        .unwrap();
+    let (_, t2) = db
+        .servers()
+        .join(&join2, &join_input("re-1", 4096), &sealer())
+        .await
+        .expect("lost response retried");
+    assert_eq!(t1, t2);
+    assert!(matches!(
+        db.servers()
+            .join(&join2, &join_input("other", 4096), &sealer())
+            .await,
+        Err(JoinError::NonceMismatch)
+    ));
+}
+
+#[tokio::test]
+async fn rotate_refuses_unjoined_and_unknown_servers() {
+    let (_test, db) = test_db().await;
+    let (pending, _) = db.servers().create_pending("never", false).await.unwrap();
+    assert_eq!(
+        db.servers()
+            .rotate_join_token(&pending.id)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+    assert_eq!(
+        db.servers()
+            .rotate_join_token("nope")
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+}
+
+/// A rotated server whose agent stopped heartbeating is `offline`, not
+/// `rejoining`: the rejoin state only ever stands in for `online`.
+#[tokio::test]
+async fn rejoining_server_that_stopped_heartbeating_is_offline() {
+    let (_test, db) = test_db().await;
+    let server = online_server(&db, 4096, false).await;
+    let (rotating, _) = db
+        .servers()
+        .rotate_join_token(&server.id)
+        .await
+        .expect("rotate");
+    let now = chrono::Utc::now();
+    assert_eq!(
+        rotating.status(now),
+        setu_db::ServerStatus::Rejoining,
+        "fresh heartbeat while the rotated token is outstanding"
+    );
+    assert_eq!(
+        rotating.status(now + chrono::Duration::seconds(120)),
+        setu_db::ServerStatus::Offline,
+        "stale heartbeat wins over the rejoin state"
+    );
 }

@@ -1,3 +1,5 @@
+// Test crate: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! `NativeRuntime` over the helper trait: `FakeHelper` for the exact
 //! verbs and inputs, `LocalHelper` (the real helper code on a tempdir
 //! root with fakes) for end-to-end effects. No root, systemd, Postgres
@@ -198,6 +200,7 @@ async fn site_create_sends_the_spec_dirs_and_records_the_port() {
 }
 
 #[tokio::test]
+#[allow(clippy::unreadable_literal)] // reviewed: kept as-is (R150)
 async fn status_maps_show_output_including_data_bytes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let helper = FakeHelper::new();

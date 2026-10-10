@@ -42,6 +42,9 @@ caddy-api`. Health: `setu agent doctor` on a server; `/healthz` and
 If the control plane is down from 03:00 until after the two-hour
 window, that night's backups are skipped; the next night catches up.
 
+The control plane's own database has a separate nightly dump, run beside
+the scheduler; see *Backing up the control plane*.
+
 ## Site backups
 
 Location, on the server that runs the site:
@@ -100,8 +103,14 @@ sudo -u setu setu backup --out /var/lib/setu/setu-$(date +%F).dump
 `database_url`, passing the password in `pg_dump`'s environment, never
 on its command line. Copy the dump **and** a copy of `setu.toml` (it
 holds the database password and the secret key: store it like a
-private key) off the box. There is no scheduled self-backup in phase 1:
-put the command in a root cron entry or a systemd timer.
+private key) off the box.
+
+`setu serve` also dumps the database itself every night at 03:00 (panel
+time; if the panel was down then, as soon as it is back) into
+`/var/lib/setu/backups/setu/setu-<UTC time>.dump`, keeping the newest
+seven. Settings → Panel shows the last successful one; a failed attempt
+is shown there too and retried hourly. These copies live on the same box:
+still copy them, and `setu.toml`, off it.
 
 ## Restoring the control plane
 
@@ -170,28 +179,28 @@ reconcile keeps the new route.
 
 ## Rotating a server token
 
-There is no command for it in phase 1. The control plane stores only
-the token's SHA-256; the agent keeps the token in
-`/etc/setu/agent.toml`. To rotate by hand (`<server_id>` is on the
-Servers page):
+Servers → the server → **Rotate token** (owner only) issues a single-use
+join token, valid for one hour, and shows it once. The server's status
+reads `rejoining` until its agent joins with the new token. The current
+server token keeps working until then, so the agent is never cut off by
+the rotation itself. On the server, as root:
 
 ```sh
-# 1. on the server: a new token, written into agent.toml (no argv exposure)
-tok="setu_srv_$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
-sed -i "s|^server_token = .*|server_token = \"$tok\"|" /etc/setu/agent.toml
-printf '%s' "$tok" | sha256sum | cut -d' ' -f1   # the hash for step 2
-unset tok
-# 2. on the control-plane box: store the hash
-sudo -u postgres psql -X -d setu \
-  -c "UPDATE servers SET token_hash = '<hash>' WHERE id = '<server_id>'"
-# 3. on the server
-systemctl restart setu-agent
+setu agent join        # paste the token when asked, or: SETU_JOIN_TOKEN=... setu agent join
 ```
 
-`sed` receives the token on its command line for an instant; run this
-on a box without untrusted local users, or edit the file with an editor
-instead. Between steps 2 and 3 the agent's polls fail with 401 and back
-off; nothing is lost (queued commands wait).
+`setu agent join` reads the control plane from `/etc/setu/agent.toml`,
+keeps every other field of it (paths, intervals, the panel route) and
+keeps its CA (`ca`) and `insecure` setting unless a flag adds to them;
+under `tls internal` the printed command already carries `--ca` for
+Caddy's local CA. It restarts the running agent so it uses the new
+server token (#8). A lost join response is recovered by running the same
+join again with the same token; rotating a second time before the join
+replaces the first join token. After the join, the old server token is
+invalid.
+
+The procedure replaces the earlier manual SQL update, which could leave
+the agent with a token the control plane no longer accepted.
 
 ## Rebuilding a server
 
@@ -207,8 +216,9 @@ ports and env) and is not covered by the automated tests:
 3. Run `setu agent install --control-plane <url> [--tls internal]` with
    a join token from a **new** pending server (Servers → Add server),
    then stop the agent and point it at the old row: put the old
-   server's id in `server_id` in `/etc/setu/agent.toml` and rotate its
-   token as above. Delete the new, now unused pending server in the UI.
+   server's id in `server_id` in `/etc/setu/agent.toml`, rotate the
+   old server's token in the UI and run `setu agent join` as above.
+   Delete the new, now unused pending server in the UI.
 4. For each site on the old server: mark it `failed` (`UPDATE sites SET
    status = 'failed', failed_step = 'validate' WHERE id = '<site_id>'`
    in the `setu` database), then **Retry** in the UI. Provisioning

@@ -114,6 +114,7 @@ impl RecordingCommands {
         Self::default()
     }
 
+    #[allow(clippy::return_self_not_must_use)] // reviewed: kept as-is (R150)
     pub fn starting_caddy(mut self, admin: FakeAdmin) -> Self {
         self.caddy = Some(admin);
         self
@@ -121,19 +122,24 @@ impl RecordingCommands {
 
     /// Every command whose line contains `needle` fails (after being
     /// recorded).
+    #[allow(clippy::return_self_not_must_use)] // reviewed: kept as-is (R150)
     pub fn failing_on(mut self, needle: &str) -> Self {
         self.fail_on = Some(needle.to_string());
         self
     }
 
     /// Every command whose line contains `needle` prints `stdout`.
+    #[allow(clippy::return_self_not_must_use)] // reviewed: kept as-is (R150)
     pub fn answering(mut self, needle: &str, stdout: &str) -> Self {
         self.answers.push((needle.to_string(), stdout.to_string()));
         self
     }
 
     pub fn calls(&self) -> Vec<String> {
-        self.calls.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -157,7 +163,7 @@ impl SystemCommands for RecordingCommands {
             .map(|(_, out)| out.clone());
         self.calls
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(line);
         if fail {
             anyhow::bail!("recorded failure");
@@ -306,14 +312,13 @@ pub async fn install_system_with(
     sys.run("systemctl", &["enable", "caddy-api.service"])
         .await?;
 
-    let current = match caddy.routes().await {
-        Ok(routes) => routes,
-        Err(_) => {
-            set_aside_foreign_autosave(&at(CADDY_AUTOSAVE))?;
-            sys.run("systemctl", &["restart", "caddy-api.service"])
-                .await?;
-            wait_for_caddy(caddy).await?
-        }
+    let current = if let Ok(routes) = caddy.routes().await {
+        routes
+    } else {
+        set_aside_foreign_autosave(&at(CADDY_AUTOSAVE))?;
+        sys.run("systemctl", &["restart", "caddy-api.service"])
+            .await?;
+        wait_for_caddy(caddy).await?
     };
     caddy
         .load(&merge_routes(base, current))

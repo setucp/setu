@@ -10,6 +10,7 @@ use serde_json::json;
 use super::fs::{ensure_dir, open_root, walk_create};
 use super::{validate, Ctx, DirsInput, HelperError, SITES};
 
+#[allow(clippy::needless_pass_by_value)] // reviewed: kept as-is (R150)
 pub fn site_create(
     ctx: &Ctx,
     short: &str,

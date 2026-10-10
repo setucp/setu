@@ -199,11 +199,11 @@ pub enum Command {
 }
 
 /// `install` may download a large archive.
-pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+pub const INSTALL_TIMEOUT: Duration = Duration::from_mins(15);
 /// `backup`/`restore` dump or replace a whole database.
-pub const BACKUP_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+pub const BACKUP_TIMEOUT: Duration = Duration::from_hours(1);
 /// Everything else.
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_mins(2);
 /// Added to `startup_grace_s` for `health`.
 pub const HEALTH_SLACK: Duration = Duration::from_secs(30);
 
@@ -497,6 +497,7 @@ mod tests {
     }
 
     /// One of every variant, in declaration order, with its kind tag.
+    #[allow(clippy::too_many_lines)] // reviewed: kept as-is (R150)
     fn all_commands() -> Vec<(Command, &'static str)> {
         let site = test_site();
         vec![
@@ -749,6 +750,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unreadable_literal)] // reviewed: kept as-is (R150)
     fn debug_never_prints_secrets() {
         for (cmd, kind) in all_commands() {
             let dbg = format!("{cmd:?}");

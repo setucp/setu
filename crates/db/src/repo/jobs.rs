@@ -46,6 +46,7 @@ pub struct Job {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
+#[allow(clippy::missing_fields_in_debug)] // reviewed: kept as-is (R150)
 impl std::fmt::Debug for Job {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Job")
@@ -258,6 +259,25 @@ impl<'a> Jobs<'a> {
             Ok(_) => AppError::conflict("job lease lost: another runner owns it"),
             Err(e) => e,
         }
+    }
+
+    /// Null the sealed payload fields (`changes`, `prompts`, `old_env`,
+    /// `old_spec`) of every job of `site_id`, so a deleted site leaves no
+    /// sealed values behind in the job rows that outlive it (M1). Returns
+    /// how many rows were scrubbed. Must run before the site row goes:
+    /// the FK then unlinks the rows and `site_id` no longer matches.
+    pub async fn scrub_payload_secrets_for_site(&self, site_id: &str) -> Result<u64, AppError> {
+        Ok(sqlx::query!(
+            "UPDATE jobs SET payload = payload || jsonb_build_object(
+                 'changes', NULL::jsonb, 'prompts', NULL::jsonb,
+                 'old_env', NULL::jsonb, 'old_spec', NULL::jsonb)
+             WHERE site_id = $1",
+            site_id
+        )
+        .execute(self.pool)
+        .await
+        .map_err(map_db_error)?
+        .rows_affected())
     }
 
     /// Put `running` jobs whose lease expired back to `queued` (boot

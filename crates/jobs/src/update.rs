@@ -61,6 +61,7 @@ struct Old {
 }
 
 /// Update the site to `to_version`.
+#[allow(clippy::too_many_lines)] // reviewed: kept as-is (R150)
 pub async fn run(ctx: &JobCtx, site_id: &str, to_version: &str) -> Result<(), AppError> {
     let site = ctx.db.sites().get(site_id).await?;
     let cursor = ctx.cursor().await;

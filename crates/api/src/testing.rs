@@ -1,3 +1,5 @@
+// Test double / test harness: a panic is the failure report (R146).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! [`TestServer`]: the whole control plane against a throwaway database.
 //!
 //! Ruling (Task 7): the plan names this `testkit::TestServer`, but building
