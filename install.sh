@@ -2,7 +2,7 @@
 # Setu installer (spec §8). Run as root on a fresh Ubuntu 24.04 x86_64
 # server:
 #
-#   curl -fsSLO https://github.com/vyasa-cms/setu/releases/latest/download/install.sh
+#   curl -fsSLO https://github.com/setucp/setu/releases/latest/download/install.sh
 #   sudo bash install.sh --panel-host setu.example.com
 #
 # It downloads the release archive and SHA256SUMS, verifies the archive,
@@ -27,7 +27,7 @@
 #   --sums-url <url>      take SHA256SUMS from <url> (tests; needs --archive-url)
 set -euo pipefail
 
-REPO="vyasa-cms/setu"
+REPO="setucp/setu"
 TARGET="x86_64-unknown-linux-musl"
 CONF=/etc/setu/setu.toml
 UNIT=/etc/systemd/system/setu.service

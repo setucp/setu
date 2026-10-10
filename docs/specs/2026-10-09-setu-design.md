@@ -1160,7 +1160,7 @@ CI and skills transfer. As built (workspace `Cargo.toml`):
 ## 12. Open questions for the owner
 
 - Name. "Setu" is a placeholder.
-- Repository home and visibility: `vyasa-cms/setu` is private; the
+- Repository home and visibility: decided 2026-10-10 — `setucp/setu`, public; the
   install script needs public releases.
 - Licence: AGPL-3.0 for the panel, Apache-2.0 for the manifest and
   protocol crates (recommendation).

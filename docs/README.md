@@ -47,7 +47,7 @@ browser → Caddy (TLS) → setu serve → agents → setu-site@<short>.service
 On a fresh Ubuntu 24.04 VPS with a DNS name pointing at it, as root:
 
 ```sh
-curl -fsSLO https://github.com/vyasa-cms/setu/releases/latest/download/install.sh
+curl -fsSLO https://github.com/setucp/setu/releases/latest/download/install.sh
 bash install.sh --panel-host setu.example.com
 ```
 

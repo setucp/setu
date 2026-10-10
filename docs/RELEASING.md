@@ -51,6 +51,6 @@ it.
 
 ## Org and licence
 
-Still the owner's call (spec §12): currently `vyasa-cms/setu`
+Still the owner's call (spec §12): currently `setucp/setu`
 (private) and `AGPL-3.0-only`. Changing the org means updating
 `install.sh` (`REPO=`) and these docs.

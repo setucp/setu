@@ -11,7 +11,7 @@ The repository and its releases are private until the owner decides
 otherwise (spec §12); with access, as root:
 
 ```sh
-curl -fsSLO https://github.com/vyasa-cms/setu/releases/latest/download/install.sh
+curl -fsSLO https://github.com/setucp/setu/releases/latest/download/install.sh
 bash install.sh --panel-host setu.example.com
 ```
 
