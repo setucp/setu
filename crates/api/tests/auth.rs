@@ -417,3 +417,74 @@ async fn mutation_without_matching_origin_is_403() {
         .expect("get");
     assert_eq!(read.status(), reqwest::StatusCode::OK);
 }
+
+/// The limiter counts an attempt before the (slow) argon2 verify, under
+/// its lock: 20 wrong passwords sent at once from one IP are all
+/// counted, so only the first 10 reach the verify (401) and the rest are
+/// 429 — none slip through between check and record (I4).
+#[tokio::test]
+async fn concurrent_wrong_logins_are_all_counted() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let op = srv
+        .create_operator("owner", "correct-horse-1", "owner")
+        .await;
+    let attempts = (0..20).map(|_| {
+        new_client()
+            .post(srv.url("/api/v1/auth/login"))
+            .header("x-forwarded-for", "198.51.100.7")
+            .json(&json!({"email": op.email, "password": "wrong-password"}))
+            .send()
+    });
+    let statuses: Vec<reqwest::StatusCode> = futures::future::join_all(attempts)
+        .await
+        .into_iter()
+        .map(|r| r.expect("login sends").status())
+        .collect();
+    let unauthorized = statuses
+        .iter()
+        .filter(|s| **s == reqwest::StatusCode::UNAUTHORIZED)
+        .count();
+    let limited = statuses
+        .iter()
+        .filter(|s| **s == reqwest::StatusCode::TOO_MANY_REQUESTS)
+        .count();
+    assert_eq!((unauthorized, limited), (10, 10), "{statuses:?}");
+    let ip: std::net::IpAddr = "198.51.100.7".parse().expect("ip");
+    assert_eq!(
+        srv.state.login_attempts(ip).await,
+        10,
+        "counter at the limit"
+    );
+}
+
+/// Changing your own password re-checks the current one under the same
+/// per-IP limiter as login: 10 wrong guesses, then 429 (M12).
+#[tokio::test]
+async fn own_password_change_is_rate_limited() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let op = srv
+        .create_operator("viewer", "correct-horse-1", "viewer")
+        .await;
+    let client = new_client();
+    let r = srv.login(&client, &op.email, "correct-horse-1").await;
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let url = srv.url(&format!("/api/v1/operators/{}/password", op.id));
+    for i in 1..=10 {
+        let wrong = client
+            .put(&url)
+            .json(&json!({"current_password": "nope-nope-1", "password": "new-horse-22"}))
+            .send()
+            .await
+            .expect("put sends");
+        assert_eq!(wrong.status(), reqwest::StatusCode::FORBIDDEN, "guess {i}");
+    }
+    let limited = client
+        .put(&url)
+        .json(&json!({"current_password": "correct-horse-1", "password": "new-horse-22"}))
+        .send()
+        .await
+        .expect("put sends");
+    assert_eq!(limited.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
+}

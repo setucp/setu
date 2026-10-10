@@ -30,6 +30,19 @@ impl<'a> Settings<'a> {
             .map_err(map_db_error)
     }
 
+    /// True when `token_hash` (SHA-256 hex of the presented setup token)
+    /// equals the stored one, compared in constant time; `false` when no
+    /// token is stored. `create_first_owner` checks again in its
+    /// transaction; this lets the API refuse before hashing a password.
+    pub async fn setup_token_matches(&self, token_hash: &str) -> Result<bool, AppError> {
+        Ok(self
+            .get(SETUP_TOKEN_HASH)
+            .await?
+            .as_ref()
+            .and_then(Value::as_str)
+            .is_some_and(|h| crate::repo::constant_time_eq(h.as_bytes(), token_hash.as_bytes())))
+    }
+
     pub async fn set(&self, key: &str, value: &Value) -> Result<(), AppError> {
         sqlx::query!(
             "INSERT INTO settings (key, value) VALUES ($1, $2)

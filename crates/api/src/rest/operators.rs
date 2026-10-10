@@ -17,7 +17,8 @@ use super::auth::OperatorOut;
 use super::ApiJson;
 use crate::auth::session::{secure_cookies, set_cookie};
 use crate::auth::{
-    audit, current_operator, hash_password, require_role, verify_password, ClientIp, Role, Session,
+    audit, current_operator, hash_password_blocking, require_role, verify_password_blocking,
+    ClientIp, Role, Session,
 };
 use crate::state::AppState;
 
@@ -96,7 +97,7 @@ pub async fn create(
         ));
     }
     Role::parse(&body.role)?;
-    let hash = hash_password(&body.password)?;
+    let hash = hash_password_blocking(&body.password).await?;
     let op = state
         .db
         .operators()
@@ -155,8 +156,13 @@ pub async fn set_password(
     let own = caller.id == id;
     if own {
         let current = body.current_password.as_deref().unwrap_or_default();
-        verify_password(&caller.password_hash, current)
+        // Same per-IP limiter as login, counted before the verify (M12).
+        let key = ip.limiter_key();
+        state.begin_login_attempt(key).await?;
+        verify_password_blocking(&caller.password_hash, current)
+            .await
             .map_err(|_| AppError::forbidden("current password is incorrect"))?;
+        state.forgive_login_attempt(key).await;
     } else {
         require_role(&session, Role::Owner).await?;
         if state.db.operators().by_id(&id).await?.is_none() {
@@ -168,7 +174,7 @@ pub async fn set_password(
             "password must be at least 8 characters",
         ));
     }
-    let hash = hash_password(&body.password)?;
+    let hash = hash_password_blocking(&body.password).await?;
     state.db.operators().set_password_hash(&id, &hash).await?;
     audit(
         &state.db,

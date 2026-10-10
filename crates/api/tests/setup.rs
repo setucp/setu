@@ -124,6 +124,15 @@ async fn setup_requires_token_and_creates_owner_once() {
         reqwest::StatusCode::UNAUTHORIZED
     );
     assert_eq!(srv.db.operators().count().await.expect("count"), 0);
+    // The token is checked first (constant-time, before any argon2
+    // hashing): a wrong token is 401 whatever the rest of the body (M12).
+    let wrong_and_short = anon
+        .post(srv.url("/api/v1/setup"))
+        .json(&json!({"token": "not-the-token", "email": "owner@example.com", "password": "short"}))
+        .send()
+        .await
+        .expect("setup sends");
+    assert_eq!(wrong_and_short.status(), reqwest::StatusCode::UNAUTHORIZED);
 
     // Invalid owner input is 400 even with the token.
     let bad = anon

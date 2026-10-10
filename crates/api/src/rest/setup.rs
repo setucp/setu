@@ -26,7 +26,7 @@ use utoipa::ToSchema;
 use super::auth::OperatorOut;
 use super::servers::{control_plane_url, ServerOut};
 use super::ApiJson;
-use crate::auth::{audit, hash_password, require_role, ClientIp, Role, Session};
+use crate::auth::{audit, hash_password_blocking, require_role, ClientIp, Role, Session};
 use crate::state::AppState;
 
 /// File name of the setup token under `data_dir`.
@@ -187,6 +187,12 @@ pub async fn create_owner(
     if state.db.operators().count().await? > 0 {
         return Err(AppError::conflict("setup already complete"));
     }
+    // The token first (constant-time), so an unauthenticated caller never
+    // gets an argon2 hash computed for it (M12).
+    let token_hash = sha256_hex(body.token.trim());
+    if !state.db.settings().setup_token_matches(&token_hash).await? {
+        return Err(AppError::unauthorized("invalid setup token"));
+    }
     if !body.email.contains('@') || body.email.len() < 3 {
         return Err(AppError::validation("email must contain @"));
     }
@@ -195,13 +201,13 @@ pub async fn create_owner(
             "password must be at least 8 characters",
         ));
     }
-    let hash = hash_password(&body.password)?;
+    let hash = hash_password_blocking(&body.password).await?;
     // Count, token check, insert and hash removal run in one transaction
     // under the setup advisory lock: two concurrent POSTs make one owner.
     let op = state
         .db
         .operators()
-        .create_first_owner(&body.email, &hash, &sha256_hex(body.token.trim()))
+        .create_first_owner(&body.email, &hash, &token_hash)
         .await?;
     let path = state.config.data_dir.join(SETUP_TOKEN_FILE);
     if let Err(e) = std::fs::remove_file(&path) {

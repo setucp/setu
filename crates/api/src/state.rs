@@ -88,28 +88,25 @@ impl AppState {
         self
     }
 
-    /// Reject the login when this IP already failed [`MAX_LOGIN_FAILURES`]
-    /// times inside the window (pruning stale entries first).
-    pub async fn check_login_rate(&self, ip: IpAddr) -> Result<(), AppError> {
+    /// Count one password attempt for the IP *before* the password is
+    /// verified, in the same critical section as the check: at
+    /// [`MAX_LOGIN_FAILURES`] attempts inside the window the attempt is
+    /// rejected with 429 (and not counted). Concurrent guesses therefore
+    /// cannot all pass the check before any of them is recorded (I4). A
+    /// success then calls [`Self::clear_login_failures`] (login) or
+    /// [`Self::forgive_login_attempt`] (re-auth). Prunes expired entries
+    /// and evicts the oldest IP past [`MAX_LOGIN_IPS`].
+    pub async fn begin_login_attempt(&self, ip: IpAddr) -> Result<(), AppError> {
         let mut table = self.login_failures.lock().await;
         let now = Instant::now();
+        prune_login_table(&mut table, now);
         let entry = table.entry(ip).or_default();
-        entry.retain(|t| now.duration_since(*t) < RATE_LIMIT_WINDOW);
         if entry.len() >= MAX_LOGIN_FAILURES {
             return Err(AppError::rate_limited(
                 "too many failed login attempts; try again later",
             ));
         }
-        Ok(())
-    }
-
-    /// Record one failed login for the IP, pruning expired entries and
-    /// evicting the oldest IP when the table exceeds [`MAX_LOGIN_IPS`].
-    pub async fn record_login_failure(&self, ip: IpAddr) {
-        let mut table = self.login_failures.lock().await;
-        let now = Instant::now();
-        prune_login_table(&mut table, now);
-        table.entry(ip).or_default().push(now);
+        entry.push(now);
         while table.len() > MAX_LOGIN_IPS {
             let oldest = table
                 .iter()
@@ -122,12 +119,33 @@ impl AppState {
                 None => break,
             }
         }
+        Ok(())
     }
 
     /// Forget failures after a successful login.
     pub async fn clear_login_failures(&self, ip: IpAddr) {
         let mut table = self.login_failures.lock().await;
         table.remove(&ip);
+    }
+
+    /// Take back the newest counted attempt after a successful re-auth
+    /// (env reveal, own password change): the right password is not a
+    /// failure, but unlike a login it does not wipe earlier failures.
+    pub async fn forgive_login_attempt(&self, ip: IpAddr) {
+        let mut table = self.login_failures.lock().await;
+        if let Some(hits) = table.get_mut(&ip) {
+            hits.pop();
+            if hits.is_empty() {
+                table.remove(&ip);
+            }
+        }
+    }
+
+    /// Attempts currently counted for the IP (tests, diagnostics).
+    pub async fn login_attempts(&self, ip: IpAddr) -> usize {
+        let mut table = self.login_failures.lock().await;
+        prune_login_table(&mut table, Instant::now());
+        table.get(&ip).map_or(0, Vec::len)
     }
 
     /// Count one `GET /agent/v1/commands` poll for the server, rejecting

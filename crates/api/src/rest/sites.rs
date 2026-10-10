@@ -1078,9 +1078,12 @@ pub async fn env_reveal(
         .ok_or_else(|| AppError::not_found(format!("env var {name} not found")))?;
     let target = format!("{}:{}", site.id, var.name);
     let key = ip.limiter_key();
-    state.check_login_rate(key).await?;
-    if crate::auth::verify_password(&caller.password_hash, &body.password).is_err() {
-        state.record_login_failure(key).await;
+    // Counted before the verify, under the limiter's lock (I4).
+    state.begin_login_attempt(key).await?;
+    if crate::auth::verify_password_blocking(&caller.password_hash, &body.password)
+        .await
+        .is_err()
+    {
         audit(
             &state.db,
             Some(&caller.id),
@@ -1091,6 +1094,7 @@ pub async fn env_reveal(
         .await;
         return Err(AppError::forbidden("password is incorrect"));
     }
+    state.forgive_login_attempt(key).await;
     let value = open_stored(&state.sealer, &var.value)?;
     audit(
         &state.db,

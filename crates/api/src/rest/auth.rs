@@ -11,7 +11,7 @@ use setu_common::AppError;
 use utoipa::ToSchema;
 
 use crate::auth::session::{clear_cookie, secure_cookies, set_cookie};
-use crate::auth::{audit, current_operator, verify_password, ClientIp, Session};
+use crate::auth::{audit, current_operator, verify_password_blocking, ClientIp, Session};
 use crate::state::AppState;
 
 use super::ApiJson;
@@ -79,7 +79,8 @@ pub async fn login(
     ApiJson(body): ApiJson<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let key = ip.limiter_key();
-    state.check_login_rate(key).await?;
+    // Counted before the verify, under the limiter's lock (I4).
+    state.begin_login_attempt(key).await?;
     tracing::debug!("login attempt for {:?}", body.email);
 
     let fail = || AppError::unauthorized("invalid email or password");
@@ -87,12 +88,13 @@ pub async fn login(
     let Some(op) = state.db.operators().by_email(&body.email).await? else {
         // Same-cost dummy verify so unknown-email timing matches the
         // known-user wrong-password path; the message stays identical.
-        let _ = verify_password(DUMMY_HASH, &body.password);
-        state.record_login_failure(key).await;
+        let _ = verify_password_blocking(DUMMY_HASH, &body.password).await;
         return Err(fail());
     };
-    if verify_password(&op.password_hash, &body.password).is_err() {
-        state.record_login_failure(key).await;
+    if verify_password_blocking(&op.password_hash, &body.password)
+        .await
+        .is_err()
+    {
         return Err(fail());
     }
 

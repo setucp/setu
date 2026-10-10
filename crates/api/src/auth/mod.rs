@@ -77,6 +77,29 @@ pub fn verify_password(hash: &str, password: &str) -> Result<(), AppError> {
         .map_err(|_| AppError::unauthorized("invalid email or password"))
 }
 
+/// [`hash_password`] on the blocking pool (argon2 takes ~tens of ms of
+/// CPU; it must not stall a runtime worker).
+pub async fn hash_password_blocking(password: &str) -> Result<String, AppError> {
+    let password = password.to_string();
+    tokio::task::spawn_blocking(move || hash_password(&password))
+        .await
+        .map_err(|e| {
+            tracing::error!("password hashing task failed: {e}");
+            AppError::internal()
+        })?
+}
+
+/// [`verify_password`] on the blocking pool.
+pub async fn verify_password_blocking(hash: &str, password: &str) -> Result<(), AppError> {
+    let (hash, password) = (hash.to_string(), password.to_string());
+    tokio::task::spawn_blocking(move || verify_password(&hash, &password))
+        .await
+        .map_err(|e| {
+            tracing::error!("password verify task failed: {e}");
+            AppError::internal()
+        })?
+}
+
 /// CSRF guard (spec §7): every POST/PUT/DELETE/PATCH under `/api/v1`
 /// must carry an `Origin` whose scheme, host and port equal the
 /// configured `public_url`, or `Sec-Fetch-Site: same-origin` (set by the
