@@ -1,7 +1,9 @@
 # Setu roadmap
 
-Phase 1 (the MVP, `docs/plans/2026-10-09-setu-mvp.md`) is planned at
-task level. Later phases are scoped here; each gets its own spec and
+Phase 1 shipped as 0.1.0. Order decided 2026-10-10: 0.1.1 follow-ups
+(`specs/2026-10-10-setu-0.1.1-design.md`), 0.2 containers and
+durability (`specs/2026-10-10-setu-0.2-design.md`), 0.3 hosted control
+plane, 0.4 catalogue, 0.5 providers and billing. Later phases are scoped here; each gets its own spec and
 plan when the one before it ships, because their plans must reference
 the real crate interfaces, not guessed ones. Each phase is a release:
 0.1 MVP, 0.2 containers and durability, 0.3 customers and billing, 0.4
@@ -48,7 +50,20 @@ Design questions to settle first: Podman vs. systemd-nspawn for
 images; backup encryption at rest (recommend age with a per-panel key
 in the sealer's key hierarchy); whether a move keeps the port.
 
-## Phase 3 — 0.3 "sell it"
+## Phase 3 — 0.3 "hosted control plane"
+
+Goal: a Setu panel you run for people who do not want to operate the
+panel itself; their servers join it. The cheapest way to learn whether
+anyone pays before building the provider product.
+
+Scope: minimal control-plane high availability (two `setu serve`
+instances behind Caddy, leader election on the job runner with a
+Postgres advisory lock); teams with owner/operator/viewer per team and
+servers and sites scoped to a team; invitations, password reset and
+alert email; a usage page per team; a waitlist and a hosted-panel
+pricing page on the website.
+
+## Phase 5 — 0.5 "sell it" (moved after the hosted control plane and the catalogue)
 
 Goal: a customer signs up, picks a plan, pays, and gets a site, with
 the operator only watching.
