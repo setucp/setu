@@ -1906,3 +1906,44 @@ async fn delete_backup_serialises_with_the_sites_jobs() {
     let resp = owner.delete(&url).send().await.expect("delete");
     assert_eq!(resp.status(), reqwest::StatusCode::ACCEPTED);
 }
+
+#[tokio::test]
+async fn site_list_carries_latest_metrics() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let viewer = srv.login_as("viewer").await;
+    let (site_id, server_id) = running_site(&srv, &owner, "listmetric").await;
+    let short = srv.db.sites().get(&site_id).await.expect("site").short_id;
+    srv.db
+        .metrics()
+        .insert_batch(
+            &server_id,
+            &[setu_proto::SiteMetric {
+                short_id: short,
+                at: chrono::Utc::now(),
+                cpu_seconds: 3.0,
+                memory_bytes: 184 << 20,
+                disk_bytes: 9 << 20,
+            }],
+        )
+        .await
+        .expect("insert");
+    let body: Value = viewer
+        .get(srv.url("/api/v1/sites"))
+        .send()
+        .await
+        .expect("list sends")
+        .json()
+        .await
+        .expect("json");
+    let row = body["sites"]
+        .as_array()
+        .expect("sites")
+        .iter()
+        .find(|s| s["id"] == json!(site_id))
+        .expect("our site");
+    assert_eq!(row["status"], json!("running"), "site fields are flattened");
+    assert_eq!(row["metrics"]["memory_bytes"], json!(184 << 20));
+    assert_eq!(row["metrics"]["disk_bytes"], json!(9 << 20));
+}

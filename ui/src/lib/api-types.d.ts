@@ -1370,8 +1370,15 @@ export interface components {
             job: components["schemas"]["JobOut"];
             site: components["schemas"]["SiteOut"];
         };
+        /**
+         * @description One row of `GET /sites`: the site plus its newest 1-minute sample
+         *     (`null` before the first heartbeat after provisioning).
+         */
+        SiteListItemOut: components["schemas"]["SiteOut"] & {
+            metrics?: null | components["schemas"]["SiteMetricOut"];
+        };
         SiteListOut: {
-            sites: components["schemas"]["SiteOut"][];
+            sites: components["schemas"]["SiteListItemOut"][];
         };
         /** @description One per-site metrics sample. */
         SiteMetric: {

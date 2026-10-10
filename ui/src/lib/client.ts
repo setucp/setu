@@ -3,6 +3,7 @@ import type { components } from "./api-types";
 export type Operator = components["schemas"]["OperatorOut"];
 export type Site = components["schemas"]["SiteOut"];
 export type SiteDetail = components["schemas"]["SiteDetailOut"];
+export type SiteListItem = components["schemas"]["SiteListItemOut"];
 export type SiteMetric = components["schemas"]["SiteMetricOut"];
 export type RevealOut = components["schemas"]["RevealOut"];
 export type Server = components["schemas"]["ServerOut"];
@@ -124,8 +125,8 @@ export const api = {
     return request("/api/v1/auth/me");
   },
 
-  async listSites(): Promise<Site[]> {
-    const body = await request<{ sites: Site[] }>("/api/v1/sites");
+  async listSites(): Promise<SiteListItem[]> {
+    const body = await request<{ sites: SiteListItem[] }>("/api/v1/sites");
     return body.sites;
   },
 

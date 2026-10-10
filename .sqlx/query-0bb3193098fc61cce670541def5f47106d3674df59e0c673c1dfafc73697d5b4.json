@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT ON (site_id) site_id, at, cpu_seconds, memory_bytes, disk_bytes\n             FROM site_metrics WHERE site_id = ANY($1)\n             ORDER BY site_id, at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "site_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "site_metrics",
+            "name": "site_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "site_metrics",
+            "name": "at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "cpu_seconds",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "site_metrics",
+            "name": "cpu_seconds"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "memory_bytes",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "site_metrics",
+            "name": "memory_bytes"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "disk_bytes",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "site_metrics",
+            "name": "disk_bytes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "0bb3193098fc61cce670541def5f47106d3674df59e0c673c1dfafc73697d5b4"
+}

@@ -24,8 +24,8 @@ use super::servers::{
 use super::setup::{LocalServerRequest, LocalServerResponse, SetupRequest, SetupStatusOut};
 use super::sites::{
     CreateSiteRequest, CreateSiteResponse, EnvEntryOut, EnvGetOut, EnvPutRequest, JobOut,
-    JobResponse, RevealOut, RevealRequest, SiteDetailOut, SiteJobResponse, SiteListOut,
-    SiteMetricOut, SiteOut, UpdateSiteRequest,
+    JobResponse, RevealOut, RevealRequest, SiteDetailOut, SiteJobResponse, SiteListItemOut,
+    SiteListOut, SiteMetricOut, SiteOut, UpdateSiteRequest,
 };
 use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
 
@@ -126,6 +126,7 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         UpdatePlanRequest,
         SiteOut,
         SiteListOut,
+        SiteListItemOut,
         SiteDetailOut,
         SiteMetricOut,
         JobOut,

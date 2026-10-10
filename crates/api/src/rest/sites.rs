@@ -70,7 +70,16 @@ impl SiteOut {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SiteListOut {
-    pub sites: Vec<SiteOut>,
+    pub sites: Vec<SiteListItemOut>,
+}
+
+/// One row of `GET /sites`: the site plus its newest 1-minute sample
+/// (`null` before the first heartbeat after provisioning).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SiteListItemOut {
+    #[serde(flatten)]
+    pub site: SiteOut,
+    pub metrics: Option<SiteMetricOut>,
 }
 
 /// One job row. `payload` is never rendered (it may carry prompt
@@ -169,6 +178,17 @@ pub struct SiteMetricOut {
     pub cpu_seconds: f64,
     pub memory_bytes: i64,
     pub disk_bytes: i64,
+}
+
+impl SiteMetricOut {
+    pub fn from_latest(m: &setu_db::LatestMetric) -> Self {
+        Self {
+            at: m.at,
+            cpu_seconds: m.cpu_seconds,
+            memory_bytes: m.memory_bytes,
+            disk_bytes: m.disk_bytes,
+        }
+    }
 }
 
 /// `GET /sites/{id}`: the site plus its latest metric sample.
@@ -340,8 +360,16 @@ pub async fn list(
 ) -> Result<impl IntoResponse, AppError> {
     require_role(&session, Role::Viewer).await?;
     let sites = state.db.sites().list().await?;
+    let ids: Vec<String> = sites.iter().map(|s| s.id.clone()).collect();
+    let latest = state.db.metrics().latest_for_sites(&ids).await?;
     Ok(Json(SiteListOut {
-        sites: sites.iter().map(SiteOut::from_row).collect(),
+        sites: sites
+            .iter()
+            .map(|s| SiteListItemOut {
+                site: SiteOut::from_row(s),
+                metrics: latest.get(&s.id).map(SiteMetricOut::from_latest),
+            })
+            .collect(),
     }))
 }
 
@@ -564,12 +592,7 @@ pub async fn get(
         .metrics()
         .latest_for_site(&site.id)
         .await?
-        .map(|m| SiteMetricOut {
-            at: m.at,
-            cpu_seconds: m.cpu_seconds,
-            memory_bytes: m.memory_bytes,
-            disk_bytes: m.disk_bytes,
-        });
+        .map(|m| SiteMetricOut::from_latest(&m));
     Ok(Json(SiteDetailOut {
         site: SiteOut::from_row(&site),
         metrics,

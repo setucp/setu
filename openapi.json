@@ -4734,6 +4734,29 @@
           }
         }
       },
+      "SiteListItemOut": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SiteOut"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "metrics": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SiteMetricOut"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "One row of `GET /sites`: the site plus its newest 1-minute sample\n(`null` before the first heartbeat after provisioning)."
+      },
       "SiteListOut": {
         "type": "object",
         "required": [
@@ -4743,7 +4766,7 @@
           "sites": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/SiteOut"
+              "$ref": "#/components/schemas/SiteListItemOut"
             }
           }
         }

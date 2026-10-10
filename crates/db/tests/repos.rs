@@ -1139,3 +1139,36 @@ async fn delete_operator_never_removes_the_last_owner_under_race() {
         assert_eq!(owners.iter().filter(|o| o.role == "owner").count(), 1);
     }
 }
+
+#[tokio::test]
+async fn latest_for_sites_returns_the_newest_sample_per_site() {
+    let (_test, db) = test_db().await;
+    let s = site(&db).await;
+    let now = chrono::Utc::now();
+    let sample = |at, mem: u64| setu_proto::SiteMetric {
+        short_id: s.short_id.clone(),
+        at,
+        cpu_seconds: 1.0,
+        memory_bytes: mem,
+        disk_bytes: 7 << 20,
+    };
+    db.metrics()
+        .insert_batch(
+            &s.server_id,
+            &[
+                sample(now - chrono::Duration::minutes(2), 1 << 20),
+                sample(now, 3 << 20),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let map = db
+        .metrics()
+        .latest_for_sites(&[s.id.clone(), "no-such-site".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(map.len(), 1, "sites without samples are absent");
+    assert_eq!(map[&s.id].memory_bytes, 3 << 20, "the newest sample");
+    assert!(db.metrics().latest_for_sites(&[]).await.unwrap().is_empty());
+}

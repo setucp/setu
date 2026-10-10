@@ -1,11 +1,27 @@
 import { ExternalLink, Plus } from "lucide-react";
-import type { Plan, Server, Site } from "@/lib/client";
-import { formatMb } from "@/lib/format";
+import type { Plan, Server, Site, SiteListItem } from "@/lib/client";
+import { formatBytes, formatMb } from "@/lib/format";
 import { AppLink } from "./AppLink";
 import { EmptyState } from "./EmptyState";
 import { ResponsiveTable, type Column } from "./ResponsiveTable";
 import { StatusBadge, StatusDot } from "./StatusBadge";
 import { buttonVariants } from "./ui/button";
+import { Progress } from "./ui/progress";
+
+const MB = 1024 * 1024;
+
+/** `used / limit` with the Limits tab's bar; `—` until the first sample. */
+function Usage({ used, limitMb, label }: { used: number | null | undefined; limitMb: number | undefined; label: string }) {
+  const known = used !== null && used !== undefined;
+  return (
+    <span className="flex min-w-28 flex-col items-end gap-1">
+      <span className="whitespace-nowrap tabular-nums">{`${formatBytes(used)} / ${formatMb(limitMb)}`}</span>
+      {known && limitMb !== undefined && limitMb > 0 ? (
+        <Progress value={used / MB} max={limitMb} label={`${label} usage`} className="w-24" />
+      ) : null}
+    </span>
+  );
+}
 
 function SiteName({ site }: { site: Site }) {
   return (
@@ -34,16 +50,17 @@ function SiteName({ site }: { site: Site }) {
 
 /**
  * Sites overview (spec §6): status, name and domain, app/version, server,
- * plan and its memory/disk allowance. The list endpoint carries no
- * metrics, so memory and disk are the plan's limits; the site page shows
- * live usage. A table on desktop, cards on phones.
+ * plan and its memory/disk usage. The list carries each site's newest
+ * metric sample, so memory and disk read `used / limit` with the plan's
+ * allowance and a bar (`—` until the first sample). A table on desktop,
+ * cards on phones.
  */
 export function SitesTable({
   sites,
   plans,
   servers,
 }: {
-  sites: Site[];
+  sites: SiteListItem[];
   plans: Plan[];
   servers: Server[];
 }) {
@@ -64,7 +81,7 @@ export function SitesTable({
   const planById = new Map(plans.map((p) => [p.id, p]));
   const serverById = new Map(servers.map((s) => [s.id, s]));
 
-  const columns: Column<Site>[] = [
+  const columns: Column<SiteListItem>[] = [
     {
       id: "name",
       header: "Name",
@@ -108,7 +125,7 @@ export function SitesTable({
       id: "memory",
       header: "Memory",
       cell: (site) => (
-        <span className="tabular-nums">{formatMb(planById.get(site.plan_id)?.limits.memory_mb)}</span>
+        <Usage used={site.metrics?.memory_bytes} limitMb={planById.get(site.plan_id)?.limits.memory_mb} label="Memory" />
       ),
       className: "text-right",
       headClassName: "text-right",
@@ -117,7 +134,7 @@ export function SitesTable({
       id: "disk",
       header: "Disk",
       cell: (site) => (
-        <span className="tabular-nums">{formatMb(planById.get(site.plan_id)?.limits.disk_mb)}</span>
+        <Usage used={site.metrics?.disk_bytes} limitMb={planById.get(site.plan_id)?.limits.disk_mb} label="Disk" />
       ),
       className: "text-right",
       headClassName: "text-right",

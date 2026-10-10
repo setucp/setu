@@ -27,6 +27,10 @@ Follow-ups from the first release (spec
   owner cannot delete themselves or the last owner; the deleted
   operator's sessions end at once.
 
+- The sites list carries each site's newest metric sample (one
+  query); Memory and Disk show `used / limit` with the Limits tab's
+  bars (#3).
+
 ### Internal
 
 - Workspace lints: `clippy::pedantic`, `unwrap_used`, `expect_used` as
