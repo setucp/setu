@@ -23,6 +23,7 @@ pub const JOIN_RETRY_WINDOW_SECS: i64 = 60;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServerStatus {
     Pending,
+    Rejoining,
     Online,
     Offline,
 }
@@ -31,6 +32,7 @@ impl ServerStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
+            Self::Rejoining => "rejoining",
             Self::Online => "online",
             Self::Offline => "offline",
         }
@@ -73,6 +75,10 @@ impl Server {
     pub fn status(&self, now: DateTime<Utc>) -> ServerStatus {
         if self.joined_at.is_none() {
             return ServerStatus::Pending;
+        }
+        // A rotated join token is outstanding (R144): computed, never stored.
+        if self.join_nonce.is_none() && self.join_expires_at.is_some_and(|e| e > now) {
+            return ServerStatus::Rejoining;
         }
         match self.last_seen_at {
             Some(seen) if (now - seen).num_seconds() <= ONLINE_WINDOW_SECS => ServerStatus::Online,
@@ -336,6 +342,41 @@ impl<'a> Servers<'a> {
     }
 
     /// Authenticate an agent request by its server token.
+    /// Mint a fresh single-use join token (1 h) for a joined server
+    /// (#8). `token_hash` is untouched, so the current server token keeps
+    /// working until the agent joins with the new one (the first-use
+    /// branch of [`Self::join`] then replaces it). A second rotation
+    /// before that join replaces the pending join token. `conflict` when
+    /// the server never joined (use its original join token).
+    pub async fn rotate_join_token(&self, id: &str) -> Result<(Server, String), AppError> {
+        let plain = token("setu_join_");
+        let row = sqlx::query_as!(
+            Server,
+            "UPDATE servers SET
+                 join_token_hash = $2,
+                 join_expires_at = now() + make_interval(secs => $3),
+                 join_nonce = NULL, join_token_sealed = NULL
+             WHERE id = $1 AND joined_at IS NOT NULL
+             RETURNING id, short_id, name, hostname, public_ip, token_hash, join_token_hash,
+                join_expires_at, join_nonce, join_token_sealed, joined_at, agent_version,
+                boot_id, arch, os, cpu_cores, memory_mb, disk_mb, last_seen_at, cordoned,
+                is_control_plane, created_at, load1, mem_free_mb, disk_free_mb",
+            id,
+            hash_token(&plain),
+            JOIN_TOKEN_TTL_SECS,
+        )
+        .fetch_optional(self.pool)
+        .await
+        .map_err(map_db_error)?;
+        if let Some(server) = row {
+            return Ok((server, plain));
+        }
+        self.get(id).await?;
+        Err(AppError::conflict(
+            "server has not joined yet: use its original join token",
+        ))
+    }
+
     pub async fn by_token(&self, server_token_plain: &str) -> Result<Option<Server>, AppError> {
         sqlx::query_as!(
             Server,

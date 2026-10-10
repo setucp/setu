@@ -78,6 +78,7 @@ pub fn router(state: AppState) -> Router {
         .route("/servers", get(servers::list).post(servers::create))
         .route("/servers/{id}", get(servers::get).delete(servers::delete))
         .route("/servers/{id}/cordon", post(servers::cordon))
+        .route("/servers/{id}/rotate-token", post(servers::rotate_token))
         .route("/apps", get(apps::list).post(apps::publish))
         .route("/apps/validate", post(apps::validate))
         .route("/apps/{id}/versions", get(apps::versions))

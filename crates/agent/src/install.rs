@@ -151,7 +151,54 @@ pub async fn install_system_cmd(opts: &InstallSystemOpts) -> Result<(), InstallE
 
 /// Join only (re-join a configured host).
 pub async fn join(opts: &InstallOpts) -> Result<(), InstallError> {
-    join_control_plane(opts).await
+    join_control_plane(opts).await?;
+    // The running agent still holds the token this join just invalidated:
+    // restart it (a no-op when it is stopped) (R148).
+    RealCommands
+        .run("systemctl", &["try-restart", "setu-agent.service"])
+        .await
+        .map_err(step("restart agent"))?;
+    Ok(())
+}
+
+/// `--control-plane` for `join`: the flag, else agent.toml's when this
+/// host has joined before (a re-join after `rotate-token`, R148).
+pub fn rejoin_control_plane(
+    cli: Option<String>,
+    existing: &AgentConfig,
+) -> Result<String, InstallError> {
+    match cli {
+        Some(url) => Ok(url),
+        None if !existing.server_id.is_empty() => Ok(existing.control_plane.clone()),
+        None => Err(InstallError::Step(
+            "control plane",
+            "no agent.toml with a server id: pass --control-plane".to_string(),
+        )),
+    }
+}
+
+/// agent.toml after a (re-)join: identity and control plane replaced,
+/// `--insecure` only ever switched on, `--ca` / `--panel-host` only when
+/// given; everything else (paths, intervals, panel route) kept (R148).
+pub fn joined_config(
+    mut config: AgentConfig,
+    base: String,
+    joined: JoinResponse,
+    insecure: bool,
+    ca: Option<PathBuf>,
+    panel: Option<PanelRoute>,
+) -> AgentConfig {
+    config.control_plane = base;
+    config.server_id = joined.server_id;
+    config.server_token = joined.server_token;
+    config.insecure = config.insecure || insecure;
+    if ca.is_some() {
+        config.ca = ca;
+    }
+    if panel.is_some() {
+        config.panel = panel;
+    }
+    config
 }
 
 /// The Caddy apt repository, exactly as Caddy documents it
@@ -522,18 +569,13 @@ async fn join_control_plane(opts: &InstallOpts) -> Result<(), InstallError> {
         .config_path
         .clone()
         .unwrap_or_else(AgentConfig::default_path);
-    let mut config =
+    let config =
         AgentConfig::load(Some(&path)).map_err(|e| InstallError::Step("config", e.to_string()))?;
-    config.control_plane = base;
-    config.server_id = joined.server_id;
-    config.server_token = joined.server_token;
-    config.insecure = opts.insecure;
-    if let Some(ca) = &opts.ca {
-        config.ca = Some(install_ca(ca, &path)?);
-    }
-    if opts.panel.is_some() {
-        config.panel = opts.panel.clone();
-    }
+    let ca = match &opts.ca {
+        Some(src) => Some(install_ca(src, &path)?),
+        None => None,
+    };
+    let config = joined_config(config, base, joined, opts.insecure, ca, opts.panel.clone());
     // Created 0600 from the start (temp + rename), then handed to `setu`.
     config
         .save(&path)
@@ -554,6 +596,65 @@ async fn join_control_plane(opts: &InstallOpts) -> Result<(), InstallError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review Focus 2: a re-join changes the identity only.
+    #[test]
+    fn joined_config_keeps_agent_toml_except_identity() {
+        let existing = AgentConfig {
+            control_plane: "https://panel.example.com".into(),
+            server_id: "srv-old".into(),
+            server_token: "setu_srv_old".into(),
+            insecure: true,
+            ca: Some(PathBuf::from("/etc/setu/ca.pem")),
+            panel: Some(PanelRoute {
+                host: "panel.example.com".into(),
+                upstream: "127.0.0.1:7000".into(),
+            }),
+            reconcile_secs: 77,
+            ..AgentConfig::default()
+        };
+        let joined = JoinResponse {
+            server_id: "srv-old".into(),
+            server_token: "setu_srv_new".into(),
+        };
+        let out = joined_config(
+            existing.clone(),
+            "https://panel.example.com".into(),
+            joined,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(out.server_token, "setu_srv_new");
+        assert_eq!(out.server_id, "srv-old");
+        assert!(out.insecure, "never switched off by a re-join");
+        assert_eq!(out.ca, existing.ca);
+        assert_eq!(
+            out.panel.as_ref().map(|p| p.host.as_str()),
+            Some("panel.example.com")
+        );
+        assert_eq!(out.reconcile_secs, 77);
+        assert_eq!(out.state_path, existing.state_path);
+    }
+
+    #[test]
+    fn rejoin_control_plane_defaults_to_agent_toml() {
+        let mut cfg = AgentConfig::default();
+        assert!(
+            rejoin_control_plane(None, &cfg).is_err(),
+            "nothing joined yet"
+        );
+        cfg.server_id = "srv1".into();
+        cfg.control_plane = "https://panel.example.com".into();
+        assert_eq!(
+            rejoin_control_plane(None, &cfg).unwrap(),
+            "https://panel.example.com"
+        );
+        assert_eq!(
+            rejoin_control_plane(Some("https://other.example.com".into()), &cfg).unwrap(),
+            "https://other.example.com"
+        );
+    }
 
     #[test]
     fn site_template_uses_instance_specifiers() {

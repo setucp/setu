@@ -280,3 +280,64 @@ pub async fn cordon(
     .await;
     Ok(Json(ServerOut::from_row(&server, state.clock.now())))
 }
+
+/// `POST /servers/{id}/rotate-token`: the new join token (shown once)
+/// and the command to run on the server. Holds a credential: `Debug`
+/// redacts it.
+#[derive(Serialize, ToSchema)]
+pub struct RotateTokenResponse {
+    pub server: ServerOut,
+    /// Single-use join token (valid 1 hour). Give it to `setu agent join`
+    /// as `SETU_JOIN_TOKEN` or on stdin; the current server token keeps
+    /// working until that join.
+    pub join_token: String,
+    /// `setu agent join` (reads the control plane from agent.toml).
+    pub join_command: String,
+}
+
+impl std::fmt::Debug for RotateTokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RotateTokenResponse")
+            .field("server", &self.server)
+            .field("join_token", &"[redacted]")
+            .field("join_command", &self.join_command)
+            .finish()
+    }
+}
+
+/// Rotate a server's token (owner only, #8): issue a join token; the
+/// server shows `rejoining` until its agent joins with it.
+#[utoipa::path(
+    post,
+    path = "/api/v1/servers/{id}/rotate-token",
+    params(("id" = String, Path, description = "Server id")),
+    responses(
+        (status = 200, body = RotateTokenResponse),
+        (status = 401, body = super::ErrorBody),
+        (status = 403, body = super::ErrorBody),
+        (status = 404, body = super::ErrorBody),
+        (status = 409, body = super::ErrorBody),
+    )
+)]
+pub async fn rotate_token(
+    State(state): State<AppState>,
+    session: Session,
+    ip: ClientIp,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = require_role(&session, Role::Owner).await?;
+    let (server, join_token) = state.db.servers().rotate_join_token(&id).await?;
+    audit(
+        &state.db,
+        Some(&caller.id),
+        "server.rotate_token",
+        Some(&server.id),
+        ip.as_deref(),
+    )
+    .await;
+    Ok(Json(RotateTokenResponse {
+        server: ServerOut::from_row(&server, state.clock.now()),
+        join_token,
+        join_command: "setu agent join".to_string(),
+    }))
+}

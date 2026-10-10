@@ -13,6 +13,7 @@ const variantByStatus: Record<string, Variant> = {
   provisioning: "warning",
   updating: "warning",
   pending: "warning",
+  rejoining: "warning",
   failed: "destructive",
   offline: "destructive",
   stopped: "secondary",
@@ -34,7 +35,7 @@ export const backupVariant: Record<string, Variant> = {
   deleted: "secondary",
 };
 
-const IN_FLIGHT = new Set(["provisioning", "updating", "pending", "queued", "running"]);
+const IN_FLIGHT = new Set(["provisioning", "updating", "pending", "rejoining", "queued", "running"]);
 
 /** Coloured status chip with a leading dot; unknown statuses fall back to neutral. */
 export function StatusBadge({

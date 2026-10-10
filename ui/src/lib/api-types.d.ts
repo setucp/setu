@@ -524,6 +524,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/servers/{id}/rotate-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate a server's token (owner only, #8): issue a join token; the
+         *     server shows `rejoining` until its agent joins with it.
+         */
+        post: operations["rotate_token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/setup": {
         parameters: {
             query?: never;
@@ -1336,6 +1356,22 @@ export interface components {
         RevealRequest: {
             /** @description The caller's own password (re-authentication). */
             password: string;
+        };
+        /**
+         * @description `POST /servers/{id}/rotate-token`: the new join token (shown once)
+         *     and the command to run on the server. Holds a credential: `Debug`
+         *     redacts it.
+         */
+        RotateTokenResponse: {
+            /** @description `setu agent join` (reads the control plane from agent.toml). */
+            join_command: string;
+            /**
+             * @description Single-use join token (valid 1 hour). Give it to `setu agent join`
+             *     as `SETU_JOIN_TOKEN` or on stdin; the current server token keeps
+             *     working until that join.
+             */
+            join_token: string;
+            server: components["schemas"]["ServerOut"];
         };
         ServerListOut: {
             servers: components["schemas"]["ServerOut"][];
@@ -2831,6 +2867,60 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    rotate_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Server id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotateTokenResponse"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

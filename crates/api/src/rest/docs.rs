@@ -19,7 +19,8 @@ use super::jobs::{AuditEntryOut, AuditListOut, AuditQuery, JobListOut, JobsQuery
 use super::operators::{CreateOperatorRequest, OperatorListOut, SetPasswordRequest};
 use super::plans::{CreatePlanRequest, PlanLimitsIn, PlanListOut, PlanOut, UpdatePlanRequest};
 use super::servers::{
-    CordonRequest, CreateServerRequest, CreateServerResponse, ServerListOut, ServerOut,
+    CordonRequest, CreateServerRequest, CreateServerResponse, RotateTokenResponse, ServerListOut,
+    ServerOut,
 };
 use super::setup::{LocalServerRequest, LocalServerResponse, SetupRequest, SetupStatusOut};
 use super::sites::{
@@ -54,6 +55,7 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::servers::get,
         super::servers::delete,
         super::servers::cordon,
+        super::servers::rotate_token,
         super::apps::list,
         super::apps::validate,
         super::apps::publish,
@@ -107,6 +109,7 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         CreateServerRequest,
         CreateServerResponse,
         CordonRequest,
+        RotateTokenResponse,
         SetupStatusOut,
         SetupRequest,
         LocalServerRequest,

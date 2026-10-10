@@ -1209,3 +1209,118 @@ async fn jobs_without_a_site_never_collide_in_the_active_index() {
         .expect("job row survives its site");
     assert_eq!(kept.site_id, None);
 }
+
+/// Review Focus 2: the old token works until the agent joins with the
+/// rotated join token; then only the new one does.
+#[tokio::test]
+async fn rotate_keeps_the_old_token_until_the_rejoin() {
+    let (_test, db) = test_db().await;
+    let (pending, first_join) = db.servers().create_pending("web", false).await.unwrap();
+    let (_, old) = db
+        .servers()
+        .join(&first_join, &join_input("n1", 4096), &sealer())
+        .await
+        .unwrap();
+
+    let (rotating, join2) = db
+        .servers()
+        .rotate_join_token(&pending.id)
+        .await
+        .expect("rotate");
+    assert!(join2.starts_with("setu_join_"));
+    assert_eq!(
+        rotating.status(chrono::Utc::now()),
+        setu_db::ServerStatus::Rejoining
+    );
+    assert!(
+        db.servers().by_token(&old).await.unwrap().is_some(),
+        "old token still valid"
+    );
+    assert!(
+        matches!(
+            db.servers()
+                .join(&first_join, &join_input("n9", 4096), &sealer())
+                .await,
+            Err(JoinError::Unknown)
+        ),
+        "the original join token is gone"
+    );
+
+    // A second rotation before the join replaces the first.
+    let (_, join3) = db
+        .servers()
+        .rotate_join_token(&pending.id)
+        .await
+        .expect("rotate again");
+    assert!(matches!(
+        db.servers()
+            .join(&join2, &join_input("n2", 4096), &sealer())
+            .await,
+        Err(JoinError::Unknown)
+    ));
+    let (joined, new) = db
+        .servers()
+        .join(&join3, &join_input("n3", 4096), &sealer())
+        .await
+        .expect("rejoin");
+    assert_eq!(joined.id, pending.id, "same server row");
+    assert_ne!(new, old);
+    assert!(
+        db.servers().by_token(&old).await.unwrap().is_none(),
+        "old token invalid after the join"
+    );
+    assert_eq!(
+        db.servers().by_token(&new).await.unwrap().map(|s| s.id),
+        Some(pending.id.clone())
+    );
+    assert_eq!(
+        joined.status(chrono::Utc::now()),
+        setu_db::ServerStatus::Online
+    );
+}
+
+#[tokio::test]
+async fn rotated_join_retry_with_same_nonce_returns_same_token() {
+    let (_test, db) = test_db().await;
+    let server = online_server(&db, 4096, false).await;
+    let (_, join2) = db.servers().rotate_join_token(&server.id).await.unwrap();
+    let (_, t1) = db
+        .servers()
+        .join(&join2, &join_input("re-1", 4096), &sealer())
+        .await
+        .unwrap();
+    let (_, t2) = db
+        .servers()
+        .join(&join2, &join_input("re-1", 4096), &sealer())
+        .await
+        .expect("lost response retried");
+    assert_eq!(t1, t2);
+    assert!(matches!(
+        db.servers()
+            .join(&join2, &join_input("other", 4096), &sealer())
+            .await,
+        Err(JoinError::NonceMismatch)
+    ));
+}
+
+#[tokio::test]
+async fn rotate_refuses_unjoined_and_unknown_servers() {
+    let (_test, db) = test_db().await;
+    let (pending, _) = db.servers().create_pending("never", false).await.unwrap();
+    assert_eq!(
+        db.servers()
+            .rotate_join_token(&pending.id)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+    assert_eq!(
+        db.servers()
+            .rotate_join_token("nope")
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+}

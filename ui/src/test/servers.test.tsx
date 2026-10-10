@@ -132,4 +132,24 @@ describe("servers", () => {
       }),
     );
   });
+  it("rotate token: owner confirms, gets the token once and the join command", async () => {
+    const server = serverFixture({ id: "srv1", name: "web1" });
+    const calls = stubFetch((url, method) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return json({ id: "op1", email: "o@example.com", role: "owner", created_at: "2026-10-01T00:00:00Z" });
+      }
+      if (url.endsWith("/api/v1/servers/srv1/rotate-token") && method === "POST") {
+        return json({ server: { ...server, status: "rejoining" }, join_token: "setu_join_abc123", join_command: "setu agent join" });
+      }
+      return notFound();
+    });
+    const user = userEvent.setup();
+    renderWithClient(<ServerDetail server={server as Server} sites={[]} />);
+    await user.click(await screen.findByRole("button", { name: /rotate token/i }));
+    await user.click(await screen.findByTestId("confirm-accept"));
+    const dialog = await screen.findByRole("dialog", { name: /new join token/i });
+    expect(dialog).toHaveTextContent("setu_join_abc123");
+    expect(dialog).toHaveTextContent("setu agent join");
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+  });
 });

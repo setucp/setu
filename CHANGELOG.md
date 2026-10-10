@@ -43,6 +43,12 @@ Follow-ups from the first release (spec
 
 ### Control plane
 
+- Server token rotation: `POST /api/v1/servers/{id}/rotate-token` (owner)
+  issues a single-use join token and marks the server `rejoining`; the
+  old token keeps working until `setu agent join` runs with the new one
+  (#8). `setu agent join` re-joins without `--control-plane` (it reads
+  agent.toml), keeps the other settings and restarts the agent.
+
 - `GET /api/v1/apps/{id}/versions/{version}/prompts` lists a version's
   prompt variables (`name`, `label`, `secret`; never a value). The update
   dialog asks one labelled field per prompt instead of `NAME=value`

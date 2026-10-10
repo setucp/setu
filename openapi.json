@@ -1682,6 +1682,78 @@
         }
       }
     },
+    "/api/v1/servers/{id}/rotate-token": {
+      "post": {
+        "tags": [
+          "super::servers"
+        ],
+        "summary": "Rotate a server's token (owner only, #8): issue a join token; the\nserver shows `rejoining` until its agent joins with it.",
+        "operationId": "rotate_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Server id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateTokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/setup": {
       "get": {
         "tags": [
@@ -4605,6 +4677,28 @@
           "password": {
             "type": "string",
             "description": "The caller's own password (re-authentication)."
+          }
+        }
+      },
+      "RotateTokenResponse": {
+        "type": "object",
+        "description": "`POST /servers/{id}/rotate-token`: the new join token (shown once)\nand the command to run on the server. Holds a credential: `Debug`\nredacts it.",
+        "required": [
+          "server",
+          "join_token",
+          "join_command"
+        ],
+        "properties": {
+          "join_command": {
+            "type": "string",
+            "description": "`setu agent join` (reads the control plane from agent.toml)."
+          },
+          "join_token": {
+            "type": "string",
+            "description": "Single-use join token (valid 1 hour). Give it to `setu agent join`\nas `SETU_JOIN_TOKEN` or on stdin; the current server token keeps\nworking until that join."
+          },
+          "server": {
+            "$ref": "#/components/schemas/ServerOut"
           }
         }
       },

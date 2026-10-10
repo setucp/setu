@@ -821,3 +821,71 @@ async fn agent_poll_rate_limit_429() {
     let err: Value = limited.json().await.expect("error body is json");
     assert_eq!(err["error"]["code"], json!("rate_limited"));
 }
+
+async fn heartbeat_status(srv: &TestServer, token: &str) -> reqwest::StatusCode {
+    agent_client()
+        .post(srv.url("/agent/v1/heartbeat"))
+        .bearer_auth(token)
+        .json(
+            &json!({"agent_version": "0.1.1", "boot_id": "b1", "load1": 0.0,
+                      "mem_free_mb": 1, "disk_free_mb": 1, "units": [], "metrics": []}),
+        )
+        .send()
+        .await
+        .expect("heartbeat sends")
+        .status()
+}
+
+/// Review Focus 2 at the API: rotation never cuts the agent off.
+#[tokio::test]
+async fn rotate_token_old_token_works_until_the_agent_rejoins() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let (server_id, old) = joined(&srv, "rot").await;
+    let owner = srv.login_as_owner().await;
+    let operator = srv.login_as("operator").await;
+    let url = srv.url(&format!("/api/v1/servers/{server_id}/rotate-token"));
+
+    let denied = operator.post(&url).send().await.expect("sends");
+    assert_eq!(
+        denied.status(),
+        reqwest::StatusCode::FORBIDDEN,
+        "owner only"
+    );
+    let resp = owner.post(&url).send().await.expect("sends");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: Value = resp.json().await.expect("json");
+    assert_eq!(body["server"]["status"], json!("rejoining"));
+    assert_eq!(body["join_command"], json!("setu agent join"));
+    let join_token = body["join_token"].as_str().expect("token").to_string();
+    assert_eq!(
+        heartbeat_status(&srv, &old).await,
+        reqwest::StatusCode::NO_CONTENT,
+        "old token still works"
+    );
+
+    let join = agent_client()
+        .post(srv.url("/agent/v1/join"))
+        .json(
+            &json!({"join_token": join_token, "nonce": "rejoin-1", "hostname": "web-1",
+                      "arch": "x86_64", "os": "linux", "cpu_cores": 4,
+                      "memory_mb": 8192, "disk_mb": 102_400}),
+        )
+        .send()
+        .await
+        .expect("join sends");
+    assert_eq!(join.status(), reqwest::StatusCode::OK);
+    let joined_body: Value = join.json().await.expect("json");
+    assert_eq!(joined_body["server_id"], json!(server_id), "same row");
+    let new = joined_body["server_token"].as_str().expect("token");
+    assert_eq!(
+        heartbeat_status(&srv, &old).await,
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        heartbeat_status(&srv, new).await,
+        reqwest::StatusCode::NO_CONTENT
+    );
+    let audit = srv.db.audit().list_recent(50).await.expect("audit");
+    assert!(audit.iter().any(|a| a.action == "server.rotate_token"));
+}

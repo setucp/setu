@@ -113,6 +113,16 @@ export function useCreateServer() {
   });
 }
 
+export function useRotateServerToken(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.rotateServerToken(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["servers"] });
+    },
+  });
+}
+
 export function useCordonServer(id: string) {
   const queryClient = useQueryClient();
   return useMutation({

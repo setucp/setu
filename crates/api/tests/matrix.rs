@@ -393,6 +393,16 @@ async fn route_matrix() {
     )
     .await;
     ctx.row(
+        "POST",
+        "/api/v1/servers/does-not-exist/rotate-token",
+        Some(json!({})),
+        401,
+        403,
+        403,
+        404,
+    )
+    .await;
+    ctx.row(
         "GET",
         "/api/v1/apps/does-not-exist/versions/0.0.0/prompts",
         None,
