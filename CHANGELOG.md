@@ -103,6 +103,29 @@ Ubuntu 24.04 x86_64 servers you own. Design: spec revision 4
   a server (with `--panel-host` and, under `--tls internal`, the
   internal CA).
 
+### Final review hardening
+
+- A site domain equal to the panel host, `localhost` or a server's
+  hostname is refused; the panel route is always Caddy's first route
+  (install-system and reconcile).
+- Log streams end when the client goes away, live at most 30 minutes
+  and escape CR/LF; the job log tails until the job finishes and ends
+  with `event: end`.
+- Password attempts are counted before argon2 (which runs off the async
+  workers); own password changes share the login limiter; `POST /setup`
+  checks the token before hashing.
+- Backups and restores stream between pipes and files; backup skips
+  files the site user does not own or that are hard-linked; a failed
+  restore swap puts the old data back; a restore whose `dirs.tar.zst`
+  is missing fails; `delete_backup` serialises with the site's jobs.
+- Only the job's lease holder writes its log, step and status.
+- Postgres names are `site_<short>` only; database commands take the
+  site's FIFO slot; downloads time out (10 s connect, 15 min total) and
+  stale `.part` files are pruned at agent start; manifest URL fetches
+  are pinned to the vetted addresses (NAT64 and 6to4 refused).
+- `agent doctor` checks `fs.protected_hardlinks = 1`; `install.sh`
+  restarts the local agent when an upgrade replaced the binary.
+
 ### Tests
 
 - Unit and integration suites (manifest corpus, helper, golden units
