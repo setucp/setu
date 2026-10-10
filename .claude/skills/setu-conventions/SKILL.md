@@ -23,7 +23,8 @@ description: Setu code conventions — error envelope, ids, sealing, idempotent 
   `env.reveal_denied`); manual `Debug` redacts. Job payload secrets are
   `v1:` sealed whatever the `secret` flag.
 - Agent commands: idempotent (check state, then act), deduped by id,
-  serialised per site (read-only and database commands take no slot),
+  serialised per site (read-only commands take no slot; database
+  commands take the slot of the `site_<short>` they name, R137),
   rejected when `expires_at` passed, result persisted to `state.json`
   before it is posted. `site` is the short id except in `SiteCreate`,
   `WriteUnit` and `Health` (which carry `SiteSpec`); route commands

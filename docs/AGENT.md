@@ -101,7 +101,8 @@ Environment variables:
 `setu agent run` long-polls `GET /agent/v1/commands?wait=30`. Each
 command runs in its own task after taking its site's FIFO slot, so one
 site's 15-minute install never blocks another site; `status`,
-`fetch_logs`, `inventory` and the database commands take no slot. A
+`fetch_logs` and `inventory` take no slot, and the database commands
+take the slot of the `site_<short>` they name (R137). A
 command is rejected with `expired` once its `expires_at` has passed
 (checked again when it reaches the front of its site's queue), and
 deduped by id against the last 1000 results. Its result is written to

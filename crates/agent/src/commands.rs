@@ -9,7 +9,8 @@
 //!    site's slot, so a command queued behind a long install never runs
 //!    late).
 //! 3. **Per-site FIFO**: a command with a site short id that is not
-//!    read-only takes that site's slot; `status`, `fetch_logs` and
+//!    read-only takes that site's slot (the database commands take the
+//!    slot of the `site_<short>` they name); `status`, `fetch_logs` and
 //!    `inventory` take none. Slots are queued in delivery order
 //!    ([`Agent::spawn`] enqueues before the task starts), so one site's
 //!    commands run in order while other sites run concurrently.
@@ -179,11 +180,16 @@ impl<H, P, C> Agent<H, P, C> {
 }
 
 /// The FIFO key: the site short id of a command that is not read-only.
+/// The database commands name `site_<short>` rather than a site: they
+/// take that site's slot (M16, R137), so they never run beside the
+/// site's restore, backup or removal.
 pub fn slot_key(cmd: &Command) -> Option<&str> {
-    if cmd.is_read_only() {
-        None
-    } else {
-        cmd.site_short_id()
+    match cmd {
+        _ if cmd.is_read_only() => None,
+        Command::CreateDatabase { db, .. } | Command::DropDatabase { db, .. } => db
+            .strip_prefix("site_")
+            .filter(|short| setu_common::is_short_id(short)),
+        _ => cmd.site_short_id(),
     }
 }
 
@@ -338,6 +344,30 @@ mod tests {
         );
         assert_eq!(r.log, "wrote ***");
         assert_eq!(r.error.as_deref(), Some("bad value ***"));
+    }
+
+    /// `create_database`/`drop_database` name `site_<short>`: they queue
+    /// in that site's FIFO, so a drop never runs beside the site's
+    /// restore or backup of the same database (M16).
+    #[test]
+    fn create_database_takes_site_slot() {
+        let create = Command::CreateDatabase {
+            db: "site_abcd1234".into(),
+            role: "site_abcd1234".into(),
+            password: "pw-long-enough".into(),
+        };
+        let drop = Command::DropDatabase {
+            db: "site_abcd1234".into(),
+            role: "site_abcd1234".into(),
+        };
+        assert_eq!(slot_key(&create), Some("abcd1234"));
+        assert_eq!(slot_key(&drop), Some("abcd1234"));
+        let odd = Command::DropDatabase {
+            db: "postgres".into(),
+            role: "postgres".into(),
+        };
+        assert_eq!(slot_key(&odd), None, "refused later by the adapter");
+        assert_eq!(slot_key(&Command::Inventory), None);
     }
 
     #[tokio::test]

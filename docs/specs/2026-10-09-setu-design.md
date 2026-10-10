@@ -655,8 +655,8 @@ Command semantics:
   own task after taking that site's FIFO slot (a chain of one-shot
   signals per short id, enqueued in delivery order, R96), so one site's
   15-minute `install` never blocks another site or a read-only command,
-  which takes no slot; database commands carry no site and take no slot
-  either (R86).
+  which takes no slot; database commands carry no site (R86) but take
+  the slot of the `site_<short>` database they name (R137).
 - A job step that times out marks its command `cancelled`, then issues
   a fresh command; there is one retry mechanism (the job's: exactly one
   retry on `Timeout` or `Expired`, R87), not two.
