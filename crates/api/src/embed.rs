@@ -36,6 +36,8 @@ fn content_type(path: &str) -> &'static str {
         "text/css; charset=utf-8"
     } else if path.ends_with(".svg") {
         "image/svg+xml"
+    } else if path.ends_with(".webmanifest") {
+        "application/manifest+json"
     } else if path.ends_with(".json") {
         "application/json"
     } else if path.ends_with(".png") {
@@ -98,6 +100,17 @@ pub async fn fallback(method: Method, uri: Uri) -> impl IntoResponse {
         return AppError::not_found("route not found").into_response();
     }
     if method == Method::GET {
+        // Root-level static files from `ui/public` (favicon, manifest,
+        // logo, PWA icons) are embedded next to `index.html`; serve them
+        // before falling back to the SPA shell. Only single-segment
+        // names are considered, so nothing under `/api` or a nested path
+        // can match an embedded file by accident.
+        let name = path.trim_start_matches('/');
+        if !name.is_empty() && !name.contains('/') && name != "index.html" {
+            if let Some(file) = static_file(name) {
+                return ([(header::CONTENT_TYPE, content_type(name))], file).into_response();
+            }
+        }
         if let Some(body) = index_html() {
             return html_response(body);
         }
@@ -105,10 +118,46 @@ pub async fn fallback(method: Method, uri: Uri) -> impl IntoResponse {
     AppError::not_found("route not found").into_response()
 }
 
+#[cfg(setu_ui)]
+fn static_file(name: &str) -> Option<Vec<u8>> {
+    UiDist::get(name).map(|f| f.data.into_owned())
+}
+
+#[cfg(not(setu_ui))]
+fn static_file(_name: &str) -> Option<Vec<u8>> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::http::StatusCode;
+
+    #[cfg(setu_ui)]
+    #[tokio::test]
+    async fn root_static_files_are_served_not_the_spa_shell() {
+        let uri: Uri = "/favicon.svg".parse().expect("uri");
+        let resp = fallback(Method::GET, uri).await.into_response();
+        let ct = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        assert!(ct.starts_with("image/svg"), "favicon served as {ct}");
+        let uri: Uri = "/nested/favicon.svg".parse().expect("uri");
+        let resp = fallback(Method::GET, uri).await.into_response();
+        let ct = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            ct.starts_with("text/html"),
+            "nested path falls back to the shell: {ct}"
+        );
+    }
 
     async fn status_of(method: Method, path: &str) -> (StatusCode, String) {
         let uri: Uri = path.parse().expect("test uri parses");

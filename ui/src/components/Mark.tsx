@@ -23,7 +23,7 @@ export function Logo({ className }: { className?: string }) {
   return (
     <span className={cn("inline-flex items-center gap-2", className)} aria-label="Setu" role="img">
       <Mark className="size-7 shrink-0" />
-      <span className="text-[1.15rem] font-semibold tracking-[-0.03em] text-foreground">Setu</span>
+      <span className="font-brand text-[1.2rem] font-bold tracking-[-0.02em] text-foreground">Setu</span>
     </span>
   );
 }

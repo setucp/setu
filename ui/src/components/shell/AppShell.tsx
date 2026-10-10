@@ -58,7 +58,7 @@ export function AppShell({ operator }: { operator: Pick<Operator, "email" | "rol
         </aside>
 
         <div className="flex min-h-dvh flex-col md:pl-16 lg:pl-60">
-          <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/85 px-3 backdrop-blur-md supports-[backdrop-filter]:bg-background/70 sm:px-4 md:px-6">
+          <header className="relative sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/85 px-3 backdrop-blur-md supports-[backdrop-filter]:bg-background/70 sm:px-4 md:px-6">
             <Button
               variant="ghost"
               size="icon"
@@ -69,7 +69,11 @@ export function AppShell({ operator }: { operator: Pick<Operator, "email" | "rol
             >
               <Menu aria-hidden="true" />
             </Button>
-            <Link to="/sites" aria-label="Setu home" className="rounded-md md:hidden">
+            <Link
+              to="/sites"
+              aria-label="Setu home"
+              className="absolute left-1/2 -translate-x-1/2 rounded-md md:hidden"
+            >
               <Logo />
             </Link>
             <Breadcrumbs className="hidden md:block" />

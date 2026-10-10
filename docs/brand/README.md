@@ -11,6 +11,6 @@ solid shapes so it survives 16 px and reads as a bridge from a distance.
 | `github-banner.svg` / `.png` | 1280×640 social preview (upload under repository Settings → Social preview) |
 
 Colours: indigo `#4F46E5` (accent), navy `#0B1020` (dark surface), ink
-`#0F172A` (light-mode text). Type: Inter (wordmark weight 600, tracking
-−3 %). Keep the mark's clear space at least the height of the deck
+`#0F172A` (light-mode text). Type: Sora Bold (700) for the wordmark, tracking −2 %; Inter for
+everything else. Keep the mark's clear space at least the height of the deck
 stroke; never recolour the mark outside these three colours.
