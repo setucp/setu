@@ -145,10 +145,18 @@ t_site_detail_admin_url_prompts_and_backup_status() {
   [ "$(last | jq -c .prompts)" = "[]" ] || { why "unexpected prompts $(last)"; return 1; }
   [ "$(capi GET /panel/backup)" = 200 ] || { why "panel backup endpoint"; return 1; }
 }
+# True only for a whole number above zero: a missing site or metric makes
+# jq print null or nothing, which must read as "no sample yet", not an error.
+usage_is_positive() {
+  case "$1" in ''|null|*[!0-9]*) return 1 ;; esac
+  [ "$1" -gt 0 ]
+}
 t_sites_list_shows_live_usage() {
+  local mem
   for _ in $(seq 60); do
     capi GET /sites >/dev/null
-    [ "$(last | jq --arg id "$MINIFLUX_ID" '[.sites[] | select(.id == $id) | .metrics.memory_bytes // 0][0]')" -gt 0 ] && return 0
+    mem=$(last | jq -r --arg id "$MINIFLUX_ID" '[.sites[] | select(.id == $id) | .metrics.memory_bytes // 0][0] // 0')
+    usage_is_positive "$mem" && return 0
     sleep 5
   done
   why "no metric sample in the sites list after 5 minutes"; return 1
