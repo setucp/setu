@@ -1514,7 +1514,11 @@ async fn delete_backup_enqueues_job_and_marks_row() {
     assert_eq!(resp.status(), reqwest::StatusCode::ACCEPTED);
     let body: Value = resp.json().await.expect("json");
     assert_eq!(body["job"]["kind"], json!("delete_backup"));
-    assert_eq!(body["job"]["site_id"], Value::Null, "server-level job");
+    assert_eq!(
+        body["job"]["site_id"],
+        json!(site_id),
+        "serialised with the site's jobs (M6)"
+    );
     assert_eq!(body["job"]["server_id"], json!(server_id));
     let job_id = body["job"]["id"].as_str().expect("job id").to_string();
     let done = poll_job(&srv, &owner, &job_id).await.expect("job");
@@ -1846,4 +1850,53 @@ async fn job_log_sse_tails_until_done_and_escapes_lines() {
         acc.trim_end().ends_with("event: end\ndata: done"),
         "{acc:?}"
     );
+}
+
+/// A backup of a live site is deleted by a job on that site, so the
+/// one-active-job-per-site index keeps it from racing the site's update
+/// or restore that may read the backup (M6): while the site has an
+/// active job the delete is 409, and the other way round.
+#[tokio::test]
+async fn delete_backup_serialises_with_the_sites_jobs() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_id, _) = running_site(&srv, &owner, "delser").await;
+    let take: Value = owner
+        .post(srv.url(&format!("/api/v1/sites/{site_id}/backups")))
+        .send()
+        .await
+        .expect("backup sends")
+        .json()
+        .await
+        .expect("json");
+    let bk_job = take["job"]["id"].as_str().expect("job id").to_string();
+    poll_job(&srv, &owner, &bk_job).await.expect("backup done");
+    let bid = srv.db.backups().list_all().await.expect("list")[0]
+        .id
+        .clone();
+    let url = srv.url(&format!("/api/v1/sites/{site_id}/backups/{bid}"));
+
+    srv.kill_runner().await;
+    let restart = owner
+        .post(srv.url(&format!("/api/v1/sites/{site_id}/restart")))
+        .send()
+        .await
+        .expect("restart");
+    assert_eq!(restart.status(), reqwest::StatusCode::ACCEPTED);
+    let busy = owner.delete(&url).send().await.expect("delete");
+    assert_eq!(busy.status(), reqwest::StatusCode::CONFLICT);
+    let any = owner
+        .delete(srv.url(&format!("/api/v1/backups/{bid}")))
+        .send()
+        .await
+        .expect("delete any");
+    assert_eq!(any.status(), reqwest::StatusCode::CONFLICT);
+
+    srv.start_runner();
+    let restart_job: Value = restart.json().await.expect("json");
+    let rj = restart_job["job"]["id"].as_str().expect("id").to_string();
+    poll_job(&srv, &owner, &rj).await.expect("restart done");
+    let resp = owner.delete(&url).send().await.expect("delete");
+    assert_eq!(resp.status(), reqwest::StatusCode::ACCEPTED);
 }

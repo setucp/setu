@@ -183,9 +183,10 @@ pub async fn restore(
 }
 
 /// Delete a backup's files on its server (operator and above): 202 with a
-/// server-level `delete_backup` job (it serialises with nothing on the
-/// site); the row ends `deleted` and leaves the list. 409 when the backup
-/// is already deleted or a delete is already queued.
+/// `delete_backup` job on the site (it serialises with the site's other
+/// jobs); the row ends `deleted` and leaves the list. 409 when the backup
+/// is already deleted, a delete is already queued, or the site has an
+/// active job.
 #[utoipa::path(
     delete,
     path = "/api/v1/sites/{id}/backups/{bid}",
@@ -240,8 +241,9 @@ pub async fn list_all(
 
 /// Delete any backup by id (operator and above), the only way to delete
 /// a `pre_delete` backup once its site is gone: 202 with the same
-/// server-level `delete_backup` job as `DELETE
-/// /sites/{id}/backups/{bid}`; 409 when already deleted or queued.
+/// `delete_backup` job as `DELETE /sites/{id}/backups/{bid}` (on the
+/// site while it exists, else server-level); 409 when already deleted or
+/// queued, or the site has an active job.
 #[utoipa::path(
     delete,
     path = "/api/v1/backups/{bid}",
@@ -283,12 +285,16 @@ async fn enqueue_delete(
     {
         return Err(AppError::conflict("backup delete already queued"));
     }
+    // A live site's backup is deleted by a job on that site: the
+    // one-active-job-per-site index then keeps it from racing an update
+    // or restore that reads the backup (409 while one runs; M6, R136).
+    // A deleted site's backup (`site_id` null) gets a server-level job.
     let job = state
         .db
         .jobs()
         .enqueue(
             "delete_backup",
-            None,
+            backup.site_id.as_deref(),
             Some(&backup.server_id),
             Some(&serde_json::json!({"backup_id": backup.id})),
         )

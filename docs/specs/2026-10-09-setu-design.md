@@ -249,9 +249,10 @@ release, R45/R75); enums are `CHECK` constraints.
   locked_by, locked_until, log text, error, created_at, started_at,
   finished_at. One active job per site (partial unique index on
   `site_id WHERE status IN ('queued','running')`). `delete_backup` jobs
-  are server-level (`site_id` NULL, `payload.backup_id`), so they never
-  conflict with the site's own jobs and work after the site is gone
-  (R89).
+  (`payload.backup_id`) run on the backup's site while it exists, so
+  they serialise with the update or restore that may read the backup,
+  and are server-level (`site_id` NULL) once the site is gone (R89,
+  R136).
 - `agent_commands`: id, server_id, site_id?, command jsonb (secret
   fields nulled by the SQL function `setu_redact_command` whenever the
   row leaves `queued`/`delivered`: on completion, cancel, expiry and
@@ -812,7 +813,8 @@ backup (any status) is newer than due − 12 h or it has an active job
 (R89). It also enqueues `delete_backup` jobs for scheduled copies
 beyond the newest 7 per site row and `pre_*` copies older than 30 days
 (manual copies stay until an operator deletes them; one active
-`delete_backup` per backup), and prunes metrics (30 d), finished agent
+`delete_backup` per backup; a busy site's delete waits for the next
+tick, R136), and prunes metrics (30 d), finished agent
 commands (24 h) and expired sessions. **Restore** (`restore_site`),
 steps: `validate` (a `completed` backup of this site), `backup`
 (`pre_restore`), `stop`, `restore` (database replaced, dirs swapped;
@@ -941,8 +943,9 @@ Resources (as built; `openapi.json` is the full list):
   otherwise, target `<site_id>:<NAME>` (R107); `GET /sites/{id}/logs`
   (SSE over the journal cursor); `GET|POST /sites/{id}/backups`, `POST
   /sites/{id}/backups/{bid}/restore`, `DELETE /sites/{id}/backups/{bid}`
-  (operator+, server-level `delete_backup` job; 400 for another site's
-  backup, 409 when already deleted or a delete is active, R109).
+  (operator+, `delete_backup` job on the site; 400 for another site's
+  backup, 409 when already deleted, a delete is active or the site has
+  an active job, R109, R136).
 - `backups` (top level, R117): `GET /backups` (every non-deleted
   backup newest first, including those of deleted sites with `site_id:
   null`; `BackupOut` has nullable `site_id`, `site_name`, `domain`,

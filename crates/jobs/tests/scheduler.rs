@@ -104,17 +104,16 @@ async fn scheduler_enqueues_delete_backup_beyond_seven() {
     let clock = FixedClock::new(Utc.with_ymd_and_hms(2026, 10, 12, 12, 0, 0).unwrap());
     let cfg = config();
 
-    let r = Scheduler::tick(&fx.db, &clock, &cfg).await.unwrap();
     let mut want = vec![scheduled[0].clone(), scheduled[1].clone(), kinds[0].clone()];
     want.sort();
-    let mut got = r.deletes.clone();
-    got.sort();
-    assert_eq!(
-        got, want,
-        "two oldest scheduled + the 41-day-old pre_update"
-    );
+    // A live site's delete_backup is a job on the site (R136): one per
+    // tick, the next once the site's active job finished.
+    let r = Scheduler::tick(&fx.db, &clock, &cfg).await.unwrap();
+    assert_eq!(r.deletes.len(), 1, "{r:?}");
+    assert!(want.contains(&r.deletes[0]), "{r:?}");
     let again = Scheduler::tick(&fx.db, &clock, &cfg).await.unwrap();
-    assert!(again.deletes.is_empty(), "already queued: {again:?}");
+    assert!(again.deletes.is_empty(), "site busy: {again:?}");
+    let mut got = r.deletes.clone();
 
     // The runner executes them: one DeleteBackup each, rows deleted.
     let agent = FakeAgent::new();
@@ -128,18 +127,26 @@ async fn scheduler_enqueues_delete_backup_beyond_seven() {
             ..RunnerConfig::default()
         },
     );
-    for id in &want {
-        let job = fx.db.jobs().active_delete_backup(id).await.unwrap();
-        if let Some(job) = job {
-            let done = wait_job(&fx.db, &job.id, Duration::from_secs(10)).await;
-            assert_eq!(done.status, "done", "error: {:?}", done.error);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        for id in &got {
+            if let Some(job) = fx.db.jobs().active_delete_backup(id).await.unwrap() {
+                let done = wait_job(&fx.db, &job.id, Duration::from_secs(10)).await;
+                assert_eq!(done.status, "done", "error: {:?}", done.error);
+            }
         }
+        if got.len() == want.len() {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{got:?}");
+        let r = Scheduler::tick(&fx.db, &clock, &cfg).await.unwrap();
+        got.extend(r.deletes);
     }
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while agent.call_count("delete_backup") < 3 {
-        assert!(tokio::time::Instant::now() < deadline);
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    got.sort();
+    assert_eq!(
+        got, want,
+        "two oldest scheduled + the 41-day-old pre_update"
+    );
     for id in &want {
         let mut status = String::new();
         for _ in 0..100 {

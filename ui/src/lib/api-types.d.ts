@@ -262,8 +262,9 @@ export interface paths {
         /**
          * Delete any backup by id (operator and above), the only way to delete
          *     a `pre_delete` backup once its site is gone: 202 with the same
-         *     server-level `delete_backup` job as `DELETE
-         *     /sites/{id}/backups/{bid}`; 409 when already deleted or queued.
+         *     `delete_backup` job as `DELETE /sites/{id}/backups/{bid}` (on the
+         *     site while it exists, else server-level); 409 when already deleted or
+         *     queued, or the site has an active job.
          */
         delete: operations["delete_any"];
         options?: never;
@@ -604,9 +605,10 @@ export interface paths {
         post?: never;
         /**
          * Delete a backup's files on its server (operator and above): 202 with a
-         *     server-level `delete_backup` job (it serialises with nothing on the
-         *     site); the row ends `deleted` and leaves the list. 409 when the backup
-         *     is already deleted or a delete is already queued.
+         *     `delete_backup` job on the site (it serialises with the site's other
+         *     jobs); the row ends `deleted` and leaves the list. 409 when the backup
+         *     is already deleted, a delete is already queued, or the site has an
+         *     active job.
          */
         delete: operations["delete"];
         options?: never;

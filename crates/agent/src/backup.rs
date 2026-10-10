@@ -124,6 +124,7 @@ pub async fn backup_site<H: Helper, P: PostgresAdmin, C>(
 /// replaced from `db.dump` (drop with force, create, `pg_restore` as
 /// `role`, the file streamed to its stdin), then helper `restore` of the
 /// requested `dirs` that the archive holds (streamed the same way).
+/// Requested dirs with no `dirs.tar.zst` fail before anything changes.
 pub async fn restore_site<H: Helper, P: PostgresAdmin, C>(
     rt: &NativeRuntime<H, P, C>,
     short: &str,
@@ -137,9 +138,15 @@ pub async fn restore_site<H: Helper, P: PostgresAdmin, C>(
     if !dump.is_file() {
         anyhow::bail!("backup has no readable {DB_DUMP}");
     }
-    rt.postgres().restore_replace(db, role, &dump).await?;
     let archive_path = dir.join(DIRS_ARCHIVE);
-    if archive_path.is_file() {
+    // Every backup writes the archive (empty when no dir exists): one
+    // that lost it cannot restore the dirs it was asked for (M6). Checked
+    // before the database is replaced.
+    if !dirs.is_empty() && !archive_path.is_file() {
+        anyhow::bail!("backup has no {DIRS_ARCHIVE} for dirs {}", dirs.join(", "));
+    }
+    rt.postgres().restore_replace(db, role, &dump).await?;
+    if !dirs.is_empty() {
         let present = top_level_dirs(&archive_path)?;
         let wanted: Vec<String> = dirs
             .iter()

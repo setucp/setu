@@ -148,18 +148,25 @@ impl Scheduler {
             if db.jobs().active_delete_backup(&backup.id).await?.is_some() {
                 continue;
             }
-            // Server-level job (no site id): it never conflicts with the
-            // site's own jobs and works after the site is gone (R89).
+            // On the site while it exists, so it serialises with the
+            // site's jobs (an update or restore may read this backup); a
+            // busy site is retried next tick. Server-level once the site
+            // is gone (R89, R136).
             let payload = serde_json::json!({ "backup_id": backup.id });
-            db.jobs()
+            match db
+                .jobs()
                 .enqueue(
                     "delete_backup",
-                    None,
+                    backup.site_id.as_deref(),
                     Some(&backup.server_id),
                     Some(&payload),
                 )
-                .await?;
-            report.deletes.push(backup.id);
+                .await
+            {
+                Ok(_) => report.deletes.push(backup.id),
+                Err(e) if e.code == setu_common::ErrorCode::Conflict => {}
+                Err(e) => return Err(e),
+            }
         }
 
         db.metrics().prune(config.metrics_keep).await?;

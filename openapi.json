@@ -623,7 +623,7 @@
         "tags": [
           "super::backups"
         ],
-        "summary": "Delete any backup by id (operator and above), the only way to delete\na `pre_delete` backup once its site is gone: 202 with the same\nserver-level `delete_backup` job as `DELETE\n/sites/{id}/backups/{bid}`; 409 when already deleted or queued.",
+        "summary": "Delete any backup by id (operator and above), the only way to delete\na `pre_delete` backup once its site is gone: 202 with the same\n`delete_backup` job as `DELETE /sites/{id}/backups/{bid}` (on the\nsite while it exists, else server-level); 409 when already deleted or\nqueued, or the site has an active job.",
         "operationId": "delete_any",
         "parameters": [
           {
@@ -2037,7 +2037,7 @@
         "tags": [
           "super::backups"
         ],
-        "summary": "Delete a backup's files on its server (operator and above): 202 with a\nserver-level `delete_backup` job (it serialises with nothing on the\nsite); the row ends `deleted` and leaves the list. 409 when the backup\nis already deleted or a delete is already queued.",
+        "summary": "Delete a backup's files on its server (operator and above): 202 with a\n`delete_backup` job on the site (it serialises with the site's other\njobs); the row ends `deleted` and leaves the list. 409 when the backup\nis already deleted, a delete is already queued, or the site has an\nactive job.",
         "operationId": "delete",
         "parameters": [
           {

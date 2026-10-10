@@ -333,3 +333,37 @@ async fn remove_runs_site_remove_and_forgets_state() {
         .sites
         .is_empty());
 }
+
+/// A backup always holds `dirs.tar.zst` (the helper writes an empty
+/// archive when no dir exists). A restore asking for dirs from a backup
+/// that lost it must fail, not report success with the dirs untouched
+/// (M6).
+#[tokio::test]
+async fn restore_fails_when_dirs_archive_missing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let helper = FakeHelper::new();
+    let rt = fake_rt(dir.path(), helper.clone());
+    let short = "abcd1234";
+    let dirs = vec!["media".to_string()];
+    setu_agent::backup::backup_site(&rt, short, "site_abcd1234", &dirs, "b1")
+        .await
+        .expect("backup");
+    let bdir = setu_agent::backup::backup_dir(&rt.config().backups_root, short, "b1").expect("dir");
+    std::fs::remove_file(bdir.join(setu_agent::backup::DIRS_ARCHIVE)).expect("rm archive");
+
+    let err =
+        setu_agent::backup::restore_site(&rt, short, "site_abcd1234", "site_abcd1234", &dirs, "b1")
+            .await
+            .expect_err("missing archive");
+    assert!(err.to_string().contains("dirs.tar.zst"), "{err}");
+    assert!(
+        helper
+            .calls_for(setu_agent::helper::Verb::Restore)
+            .is_empty(),
+        "no helper restore"
+    );
+    // A backup without dirs needs no archive.
+    setu_agent::backup::restore_site(&rt, short, "site_abcd1234", "site_abcd1234", &[], "b1")
+        .await
+        .expect("db-only restore");
+}
