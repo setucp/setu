@@ -10,7 +10,6 @@ use axum::{
     Json,
 };
 use futures::channel::mpsc;
-use futures::SinkExt;
 use serde::{Deserialize, Serialize};
 use setu_common::AppError;
 use utoipa::ToSchema;
