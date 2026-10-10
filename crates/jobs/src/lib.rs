@@ -199,21 +199,26 @@ impl JobCtx {
 
     /// Register a plaintext secret: from now on it is replaced by `***`
     /// in every log line and step error of this context.
-    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     pub fn add_secret(&self, secret: &str) {
         if secret.len() < 4 {
             return; // too short to scrub without mangling ordinary text
         }
-        let mut secrets = self.secrets.lock().expect("secrets lock");
+        // A poisoned lock still holds the list: read through it (M4).
+        let mut secrets = self
+            .secrets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !secrets.iter().any(|s| s == secret) {
             secrets.push(secret.to_string());
         }
     }
 
     /// `text` with every registered secret replaced by `***`.
-    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     pub fn redact(&self, text: &str) -> String {
-        let secrets = self.secrets.lock().expect("secrets lock");
+        let secrets = self
+            .secrets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         secrets
             .iter()
             .fold(text.to_string(), |acc, s| acc.replace(s.as_str(), "***"))
@@ -749,4 +754,34 @@ fn env_json(
             })
             .collect(),
     )
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test module (R146)
+mod secrets_tests {
+    use super::*;
+
+    /// M4: a panic while the secrets lock is held must not make every
+    /// later redaction panic: the poisoned lock is read through.
+    #[tokio::test]
+    async fn a_poisoned_secrets_lock_still_redacts() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://setu@127.0.0.1:1/setu").unwrap();
+        let ctx = JobCtx::build(
+            Db::new(pool),
+            Arc::new(crate::agent::testing::FakeAgent::new()),
+            setu_common::Sealer::new(&setu_common::SecretKey::from_hex(&"ab".repeat(32)).unwrap()),
+            Arc::new(crate::clock::SystemClock),
+            InstallSlots::default(),
+            Box::new(|_: &str| {}),
+        );
+        ctx.add_secret("hunter2-secret");
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = ctx.secrets.lock().unwrap();
+            panic!("poison the lock");
+        }));
+        assert!(ctx.secrets.is_poisoned(), "the lock is poisoned");
+        assert_eq!(ctx.redact("x hunter2-secret"), "x ***");
+        ctx.add_secret("another-secret");
+        assert_eq!(ctx.redact("another-secret"), "***");
+    }
 }

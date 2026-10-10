@@ -152,7 +152,6 @@ impl Worker {
         }
     }
 
-    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     async fn dispatch(&self, job: &Job) -> Result<(), AppError> {
         let job_id = job.id.clone();
         let ctx = JobCtx::build(
@@ -227,7 +226,9 @@ impl Worker {
                 crate::env_update::run(&ctx, &site("env_update")?, &changes).await
             }
             kind @ ("restart_site" | "stop_site" | "start_site") => {
-                let op = crate::lifecycle::Op::from_job_kind(kind).expect("lifecycle kind");
+                let op = crate::lifecycle::Op::from_job_kind(kind).ok_or_else(|| {
+                    AppError::validation(format!("unknown lifecycle kind {kind}"))
+                })?;
                 crate::lifecycle::run(&ctx, &site(kind)?, op).await
             }
             other => Err(AppError::validation(format!("unknown job kind {other}"))),

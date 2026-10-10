@@ -254,9 +254,7 @@ async fn delete_scrubs_sealed_payloads_of_the_sites_jobs() {
     assert_eq!(kept.site_id, None, "the job outlives the site");
     for key in ["changes", "prompts", "old_env", "old_spec"] {
         assert!(
-            kept.payload
-                .get(key)
-                .map_or(true, serde_json::Value::is_null),
+            kept.payload.get(key).is_none_or(serde_json::Value::is_null),
             "{key} must not survive the site"
         );
     }
