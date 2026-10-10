@@ -31,12 +31,12 @@ describe("jobs", () => {
     const running = screen.getByRole("row", { name: /provision_site.*running/ });
     expect(within(running).getByRole("link", { name: /j1/ })).toHaveAttribute("href", "/jobs/j1");
     const done = screen.getByRole("row", { name: /backup_site/ });
-    expect(within(done).getByText("done")).toHaveClass("text-green-700");
+    expect(within(done).getByText("done")).toHaveAttribute("data-variant", "success");
     const failed = screen.getByRole("row", { name: /update_site/ });
-    expect(within(failed).getByText("failed")).toHaveClass("bg-destructive");
+    expect(within(failed).getByText("failed")).toHaveAttribute("data-variant", "destructive");
     expect(within(failed).getByText("health failed")).toBeInTheDocument();
     const queued = screen.getByRole("row", { name: /delete_backup/ });
-    expect(within(queued).getByText("queued")).toHaveClass("text-yellow-700");
+    expect(within(queued).getByText("queued")).toHaveAttribute("data-variant", "warning");
     unmount();
 
     // Live log: the stream replays the stored backlog, then tails; no

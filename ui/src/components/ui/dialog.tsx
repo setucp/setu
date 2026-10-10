@@ -2,35 +2,21 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-/**
- * Modal shell: focus trap, Escape to close, scroll lock, click-outside.
- * Rendered into a portal so it escapes any transformed/overflow ancestor.
- */
-export function Modal({
-  open,
-  onClose,
-  title,
-  description,
-  children,
-  footer,
-  size = "md",
-  testId,
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: React.ReactNode;
-  description?: React.ReactNode;
-  children?: React.ReactNode;
-  footer?: React.ReactNode;
-  size?: "sm" | "md" | "lg";
-  testId?: string;
-}) {
-  const panelRef = React.useRef<HTMLDivElement>(null);
-  const titleId = React.useId();
-  const descId = React.useId();
+const FOCUSABLE =
+  'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
+/**
+ * Shared overlay behaviour: focus trap, Escape to close, scroll lock and
+ * focus restore. Used by `Modal` and `Sheet`.
+ */
+function useOverlay(
+  open: boolean,
+  panelRef: React.RefObject<HTMLDivElement | null>,
+  onClose: () => void,
+) {
   // Read through a ref so a parent passing a fresh `onClose` each render does
   // not re-run the effect below, which would bounce focus out and back in.
   const onCloseRef = React.useRef(onClose);
@@ -49,9 +35,7 @@ export function Modal({
         return;
       }
       if (e.key !== "Tab" || panelRef.current === null) return;
-      const focusables = panelRef.current.querySelectorAll<HTMLElement>(
-        'a[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])',
-      );
+      const focusables = panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE);
       const first = focusables[0];
       const last = focusables[focusables.length - 1];
       if (first === undefined || last === undefined) return;
@@ -77,20 +61,51 @@ export function Modal({
       document.body.style.overflow = overflow;
       previous?.focus?.();
     };
-  }, [open]);
+  }, [open, panelRef]);
+}
+
+/**
+ * Modal dialog: centred card on a blurred backdrop; on phones it docks to
+ * the bottom edge at full width. Rendered into a portal so it escapes any
+ * transformed/overflow ancestor.
+ */
+export function Modal({
+  open,
+  onClose,
+  title,
+  description,
+  children,
+  footer,
+  size = "md",
+  testId,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: React.ReactNode;
+  description?: React.ReactNode;
+  children?: React.ReactNode;
+  footer?: React.ReactNode;
+  size?: "sm" | "md" | "lg";
+  testId?: string;
+}) {
+  const panelRef = React.useRef<HTMLDivElement>(null);
+  const titleId = React.useId();
+  const descId = React.useId();
+  useOverlay(open, panelRef, onClose);
 
   if (!open || typeof document === "undefined") return null;
 
   const width =
-    size === "sm" ? "sm:max-w-sm" : size === "lg" ? "sm:max-w-2xl" : "sm:max-w-md";
+    size === "sm" ? "sm:max-w-sm" : size === "lg" ? "sm:max-w-2xl" : "sm:max-w-lg";
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-6">
       <button
         type="button"
         aria-label="Close dialog"
+        tabIndex={-1}
         onClick={onClose}
-        className="absolute inset-0 animate-fade-in bg-black/50 backdrop-blur-[2px]"
+        className="absolute inset-0 animate-fade-in bg-slate-950/40 backdrop-blur-sm dark:bg-black/60"
       />
       <div
         ref={panelRef}
@@ -101,14 +116,15 @@ export function Modal({
         tabIndex={-1}
         data-testid={testId}
         className={cn(
-          "relative z-10 flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-xl border bg-popover text-popover-foreground shadow-2xl outline-hidden",
-          "animate-scale-in sm:rounded-xl",
+          "relative z-10 flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-xl border bg-popover text-popover-foreground shadow-overlay outline-hidden",
+          "animate-slide-in-up pb-[env(safe-area-inset-bottom)] sm:animate-scale-in sm:rounded-xl sm:pb-0",
           width,
         )}
       >
-        <div className="flex items-start gap-3 border-b px-5 py-4">
+        <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-border sm:hidden" aria-hidden="true" />
+        <div className="flex items-start gap-3 px-5 pb-3 pt-4 sm:px-6 sm:pt-5">
           <div className="min-w-0 flex-1">
-            <h2 id={titleId} className="text-base font-semibold leading-6">
+            <h2 id={titleId} className="text-base font-semibold leading-6 tracking-tight">
               {title}
             </h2>
             {description !== undefined ? (
@@ -121,21 +137,78 @@ export function Modal({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="-mr-1 -mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="touch-target -mr-2 -mt-1 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
-            <X className="h-4 w-4" aria-hidden="true" />
+            <X className="size-4" aria-hidden="true" />
           </button>
         </div>
 
         {children !== undefined ? (
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 sm:px-6">{children}</div>
         ) : null}
 
         {footer !== undefined ? (
-          <div className="flex flex-col-reverse gap-2 border-t bg-muted/40 px-5 py-3 sm:flex-row sm:justify-end">
+          <div className="flex flex-col-reverse gap-2 border-t bg-surface px-5 py-3 sm:flex-row sm:justify-end sm:px-6 [&>button]:w-full sm:[&>button]:w-auto">
             {footer}
           </div>
         ) : null}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** Edge-docked panel (the phone navigation drawer). */
+export function Sheet({
+  open,
+  onClose,
+  label,
+  side = "left",
+  children,
+  className,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /** Accessible name of the panel. */
+  label: string;
+  side?: "left" | "right";
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const panelRef = React.useRef<HTMLDivElement>(null);
+  useOverlay(open, panelRef, onClose);
+  if (!open || typeof document === "undefined") return null;
+  return createPortal(
+    <div className="fixed inset-0 z-50">
+      <button
+        type="button"
+        aria-label="Close navigation"
+        tabIndex={-1}
+        onClick={onClose}
+        className="absolute inset-0 animate-fade-in bg-slate-950/40 backdrop-blur-sm dark:bg-black/60"
+      />
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        tabIndex={-1}
+        className={cn(
+          "absolute inset-y-0 flex w-[min(20rem,85vw)] flex-col border-r bg-surface shadow-overlay outline-hidden",
+          side === "left" ? "left-0 animate-slide-in-left" : "right-0 border-l border-r-0",
+          "pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)]",
+          className,
+        )}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="touch-target absolute right-3 top-3 inline-flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <X className="size-4" aria-hidden="true" />
+        </button>
+        {children}
       </div>
     </div>,
     document.body,
@@ -162,13 +235,14 @@ const ConfirmContext = React.createContext<
 
 /**
  * Provides `useConfirm()`. Mount once near the root; every destructive action
- * in the admin goes through it rather than firing on click.
+ * in the panel goes through it rather than firing on click.
  */
 export function ConfirmProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = React.useState<
     (ConfirmOptions & { resolve: Resolver }) | null
   >(null);
   const [typed, setTyped] = React.useState("");
+  const typedId = React.useId();
 
   const confirm = React.useCallback(
     (options: ConfirmOptions) =>
@@ -196,14 +270,14 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
       <Modal
         open={state !== null}
         onClose={() => settle(false)}
+        size="sm"
         testId="confirm-dialog"
         title={
           <span className="flex items-center gap-2">
             {state?.destructive === true ? (
-              <AlertTriangle
-                className="h-4 w-4 shrink-0 text-destructive"
-                aria-hidden="true"
-              />
+              <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-destructive-subtle">
+                <AlertTriangle className="size-4 text-destructive" aria-hidden="true" />
+              </span>
             ) : null}
             {state?.title ?? ""}
           </span>
@@ -226,19 +300,19 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
         }
       >
         {state?.requireTyped !== undefined ? (
-          <label className="flex flex-col gap-1.5 text-sm">
-            <span>
-              Type <code className="font-mono font-semibold">{state.requireTyped}</code>{" "}
-              to confirm
-            </span>
-            <input
+          <div className="flex flex-col gap-1.5 text-sm">
+            <label htmlFor={typedId}>
+              Type <code className="font-semibold">{state.requireTyped}</code> to confirm
+            </label>
+            <Input
+              id={typedId}
               autoFocus
+              autoComplete="off"
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
-              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
             />
-          </label>
-        ) : null}
+          </div>
+        ) : undefined}
       </Modal>
     </ConfirmContext.Provider>
   );

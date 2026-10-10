@@ -1,4 +1,7 @@
+import * as React from "react";
+import { Check, Copy } from "lucide-react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 import { Button } from "./ui/button";
 
 export async function copyText(text: string): Promise<boolean> {
@@ -10,23 +13,71 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
-/** Copies `text`; the toast names what was copied, never the value. */
-export function CopyButton({ text, label }: { text: string; label: string }) {
+/** Copies `text`; the button flips to "Copied" and never toasts the value. */
+export function CopyButton({
+  text,
+  label,
+  className,
+  iconOnly = false,
+}: {
+  text: string;
+  label: string;
+  className?: string;
+  iconOnly?: boolean;
+}) {
+  const [copied, setCopied] = React.useState(false);
+  React.useEffect(() => {
+    if (!copied) return;
+    const t = window.setTimeout(() => setCopied(false), 1800);
+    return () => window.clearTimeout(t);
+  }, [copied]);
+  const name = `Copy ${label.toLowerCase()}`;
   return (
     <Button
       type="button"
       variant="outline"
-      size="sm"
+      size={iconOnly ? "icon-sm" : "sm"}
+      aria-label={iconOnly ? name : undefined}
+      className={cn(copied && "text-success", className)}
       onClick={() => {
         void copyText(text).then((ok) => {
-          toast[ok ? "success" : "error"](
-            ok ? `${label} copied` : "Copy failed — select it manually",
-          );
+          if (ok) setCopied(true);
+          else toast.error("Copy failed — select it manually");
         });
       }}
     >
-      Copy {label.toLowerCase()}
+      {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+      {iconOnly ? null : copied ? (
+        <span>
+          Copied<span className="sr-only"> {label.toLowerCase()}</span>
+        </span>
+      ) : (
+        name
+      )}
     </Button>
+  );
+}
+
+/** A copyable mono value: the text in a code well with a copy button beside it. */
+export function CopyField({
+  value,
+  label,
+  testId,
+}: {
+  value: string;
+  label: string;
+  testId?: string;
+}) {
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+      <code
+        data-testid={testId}
+        className="scrollbar-thin block min-w-0 flex-1 overflow-x-auto rounded-md border bg-muted/60 px-3 py-2.5 font-mono text-xs leading-5 break-all"
+      >
+        {value}
+      </code>
+      <CopyButton text={value} label={label} className="self-start" />
+    </div>
   );
 }
 
@@ -42,30 +93,23 @@ export function InstallInstructions({
   joinToken: string;
 }) {
   return (
-    <div className="flex flex-col gap-3">
-      <p className="text-sm">Run this on the server as root:</p>
-      <code
-        data-testid="install-command"
-        className="block overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs break-all"
-      >
-        {command}
-      </code>
-      <div>
-        <CopyButton text={command} label="Install command" />
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-2">
+        <p className="text-sm font-medium">1. Run this on the server as root</p>
+        <CopyField value={command} label="Install command" testId="install-command" />
       </div>
-      <p className="text-sm">Join token (single use, valid one hour, shown once):</p>
-      <code
-        data-testid="join-token"
-        className="block overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs break-all"
-      >
-        {joinToken}
-      </code>
-      <div>
-        <CopyButton text={joinToken} label="Join token" />
+      <div className="flex flex-col gap-2">
+        <p className="text-sm font-medium">
+          2. Paste the join token when asked{" "}
+          <span className="font-normal text-muted-foreground">
+            (single use, valid one hour, shown once)
+          </span>
+        </p>
+        <CopyField value={joinToken} label="Join token" testId="join-token" />
       </div>
       <p className="text-xs text-muted-foreground">
         The command asks for the token on stdin. To run it unattended, prefix
-        it with <code className="font-mono">SETU_JOIN_TOKEN=&lt;token&gt; </code>
+        it with <code>SETU_JOIN_TOKEN=&lt;token&gt; </code>
         (the token, a space, then the command). Never pass the token as a
         command-line flag.
       </p>

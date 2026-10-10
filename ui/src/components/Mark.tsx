@@ -1,0 +1,38 @@
+import { cn } from "@/lib/utils";
+
+/** The Setu bridge mark (docs/brand), drawn in the accent colour. */
+export function Mark({ className, title }: { className?: string; title?: string }) {
+  return (
+    <svg
+      viewBox="0 0 64 64"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={cn("text-primary", className)}
+      role={title === undefined ? undefined : "img"}
+      aria-hidden={title === undefined ? true : undefined}
+      aria-label={title}
+    >
+      <path d="M10 42 H54" strokeWidth="6" />
+      <path d="M10 42 C18 16 46 16 54 42" strokeWidth="6" />
+      <path d="M22 42 V27.5 M32 42 V22.5 M42 42 V27.5" strokeWidth="4" />
+    </svg>
+  );
+}
+
+/** Full logo lockup; swaps to the white variant in dark mode via CSS. */
+export function Logo({ className }: { className?: string }) {
+  return (
+    <span className={cn("inline-flex items-center", className)}>
+      <img src="/logo.svg" alt="Setu" width={78} height={19} className="h-[19px] w-auto dark:hidden" />
+      <img
+        src="/logo-dark.svg"
+        alt="Setu"
+        width={78}
+        height={19}
+        className="hidden h-[19px] w-auto dark:block"
+      />
+    </span>
+  );
+}

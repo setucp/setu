@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils";
 import { Badge } from "./ui/badge";
 
 type Variant = "success" | "warning" | "destructive" | "secondary";
@@ -33,7 +34,9 @@ export const backupVariant: Record<string, Variant> = {
   deleted: "secondary",
 };
 
-/** Coloured status chip; unknown statuses fall back to neutral. */
+const IN_FLIGHT = new Set(["provisioning", "updating", "pending", "queued", "running"]);
+
+/** Coloured status chip with a leading dot; unknown statuses fall back to neutral. */
 export function StatusBadge({
   status,
   variants = variantByStatus,
@@ -41,5 +44,42 @@ export function StatusBadge({
   status: string;
   variants?: Record<string, Variant>;
 }) {
-  return <Badge variant={variants[status] ?? "secondary"}>{status}</Badge>;
+  return (
+    <Badge variant={variants[status] ?? "secondary"} dot>
+      {status}
+    </Badge>
+  );
+}
+
+const dotClass: Record<Variant, string> = {
+  success: "bg-success",
+  warning: "bg-warning",
+  destructive: "bg-destructive",
+  secondary: "bg-muted-foreground/60",
+};
+
+/** Bare status dot (tables, cards); pulses while work is in flight. */
+export function StatusDot({
+  status,
+  variants = variantByStatus,
+  className,
+}: {
+  status: string;
+  variants?: Record<string, Variant>;
+  className?: string;
+}) {
+  const v = variants[status] ?? "secondary";
+  return (
+    <span className={cn("relative inline-flex size-2 shrink-0", className)} aria-hidden="true">
+      {IN_FLIGHT.has(status) ? (
+        <span
+          className={cn(
+            "absolute inset-0 rounded-full opacity-60 motion-safe:animate-ping",
+            dotClass[v],
+          )}
+        />
+      ) : null}
+      <span className={cn("relative inline-flex size-2 rounded-full", dotClass[v])} />
+    </span>
+  );
 }

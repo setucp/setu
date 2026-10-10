@@ -1,25 +1,29 @@
 import * as React from "react";
+import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { controlClass } from "./input";
 
 /**
- * Minimal styled wrapper around the native `<select>`: same metrics as
- * `Input`, full keyboard and screen-reader support for free. A custom
- * listbox is Task-13 polish, not Task-12 scope.
+ * Styled native `<select>`: same metrics as `Input`, full keyboard and
+ * screen-reader support, and the platform picker on phones.
  */
 const Select = React.forwardRef<
   HTMLSelectElement,
   React.SelectHTMLAttributes<HTMLSelectElement>
 >(({ className, children, ...props }, ref) => (
-  <select
-    ref={ref}
-    className={cn(
-      "flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-      className,
-    )}
-    {...props}
-  >
-    {children}
-  </select>
+  <span className="relative block w-full">
+    <select
+      ref={ref}
+      className={cn(controlClass, "flex h-10 appearance-none py-2 pr-9", className)}
+      {...props}
+    >
+      {children}
+    </select>
+    <ChevronDown
+      className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+      aria-hidden="true"
+    />
+  </span>
 ));
 Select.displayName = "Select";
 
