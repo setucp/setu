@@ -95,11 +95,17 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        image:
-          - jrei/systemd-ubuntu:24.04
-          - jrei/systemd-ubuntu:22.04
-          - jrei/systemd-debian:12
-          - jrei/systemd-debian:13
+        # Debian 12 runs without sudo preinstalled (0.1.2 I2d): the
+        # installer must bring it.
+        include:
+          - image: ubuntu:24.04
+            with_sudo: 1
+          - image: ubuntu:22.04
+            with_sudo: 1
+          - image: debian:12
+            with_sudo: 0
+          - image: debian:13
+            with_sudo: 1
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -114,6 +120,7 @@ jobs:
         shell: bash  # -eo pipefail: tee must not hide the exit code
         env:
           SETU_TEST_IMAGE: ${{ matrix.image }}
+          SETU_TEST_WITH_SUDO: ${{ matrix.with_sudo }}
           SETU_INSTALL_DIR: ${{ runner.temp }}/install
         run: bash scripts/test-install.sh 2>&1 | tee "$RUNNER_TEMP/install.log"
       - name: Upload install artefacts
@@ -193,9 +200,43 @@ jobs:
       - name: Rust tests
         run: bash scripts/test.sh
 
+  # 0.1.2 I2c: the installer on aarch64, native on the arm runner, with
+  # the same Ubuntu 24.04 base as x86_64. Blocking.
+  test-install-arm:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      SETU_TEST_TARGET: aarch64-unknown-linux-musl
+      SETU_TEST_IMAGE: ubuntu:24.04
+      SETU_TEST_WITH_SUDO: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+          targets: aarch64-unknown-linux-musl
+      - name: musl C toolchain (ring, zstd)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      - name: Installer shell unit tests
+        run: bash scripts/test-install-sh-unit.sh
+      - name: install.sh on aarch64 (ubuntu:24.04)
+        shell: bash  # -eo pipefail: tee must not hide the exit code
+        env:
+          SETU_INSTALL_DIR: ${{ runner.temp }}/install
+        run: bash scripts/test-install.sh 2>&1 | tee "$RUNNER_TEMP/install-arm.log"
+      - name: Upload install artefacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-arm
+          path: |
+            ${{ runner.temp }}/install-arm.log
+            ${{ runner.temp }}/install/*.log
+            ${{ runner.temp }}/install/diag-*.txt
+
   # 0.1.2 §1: the end-to-end on aarch64. Non-blocking (continue-on-error)
   # until it has passed three times in a row; then drop continue-on-error
-  # and ledger the switch.
+  # and ledger the switch. Its Vyasa assertions skip there (0.1.2 I2b).
   e2e-arm:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
