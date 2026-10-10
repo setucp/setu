@@ -20,15 +20,17 @@ user-visible change; the release notes are cut from it.
    prereleases and never move `latest`), push the tag.
 5. `.github/workflows/release.yml` (on `ubuntu-24.04`):
    - checks the tag against `Cargo.toml` and the changelog;
-   - builds the UI, then `setu` for `x86_64-unknown-linux-musl` with
-     `musl-tools`, **without** the `test-root` and `e2e-hooks`
-     features (the job fails if the binary is not static, reports
-     another version, or its helper offers `--root`);
-   - `scripts/package-release.sh <ver> <bindir> dist` writes
-     `setu-<ver>-x86_64-unknown-linux-musl.tar.gz` (one top-level
-     `setu`), `install.sh` and one `SHA256SUMS` covering both;
-   - creates the GitHub release with the changelog section as notes
-     and those three files attached.
+   - builds the UI, then `setu` natively per architecture: `build`
+     runs on `ubuntu-24.04` (x86_64-unknown-linux-musl) and on
+     `ubuntu-24.04-arm` (aarch64-unknown-linux-musl), with `musl-tools`,
+     **without** the `test-root` and `e2e-hooks` features (each job fails
+     if the binary is not static, reports another version, or its helper
+     offers `--root`); no job reuses another architecture's artefact;
+   - `release` packages both binaries into one `dist` with
+     `scripts/package-release.sh <ver> <bindir> dist <target>` (once per
+     architecture; `SHA256SUMS` lists exactly the two archives and
+     `install.sh`) and creates the GitHub release with the changelog
+     section as notes and those four files attached.
 
 6. After the release workflow: `SETU_VERIFY_DIR=<dir> bash
    scripts/verify-release.sh <ver>` installs the published release in a

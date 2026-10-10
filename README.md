@@ -28,13 +28,13 @@ service.
   <a href="https://github.com/setucp/setu/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/release-v0.1.0-4F46E5" alt="Release v0.1.0"></a>
   <a href="https://github.com/setucp/setu/actions/workflows/ci.yml"><img src="https://github.com/setucp/setu/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/licence-AGPL--3.0-blue" alt="Licence: AGPL-3.0">
-  <img src="https://img.shields.io/badge/platform-Ubuntu%2024.04%20x86__64-lightgrey" alt="Platform: Ubuntu 24.04 x86_64">
+  <img src="https://img.shields.io/badge/platform-Ubuntu%2022.04%2F24.04%20%C2%B7%20Debian%2012%2F13%20%C2%B7%20x86__64%20and%20aarch64-lightgrey" alt="Platform: Ubuntu 22.04 and 24.04, Debian 12 and 13, x86_64 and aarch64">
 </p>
 
 ## Why Setu
 
 - **One binary.** `setu` is the control plane, the per-server agent and
-  the privileged helper, selected by subcommand. One static x86_64 musl
+  the privileged helper, selected by subcommand. One static musl (x86_64 and aarch64)
   archive per release.
 - **Native systemd, real limits.** Every site runs as
   `setu-site@<id>.service` under its own user, with memory and CPU
@@ -53,7 +53,7 @@ service.
 
 ## Quick start
 
-You need a fresh Ubuntu 24.04 x86_64 server, root, ports 80 and 443
+You need a fresh Ubuntu 22.04 or 24.04, or Debian 12 or 13, server (x86_64 or aarch64), root, ports 80 and 443
 open, and a DNS name pointing at the server. The installer brings
 PostgreSQL 16 and Caddy itself.
 
@@ -249,9 +249,10 @@ from the checked-in `openapi.json` (`pnpm -C ui gen:api`).
 
 ## Status and contributing
 
-Setu 0.1.0 is the first release. It supports Ubuntu 24.04 on x86_64
-only; other Ubuntu releases get a warning and other distributions are
-refused by the installer. Expect rough edges and breaking changes before
+Setu 0.1.2 supports Ubuntu 22.04 and 24.04 and Debian 12 and 13, on
+x86_64 and aarch64 (see the support matrix in `docs/INSTALL.md`); other
+distributions are refused by the installer unless `--force-distro` is
+given. Expect rough edges and breaking changes before
 1.0.
 
 Bug reports, questions and app manifests are welcome as

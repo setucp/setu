@@ -3,6 +3,32 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
+## 0.1.2 — 2026-10-10
+
+Platform reach only (spec `docs/specs/2026-10-10-setu-0.1.2-design.md`):
+nothing about how Setu works changes.
+
+### Platforms
+
+- aarch64 (64-bit ARM): every release ships `setu-<ver>-aarch64-unknown-linux-musl.tar.gz`
+  next to the x86_64 archive, built natively; `install.sh` picks the
+  archive from the machine type.
+- Ubuntu 22.04 and 24.04, Debian 12 and 13, on x86_64 and aarch64. The
+  installer and `setu agent install` read `/etc/os-release`; PostgreSQL
+  16 comes from the PGDG apt repository where the distribution has no
+  16 (Ubuntu 22.04, Debian 12; the key is pinned by SHA-256), 17 on
+  Debian 13. Other distributions are refused unless `--force-distro`,
+  which uses the Debian 12 plan and says so.
+- Provisioning and updates refuse a manifest that has no binary for the
+  server's architecture (a `validation` error naming both targets);
+  the site create request is refused early with a 400.
+
+### Upgrading
+
+- On a panel box: `install.sh --version 0.1.2` with the original flags;
+  the installer restarts `setu` and the local agent only when the
+  binary changed.
+
 ## 0.1.1 — 2026-10-10
 
 Follow-ups from the first release (spec
