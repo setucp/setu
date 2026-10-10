@@ -50,7 +50,9 @@ agent doctor` checks both). The agent calls it only as `sudo -n
   staging directory; any `..`, absolute name, symlink, hard link, device
   file or setuid/setgid/sticky bit refuses the whole operation and
   leaves nothing behind. `backup` never follows a link a site user
-  planted in `data/` (links and special files are skipped).
+  planted in `data/` (links and special files are skipped), and skips
+  regular files the site user does not own or that have more than one
+  hard link (R135); `agent doctor` checks `fs.protected_hardlinks = 1`.
 - `--root <dir>` (an alternate filesystem root for tests) exists only
   in builds with the `test-root` feature, is refused when `SUDO_UID` is
   set, and the release workflow fails if the binary offers it (R129).

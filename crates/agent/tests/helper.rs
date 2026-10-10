@@ -81,6 +81,16 @@ impl T {
         Ok((v, out))
     }
 
+    /// The files this test writes are owned by us: make us the site
+    /// user, as root's chown would have (backup skips other owners).
+    fn files_belong_to_site_user(&self) {
+        let (uid, gid) = (
+            nix::unistd::getuid().as_raw(),
+            nix::unistd::getgid().as_raw(),
+        );
+        self.users.set(S, uid, gid);
+    }
+
     fn create(&self, dirs: &[&str]) {
         self.run(Verb::SiteCreate, S, json!({ "dirs": dirs }))
             .expect("site-create");
@@ -955,6 +965,7 @@ fn list_tar_zst(bytes: &[u8]) -> Vec<String> {
 fn backup_streams_tar_and_restore_swaps_dirs() {
     let t = setup();
     t.create(&["media", "uploads"]);
+    t.files_belong_to_site_user();
     std::fs::write(t.site("data/media/a.txt"), b"alpha").expect("write");
     std::fs::create_dir_all(t.site("data/media/sub")).expect("mkdir");
     std::fs::write(t.site("data/media/sub/b.txt"), b"beta").expect("write");
@@ -1044,6 +1055,7 @@ fn backup_streams_tar_and_restore_swaps_dirs() {
 fn restore_refuses_when_unit_active() {
     let t = setup();
     t.create(&["media"]);
+    t.files_belong_to_site_user();
     std::fs::write(t.site("data/media/a.txt"), b"live").expect("write");
     let (_, archive) = t
         .run_io(Verb::Backup, json!({"dirs": ["media"]}), b"")
@@ -1189,4 +1201,56 @@ fn unit_show_reports_props_and_data_bytes() {
         .run(Verb::Unit, S, json!({"op": "reboot"}))
         .expect_err("bad op");
     assert!(matches!(err, HelperError::Invalid(_)));
+}
+
+/// Paths of the regular files in a backup archive.
+fn archived_files(archive: &[u8]) -> Vec<String> {
+    let dec = zstd::stream::read::Decoder::new(archive).expect("zstd");
+    let mut ar = tar::Archive::new(dec);
+    let mut out: Vec<String> = ar
+        .entries()
+        .expect("entries")
+        .map(|e| e.expect("entry"))
+        .filter(|e| e.header().entry_type() == tar::EntryType::Regular)
+        .map(|e| e.path().expect("path").display().to_string())
+        .collect();
+    out.sort();
+    out
+}
+
+/// Backup runs as root over a tree the site user controls: a hard link
+/// to a file the site user cannot read (root's, another site's) or a
+/// file it does not own is skipped, so a backup cannot exfiltrate it
+/// (M4).
+#[test]
+fn backup_skips_foreign_owned_and_hardlinked_files() {
+    let t = setup();
+    t.create(&["media"]);
+    let me = nix::unistd::getuid().as_raw();
+    t.users.set(S, me, me);
+    std::fs::write(t.site("data/media/a.txt"), b"mine").expect("write");
+    std::fs::create_dir_all(t.site("data/media/sub")).expect("mkdir");
+    std::fs::write(t.site("data/media/sub/b.txt"), b"mine too").expect("write");
+    let secret = t.root().join("secret");
+    std::fs::write(&secret, b"root only").expect("write");
+    std::fs::hard_link(&secret, t.site("data/media/h.txt")).expect("hard link");
+
+    let (_, archive) = t
+        .run_io(Verb::Backup, json!({"dirs": ["media"]}), b"")
+        .expect("backup");
+    assert_eq!(
+        archived_files(&archive),
+        ["media/a.txt", "media/sub/b.txt"],
+        "the hard link is skipped"
+    );
+
+    // Owned by someone else than the site user: skipped too.
+    t.users.set(S, me + 1, me + 1);
+    let (_, archive) = t
+        .run_io(Verb::Backup, json!({"dirs": ["media"]}), b"")
+        .expect("backup");
+    assert!(
+        archived_files(&archive).is_empty(),
+        "foreign-owned files skipped"
+    );
 }

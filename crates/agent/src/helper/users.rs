@@ -21,6 +21,9 @@ pub trait Users: Send + Sync {
     fn ensure_site_user(&self, short: &str) -> Result<(u32, u32), HelperError>;
     /// Delete the user when present.
     fn remove(&self, short: &str) -> Result<(), HelperError>;
+    /// `(uid, gid)` of the site user, `None` when it does not exist
+    /// (a lookup only: nothing is created).
+    fn site_ids(&self, short: &str) -> Result<Option<(u32, u32)>, HelperError>;
 }
 
 /// Production: `useradd --system` / `userdel`, lookups via NSS.
@@ -52,6 +55,17 @@ fn run(prog: &str, args: &[&str]) -> Result<(), HelperError> {
 }
 
 impl Users for RealUsers {
+    fn site_ids(&self, short: &str) -> Result<Option<(u32, u32)>, HelperError> {
+        super::validate::site(short)?;
+        let name = user_name(short);
+        match lookup(&name)? {
+            Some((uid, _)) if !(UID_MIN..=UID_MAX).contains(&uid) => Err(HelperError::Refused(
+                format!("{name} has uid {uid} outside {UID_MIN}-{UID_MAX}"),
+            )),
+            found => Ok(found),
+        }
+    }
+
     fn ensure_site_user(&self, short: &str) -> Result<(u32, u32), HelperError> {
         super::validate::site(short)?;
         let name = user_name(short);
@@ -115,6 +129,8 @@ impl Users for RealUsers {
 struct FakeInner {
     users: BTreeMap<String, (u32, u32)>,
     next: u32,
+    /// Every created user gets these ids ([`FakeUsers::with_ids`]).
+    fixed: Option<(u32, u32)>,
     calls: Vec<String>,
 }
 
@@ -138,6 +154,21 @@ impl FakeUsers {
         self.lock().users.get(&user_name(short)).copied()
     }
 
+    /// Every user this fake creates gets `(uid, gid)`: runtime tests
+    /// pass their own ids, so the files they write count as the site
+    /// user's (backup skips files of other owners).
+    pub fn with_ids(uid: u32, gid: u32) -> Self {
+        let users = Self::default();
+        users.lock().fixed = Some((uid, gid));
+        users
+    }
+
+    /// Pin the site user's `(uid, gid)` (tests that compare it with the
+    /// owner of files they created).
+    pub fn set(&self, short: &str, uid: u32, gid: u32) {
+        self.lock().users.insert(user_name(short), (uid, gid));
+    }
+
     /// Call transcript (`ensure <name>`, `remove <name>`).
     pub fn calls(&self) -> Vec<String> {
         self.lock().calls.clone()
@@ -145,6 +176,11 @@ impl FakeUsers {
 }
 
 impl Users for FakeUsers {
+    fn site_ids(&self, short: &str) -> Result<Option<(u32, u32)>, HelperError> {
+        super::validate::site(short)?;
+        Ok(self.get(short))
+    }
+
     fn ensure_site_user(&self, short: &str) -> Result<(u32, u32), HelperError> {
         super::validate::site(short)?;
         let name = user_name(short);
@@ -153,10 +189,13 @@ impl Users for FakeUsers {
         if let Some(ids) = inner.users.get(&name) {
             return Ok(*ids);
         }
-        let id = UID_MIN + inner.next;
+        let ids = inner.fixed.unwrap_or_else(|| {
+            let id = UID_MIN + inner.next;
+            (id, id)
+        });
         inner.next += 1;
-        inner.users.insert(name, (id, id));
-        Ok((id, id))
+        inner.users.insert(name, ids);
+        Ok(ids)
     }
 
     fn remove(&self, short: &str) -> Result<(), HelperError> {

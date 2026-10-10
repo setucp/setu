@@ -4,6 +4,8 @@
 //! `data/` belongs to the site user, so both directions walk it through
 //! fds without following symlinks: backup skips symlinks and special
 //! files (a planted link cannot exfiltrate a root-readable file), and
+//! regular files the site user does not own or with more than one link
+//! (a hard link to someone else's file; M4), and
 //! restore extracts into a root-owned staging dir under the install
 //! entry rules, chowns the result to the site user, then swaps it in.
 
@@ -37,11 +39,15 @@ fn open_site(ctx: &Ctx, short: &str) -> Result<std::os::fd::OwnedFd, HelperError
     walk_nofollow(root.as_fd(), &comps)
 }
 
-/// Append `dir` (fd) and everything below it as `rel/…`.
+/// Append `dir` (fd) and everything below it as `rel/…`. Regular files
+/// not owned by `site_uid`, or with `st_nlink > 1`, are skipped and
+/// reported on stderr: the site user could have hard-linked a file it
+/// cannot read (root's, another site's) into its tree (M4).
 fn append_tree<W: Write>(
     builder: &mut tar::Builder<W>,
     dir: BorrowedFd<'_>,
     rel: &Path,
+    site_uid: u32,
 ) -> Result<(), HelperError> {
     let mut header = tar::Header::new_gnu();
     header.set_entry_type(tar::EntryType::Directory);
@@ -55,7 +61,7 @@ fn append_tree<W: Write>(
         match kind_at(dir, &name)? {
             Some(Kind::Dir) => {
                 let fd = open_dir_nofollow(dir, &name)?;
-                append_tree(builder, fd.as_fd(), &child_rel)?;
+                append_tree(builder, fd.as_fd(), &child_rel, site_uid)?;
             }
             Some(Kind::File) => {
                 let fd = match openat(
@@ -70,6 +76,13 @@ fn append_tree<W: Write>(
                 };
                 let st = fstat(fd.as_fd()).map_err(|e| HelperError::io(child_rel.display(), e))?;
                 if kind(&st) != Kind::File {
+                    continue;
+                }
+                if st.st_uid != site_uid || st.st_nlink > 1 {
+                    eprintln!(
+                        "setu helper backup: skipped {} (not owned by the site user, or hard-linked)",
+                        child_rel.display()
+                    );
                     continue;
                 }
                 let mut header = tar::Header::new_gnu();
@@ -97,6 +110,10 @@ pub fn backup(
     stdout: &mut dyn Write,
 ) -> Result<serde_json::Value, HelperError> {
     validate::dirs(&input.dirs)?;
+    let (site_uid, _) = ctx
+        .users
+        .site_ids(short)?
+        .ok_or_else(|| HelperError::Refused("the site user does not exist".into()))?;
     let site = open_site(ctx, short)?;
     let data = open_dir_nofollow(site.as_fd(), OsStr::new("data"))?;
     let enc =
@@ -113,7 +130,7 @@ pub fn backup(
             }
         }
         let fd = open_dir_nofollow(data.as_fd(), OsStr::new(dir))?;
-        append_tree(&mut builder, fd.as_fd(), Path::new(dir))?;
+        append_tree(&mut builder, fd.as_fd(), Path::new(dir), site_uid)?;
     }
     let enc = builder
         .into_inner()

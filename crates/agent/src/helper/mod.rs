@@ -129,11 +129,16 @@ impl Ctx {
         }
     }
 
-    /// Unprivileged context rooted at `root` with fresh fakes.
+    /// Unprivileged context rooted at `root` with fresh fakes. Site
+    /// users get the caller's own ids: the files it writes then count as
+    /// the site user's, as root's chown would have made them.
     pub fn fake(root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
-            users: Box::new(FakeUsers::new()),
+            users: Box::new(FakeUsers::with_ids(
+                nix::unistd::getuid().as_raw(),
+                nix::unistd::getgid().as_raw(),
+            )),
             own: Box::new(Recording::new()),
             units: Box::new(FakeSystemctl::new()),
         }

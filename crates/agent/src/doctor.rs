@@ -6,7 +6,8 @@
 //! replace it), `visudo -cf /etc/sudoers.d/setu`, the template unit,
 //! `caddy-api` active, its admin socket reachable, TCP 2019 closed,
 //! `nft list table inet setu`, Postgres peer auth, the control plane's
-//! `/healthz`, plus the state file and the server token. Everything
+//! `/healthz`, plus the state file, the server token and
+//! `fs.protected_hardlinks = 1`. Everything
 //! goes through [`SystemCommands`], [`CaddyAdmin`] and [`Probe`] so the
 //! table is tested with fakes.
 
@@ -46,6 +47,8 @@ pub struct FileMeta {
 #[async_trait::async_trait]
 pub trait Probe: Send + Sync {
     fn meta(&self, path: &Path) -> Option<FileMeta>;
+    /// A sysctl's value (`fs.protected_hardlinks` → `/proc/sys/fs/…`).
+    fn sysctl(&self, name: &str) -> Option<String>;
     async fn control_plane_ok(&self, config: &AgentConfig) -> bool;
 }
 
@@ -65,6 +68,19 @@ impl Probe for RealProbe {
             is_file: m.file_type().is_file(),
             is_dir: m.file_type().is_dir(),
         })
+    }
+
+    fn sysctl(&self, name: &str) -> Option<String> {
+        if !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_')
+        {
+            return None;
+        }
+        let path = format!("/proc/sys/{}", name.replace('.', "/"));
+        std::fs::read_to_string(path)
+            .ok()
+            .map(|v| v.trim().to_string())
     }
 
     async fn control_plane_ok(&self, config: &AgentConfig) -> bool {
@@ -123,6 +139,14 @@ pub async fn doctor_rows(
             .meta(Path::new(SITE_TEMPLATE_PATH))
             .is_some_and(|m| m.is_file),
         "setu-site@.service installed",
+    );
+    // Backups run as root over trees site users control; with
+    // protected hardlinks a site user cannot hard-link a file it does not
+    // own into its tree (the helper's backup also skips such files, M4).
+    row(
+        "protected-hardlinks",
+        probe.sysctl("fs.protected_hardlinks").as_deref() == Some("1"),
+        "sysctl fs.protected_hardlinks = 1",
     );
     row(
         "caddy-api",
@@ -247,6 +271,7 @@ mod tests {
 
     struct FakeProbe {
         metas: BTreeMap<&'static str, FileMeta>,
+        sysctls: BTreeMap<&'static str, &'static str>,
         cp_ok: bool,
     }
 
@@ -254,6 +279,9 @@ mod tests {
     impl Probe for FakeProbe {
         fn meta(&self, path: &Path) -> Option<FileMeta> {
             self.metas.get(path.to_str()?).copied()
+        }
+        fn sysctl(&self, name: &str) -> Option<String> {
+            self.sysctls.get(name).map(|v| (*v).to_string())
         }
         async fn control_plane_ok(&self, _config: &AgentConfig) -> bool {
             self.cp_ok
@@ -277,14 +305,16 @@ mod tests {
                 ("/opt/setu", meta(0, 0o755, true)),
                 (SITE_TEMPLATE_PATH, meta(0, 0o644, false)),
             ]),
+            sysctls: BTreeMap::from([("fs.protected_hardlinks", "1")]),
             cp_ok: true,
         }
     }
 
-    const NAMES: [&str; 11] = [
+    const NAMES: [&str; 12] = [
         "helper",
         "sudoers",
         "site-template",
+        "protected-hardlinks",
         "caddy-api",
         "caddy-socket",
         "caddy-tcp-2019",
@@ -331,6 +361,7 @@ mod tests {
         // Group-writable helper: `setu` could be in that group.
         probe.metas.insert(HELPER_PATH, meta(0, 0o775, false));
         probe.metas.remove(SITE_TEMPLATE_PATH);
+        probe.sysctls.insert("fs.protected_hardlinks", "0");
         let config = AgentConfig {
             state_path: dir.path().join("state.json"),
             ..AgentConfig::default()

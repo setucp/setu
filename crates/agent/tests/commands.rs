@@ -53,7 +53,11 @@ fn test_runtime(root: &Path) -> (Rt, FakeSystemctl) {
     let units = FakeSystemctl::new();
     let ctx = Ctx {
         root: root.to_path_buf(),
-        users: Box::new(FakeUsers::new()),
+        // The files this test writes are ours: the site user is us.
+        users: Box::new(FakeUsers::with_ids(
+            nix::unistd::getuid().as_raw(),
+            nix::unistd::getgid().as_raw(),
+        )),
         own: Box::new(Recording::new()),
         units: Box::new(units.clone()),
     };

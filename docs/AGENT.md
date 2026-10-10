@@ -150,6 +150,7 @@ failure:
 | `helper` | `/opt/setu/setu` is a regular file, root:root, mode exactly 0755, in a root-owned directory without group/other write |
 | `sudoers` | `visudo -cf /etc/sudoers.d/setu` |
 | `site-template` | `/etc/systemd/system/setu-site@.service` exists |
+| `protected-hardlinks` | sysctl `fs.protected_hardlinks` is `1` (Ubuntu's default) |
 | `caddy-api` | `systemctl is-active caddy-api.service` |
 | `caddy-socket` | the admin socket answers |
 | `caddy-tcp-2019` | nothing listens on `127.0.0.1:2019` |
