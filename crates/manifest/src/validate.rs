@@ -1,8 +1,9 @@
 //! Semantic validation: collects ALL errors.
+use std::collections::BTreeMap;
 
 use setu_common::validate;
 
-use crate::schema::{BinaryFormat, EnvSource, EnvSpec, Manifest, ManifestError, RunKind, Target};
+use crate::schema::{BinaryFormat, EnvSource, EnvSpec, Manifest, ManifestError, RunKind};
 
 /// Parse a `[section]` header from a trimmed line.
 fn parse_section_header(trimmed: &str) -> Option<String> {
@@ -225,7 +226,7 @@ pub fn validate(manifest: &Manifest, src: &str) -> Vec<ManifestError> {
             // Any architecture will do: an ARM-only app is valid, and the
             // control plane refuses to place a site on a server whose
             // architecture the manifest does not cover (0.1.2).
-            if !targets.is_some_and(|t| !t.is_empty()) {
+            if targets.is_none_or(BTreeMap::is_empty) {
                 push(
                     "run.binary".into(),
                     run_binary_line(src),
