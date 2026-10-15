@@ -10,6 +10,8 @@
 # Host safety as scripts/test-install.sh: own network, no host network,
 # no host cgroup mount; cleanup removes only this container and network.
 # Needs outbound HTTPS from the container. SETU_VERIFY_KEEP=1 keeps it.
+# SETU_TEST_IMAGE selects the systemd base image (default ubuntu:24.04, the
+# multi-arch image; 0.1.2 I2 also runs debian:12 and debian:13).
 set -euo pipefail
 
 [ $# -eq 1 ] || { echo "usage: $0 <version>" >&2; exit 2; }
@@ -19,7 +21,8 @@ SETU_VERIFY_DIR=${SETU_VERIFY_DIR:-${TMPDIR:-/tmp}/setu-verify}
 mkdir -p "$SETU_VERIFY_DIR"
 NET=setu-verify-net
 CTN=setu-verify
-IMAGE=setu-e2e-agent:latest
+BASE_IMAGE=${SETU_TEST_IMAGE:-ubuntu:24.04}
+IMAGE="setu-verify-test-image:$(printf '%s' "$BASE_IMAGE" | tr -c 'A-Za-z0-9._-' '_')"
 HOST=setu.test
 ORIGIN=https://$HOST
 MANIFESTS=https://raw.githubusercontent.com/setucp/manifests/main
@@ -74,7 +77,8 @@ poll_job() { # poll_job JOB_ID SECONDS -> prints final status
 echo "1..$TOTAL"
 for t in docker jq curl; do command -v "$t" >/dev/null || bail "missing $t"; done
 teardown
-docker build -q -t "$IMAGE" "$ROOT/scripts/e2e" >/dev/null || bail "image build failed"
+docker build -q --build-arg "BASE=$BASE_IMAGE" -t "$IMAGE" "$ROOT/scripts/e2e" >/dev/null ||
+  bail "image build failed"
 docker network create "$NET" >/dev/null
 docker run -d --name "$CTN" --hostname setu-verify --privileged --cgroupns=private --network "$NET" \
   --add-host "$HOST:127.0.0.1" --add-host miniflux.test:127.0.0.1 --add-host hello.test:127.0.0.1 \

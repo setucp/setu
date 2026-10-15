@@ -143,7 +143,7 @@ on the control-plane box, re-run the installer with the same flags and
 the new version:
 
 ```sh
-bash install.sh --panel-host setu.example.com --version 0.1.1
+bash install.sh --panel-host setu.example.com --version 0.1.2
 ```
 
 The installer verifies the archive, replaces `/opt/setu/setu`, and

@@ -85,6 +85,54 @@ jobs:
         with:
           command: check
 
+  # 0.1.2 §3: the installer in a fresh systemd box per distribution, one
+  # image at a time (max-parallel 1: fixed container and network names).
+  # The shell unit tests run first, on the same checkout.
+  test-install:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        # Debian 12 runs without sudo preinstalled (0.1.2 I2d): the
+        # installer must bring it.
+        include:
+          - image: ubuntu:24.04
+            with_sudo: 1
+          - image: ubuntu:22.04
+            with_sudo: 1
+          - image: debian:12
+            with_sudo: 0
+          - image: debian:13
+            with_sudo: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+          targets: x86_64-unknown-linux-musl
+      - name: musl C toolchain (ring, zstd)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      - name: Installer shell unit tests
+        run: bash scripts/test-install-sh-unit.sh
+      - name: install.sh on ${{ matrix.image }}
+        shell: bash  # -eo pipefail: tee must not hide the exit code
+        env:
+          SETU_TEST_IMAGE: ${{ matrix.image }}
+          SETU_TEST_WITH_SUDO: ${{ matrix.with_sudo }}
+          SETU_INSTALL_DIR: ${{ runner.temp }}/install
+        run: bash scripts/test-install.sh 2>&1 | tee "$RUNNER_TEMP/install.log"
+      - name: Upload install artefacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/install.log
+            ${{ runner.temp }}/install/*.log
+            ${{ runner.temp }}/install/diag-*.txt
+
   # Plan Task 11 / spec §9: control plane + agent in a systemd container +
   # hello + real Vyasa 0.2.0, 14 TAP assertions. Builds the musl binaries
   # with the test-only features `test-root,e2e-hooks` (the release
@@ -112,5 +160,108 @@ jobs:
           name: e2e
           path: |
             ${{ runner.temp }}/e2e.log
+            ${{ runner.temp }}/e2e/*.log
+            ${{ runner.temp }}/e2e/diag-*.txt
+
+  # 0.1.2 §1: the Rust suite on the aarch64 runner (no ARM hardware here).
+  test-arm:
+    runs-on: ubuntu-24.04-arm
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: setu
+          POSTGRES_PASSWORD: setu
+        ports:
+          - 55440:5432
+        options: >-
+          --health-cmd "pg_isready -U setu -d postgres"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      SETU_TEST_PG_PORT: 55440
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+          components: rustfmt, clippy
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build UI (embeds into setu-api)
+        run: bash scripts/build-ui.sh
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Rust tests
+        run: bash scripts/test.sh
+
+  # 0.1.2 I2c: the installer on aarch64, native on the arm runner, with
+  # the same Ubuntu 24.04 base as x86_64. Blocking.
+  test-install-arm:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      SETU_TEST_TARGET: aarch64-unknown-linux-musl
+      SETU_TEST_IMAGE: ubuntu:24.04
+      SETU_TEST_WITH_SUDO: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+          targets: aarch64-unknown-linux-musl
+      - name: musl C toolchain (ring, zstd)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      - name: Installer shell unit tests
+        run: bash scripts/test-install-sh-unit.sh
+      - name: install.sh on aarch64 (ubuntu:24.04)
+        shell: bash  # -eo pipefail: tee must not hide the exit code
+        env:
+          SETU_INSTALL_DIR: ${{ runner.temp }}/install
+        run: bash scripts/test-install.sh 2>&1 | tee "$RUNNER_TEMP/install-arm.log"
+      - name: Upload install artefacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-arm
+          path: |
+            ${{ runner.temp }}/install-arm.log
+            ${{ runner.temp }}/install/*.log
+            ${{ runner.temp }}/install/diag-*.txt
+
+  # 0.1.2 §1: the end-to-end on aarch64. Non-blocking (continue-on-error)
+  # until it has passed three times in a row; then drop continue-on-error
+  # and ledger the switch. Its Vyasa assertions skip there (0.1.2 I2b).
+  e2e-arm:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    continue-on-error: true
+    env:
+      SETU_E2E_TARGET: aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99"
+          targets: aarch64-unknown-linux-musl
+      - name: musl C toolchain (ring, zstd)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      - name: End-to-end (aarch64)
+        shell: bash  # -eo pipefail: tee must not hide the exit code
+        env:
+          SETU_E2E_DIR: ${{ runner.temp }}/e2e
+        run: bash scripts/e2e.sh 2>&1 | tee "$RUNNER_TEMP/e2e-arm.log"
+      - name: Upload e2e artefacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-arm
+          path: |
+            ${{ runner.temp }}/e2e-arm.log
             ${{ runner.temp }}/e2e/*.log
             ${{ runner.temp }}/e2e/diag-*.txt

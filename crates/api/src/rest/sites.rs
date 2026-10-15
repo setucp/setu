@@ -504,6 +504,17 @@ pub async fn create(
             "image runtime not available in this version",
         ));
     }
+    // The chosen server's architecture needs a binary in the manifest
+    // (spec 0.1.2 §1); without a named server, provision refuses it.
+    if let Some(server_id) = &body.server_id {
+        match state.db.servers().get(server_id).await {
+            Ok(server) => {
+                setu_jobs::check_server_arch(&manifest, server.arch.as_deref().unwrap_or(""))?;
+            }
+            Err(e) if e.code == ErrorCode::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
     let plan = state.db.plans().get(&body.plan_id).await.map_err(|e| {
         if e.code == ErrorCode::NotFound {
             AppError::validation(format!("unknown plan {}", body.plan_id))

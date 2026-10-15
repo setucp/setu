@@ -120,6 +120,10 @@ async fn publish(srv: &TestServer, owner: &reqwest::Client, toml: &str) {
 /// (no HTTP agent dance); returns the server id, online from now.
 #[allow(clippy::unreadable_literal)] // reviewed: kept as-is (R150)
 async fn online_server(srv: &TestServer, name: &str, memory_mb: u64) -> String {
+    online_server_arch(srv, name, memory_mb, "x86_64").await
+}
+
+async fn online_server_arch(srv: &TestServer, name: &str, memory_mb: u64, arch: &str) -> String {
     let (_pending, join_token) = srv
         .db
         .servers()
@@ -130,11 +134,11 @@ async fn online_server(srv: &TestServer, name: &str, memory_mb: u64) -> String {
         nonce: String::new(),
         hostname: name.to_string(),
         public_ip: None,
-        arch: "x86_64".to_string(),
+        arch: arch.to_string(),
         os: "linux".to_string(),
         cpu_cores: 4,
         memory_mb: i64::try_from(memory_mb).expect("memory fits"),
-        disk_mb: 102400,
+        disk_mb: 102_400,
     };
     let key = setu_common::SecretKey::from_hex(&"ab".repeat(32)).expect("key");
     let (server, _token) = srv
@@ -335,6 +339,43 @@ async fn create_site_rejects_image_manifest() {
             .as_str()
             .unwrap_or("")
             .contains("image runtime not available"),
+        "unexpected message: {body}"
+    );
+    assert!(srv.agent.transcript().is_empty(), "no agent call may fire");
+}
+
+/// Spec 0.1.2 §1: a manifest without a binary for the chosen server's
+/// architecture is a 400 before any job or agent call.
+#[tokio::test]
+async fn create_site_rejects_manifest_without_server_arch() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    publish(&srv, &owner, &hello_toml("0.1.0")).await;
+    let server_id = online_server_arch(&srv, "arm-1", 8192, "aarch64").await;
+    let plan_id = default_plan_id(&srv).await;
+
+    let resp = owner
+        .post(srv.url("/api/v1/sites"))
+        .json(&json!({
+            "name": unique("site"),
+            "app_id": "hello",
+            "version": "0.1.0",
+            "plan_id": plan_id,
+            "server_id": server_id,
+            "domain": format!("{}.example.com", unique("arm")),
+            "owner_email": "owner@example.com",
+            "prompts": {},
+        }))
+        .send()
+        .await
+        .expect("post site sends");
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: Value = resp.json().await.expect("error body is json");
+    assert_eq!(body["error"]["code"], json!("validation"));
+    let message = body["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("aarch64-linux"),
         "unexpected message: {body}"
     );
     assert!(srv.agent.transcript().is_empty(), "no agent call may fire");

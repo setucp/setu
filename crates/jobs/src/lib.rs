@@ -504,22 +504,59 @@ fn proto_workdir(w: setu_manifest::Workdir) -> setu_proto::Workdir {
     }
 }
 
-/// The manifest's x86_64 artefact; image manifests are refused.
-fn binary_target(manifest: &Manifest) -> Result<&setu_manifest::BinaryTarget, AppError> {
+/// The manifest target for a server's architecture, as the agent reports
+/// it at join (spec 0.1.2 §1).
+pub fn target_for_arch(arch: &str) -> Result<Target, AppError> {
+    match arch {
+        "x86_64" => Ok(Target::X86_64Linux),
+        "aarch64" => Ok(Target::Aarch64Linux),
+        "" => Err(AppError::validation(
+            "server has not reported its architecture (join first)",
+        )),
+        other => Err(AppError::validation(format!(
+            "unsupported server architecture {other}"
+        ))),
+    }
+}
+
+/// The manifest's artefact for `target`; image manifests are refused, and
+/// a manifest without the target is a validation error that names both.
+fn binary_target(
+    manifest: &Manifest,
+    target: Target,
+) -> Result<&setu_manifest::BinaryTarget, AppError> {
     if manifest.run.is_image() {
         return Err(AppError::validation(
             "image runtime not available in this version",
         ));
     }
-    manifest
-        .run
-        .target(Target::X86_64Linux)
-        .ok_or_else(|| AppError::validation("run.binary must declare x86_64-linux"))
+    manifest.run.target(target).ok_or_else(|| {
+        AppError::validation(format!(
+            "app {} has no binary for {target}; the server needs one",
+            manifest.app.id
+        ))
+    })
 }
 
-/// The [`setu_proto::BinaryRef`] an `install` of this manifest fetches.
-pub(crate) fn binary_ref(manifest: &Manifest) -> Result<setu_proto::BinaryRef, AppError> {
-    let target = binary_target(manifest)?;
+/// Refuse a manifest with no binary for a server of architecture `arch`
+/// (the API's early 400, spec 0.1.2 §1).
+pub fn check_server_arch(manifest: &Manifest, arch: &str) -> Result<(), AppError> {
+    binary_target(manifest, target_for_arch(arch)?).map(|_| ())
+}
+
+/// The target of the server a site runs on.
+pub(crate) async fn server_target(db: &Db, server_id: &str) -> Result<Target, AppError> {
+    let server = db.servers().get(server_id).await?;
+    target_for_arch(server.arch.as_deref().unwrap_or(""))
+}
+
+/// The [`setu_proto::BinaryRef`] an `install` of this manifest fetches
+/// for `target`.
+pub(crate) fn binary_ref(
+    manifest: &Manifest,
+    target: Target,
+) -> Result<setu_proto::BinaryRef, AppError> {
+    let target = binary_target(manifest, target)?;
     Ok(setu_proto::BinaryRef {
         version: manifest.app.version.clone(),
         url: target.url.clone(),
@@ -539,8 +576,9 @@ pub(crate) fn build_spec(
     plan: &Plan,
     site: &Site,
     manifest: &Manifest,
+    target: Target,
 ) -> Result<setu_proto::SiteSpec, AppError> {
-    let target = binary_target(manifest)?;
+    let target = binary_target(manifest, target)?;
     Ok(setu_proto::SiteSpec {
         site_id: site.id.clone(),
         short_id: site.short_id.clone(),
@@ -783,5 +821,23 @@ mod secrets_tests {
         assert_eq!(ctx.redact("x hunter2-secret"), "x ***");
         ctx.add_secret("another-secret");
         assert_eq!(ctx.redact("another-secret"), "***");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test module (R146)
+mod arch_tests {
+    use super::*;
+
+    /// An empty architecture means the agent has not reported one yet
+    /// (0.1.2 M6): the message says what to do about it.
+    #[test]
+    fn target_for_arch_says_the_server_has_not_reported() {
+        let err = target_for_arch("").expect_err("no architecture reported");
+        assert!(
+            err.message
+                .contains("server has not reported its architecture (join first)"),
+            "{err}"
+        );
     }
 }

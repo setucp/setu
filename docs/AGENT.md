@@ -45,8 +45,9 @@ What `agent install` does, idempotently and in this order:
    `sudo gnupg postgresql-16 caddy nftables zstd`. If any step of the
    Caddy repository fails (x86_64), it removes the repository list,
    installs the other packages from Ubuntu and installs Caddy's own
-   release package `caddy_2.11.7_linux_amd64.deb`, checked against a
-   pinned SHA-512 (ledger R116). Then `systemctl enable --now
+   release package for the machine (`caddy_2.11.7_linux_amd64.deb` on
+   x86_64, `caddy_2.11.7_linux_arm64.deb` on aarch64), checked against
+   the pinned SHA-512 of that architecture (ledger R116; 0.1.2 I1). Then `systemctl enable --now
    postgresql`.
 2. **User** `setu` (system, home `/var/lib/setu`, no login shell).
 3. **Directories**: `/var/lib/setu`, `/var/lib/setu/downloads`,

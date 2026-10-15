@@ -21,7 +21,8 @@ pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), App
     let steps = Steps::run_from(ctx.cursor().await.as_deref(), STEPS);
     let manifest = load_manifest(&ctx.db, &site.app_id, &site.app_version).await?;
     let plan = ctx.db.plans().get(&site.plan_id).await?;
-    let spec = build_spec(&plan, &site, &manifest)?;
+    let target = crate::server_target(&ctx.db, &site.server_id).await?;
+    let spec = build_spec(&plan, &site, &manifest, target)?;
     let server = site.server_id.as_str();
     let short = site.short_id.clone();
 

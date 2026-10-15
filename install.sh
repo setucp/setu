@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Setu installer (spec §8). Run as root on a fresh Ubuntu 24.04 x86_64
-# server:
+# Setu installer (spec §8, 0.1.2 §1-2). Run as root on a fresh server
+# (Ubuntu 22.04/24.04 or Debian 12/13; x86_64 or aarch64):
 #
 #   curl -fsSLO https://github.com/setucp/setu/releases/latest/download/install.sh
 #   sudo bash install.sh --panel-host setu.example.com
@@ -17,6 +17,8 @@
 # that is already in place.
 #
 # Options:
+#   --force-distro        on another distribution, use the Debian 12 plan
+#                         (printed) instead of refusing
 #   --panel-host <dns>    the panel's DNS name (Caddy obtains a certificate
 #                         for it); required unless --tls internal is given
 #   --tls internal        Caddy issues from its internal CA instead of ACME;
@@ -28,26 +30,130 @@
 set -euo pipefail
 
 REPO="setucp/setu"
-TARGET="x86_64-unknown-linux-musl"
 CONF=/etc/setu/setu.toml
 UNIT=/etc/systemd/system/setu.service
 SOCKET=/run/setu/http.sock
 TOKEN_FILE=/var/lib/setu/setup-token
 CADDY_CA=/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt
+# The PGDG repository (spec 0.1.2 §2): key pinned by SHA-256, the same
+# value as crates/agent/src/distro.rs (a shell test checks that).
+PGDG_KEY_URL=https://www.postgresql.org/media/keys/ACCC4CF8.asc
+PGDG_KEY_SHA256=0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76
+PGDG_KEYRING=/etc/apt/keyrings/apt.postgresql.org.asc
+PGDG_LIST=/etc/apt/sources.list.d/pgdg.list
 
 PANEL_HOST=""
 TLS=""
 VERSION=""
 ARCHIVE_URL=""
 SUMS_URL=""
+FORCE_DISTRO=0
+PLAN=""
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'install.sh: warning: %s\n' "$*" >&2; }
 fail() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '2,/^set -euo/p' "$0" | sed -e '/^set -euo/d' -e 's/^# \{0,1\}//'; }
 
+# select_archive <uname -m>: the release target triple, or status 2.
+select_archive() {
+    case "$1" in
+        x86_64) echo x86_64-unknown-linux-musl ;;
+        aarch64 | arm64) echo aarch64-unknown-linux-musl ;;
+        *) return 2 ;;
+    esac
+}
+
+# detect_distro [os-release]: prints "<id> <version> <plan>", where plan is
+# ubuntu-24.04, ubuntu-22.04, debian-12, debian-13 or unsupported; an ID or
+# VERSION_ID outside [A-Za-z0-9._-] is unsupported. The table mirrors crates/agent/src/distro.rs (spec 0.1.2 §2).
+detect_distro() {
+    local file="${1:-/etc/os-release}" id version plan
+    if [[ ! -r "$file" ]]; then
+        echo "unknown unknown unsupported"
+        return 0
+    fi
+    id="$(. "$file" && echo "${ID:-unknown}")"
+    version="$(. "$file" && echo "${VERSION_ID:-unknown}")"
+    # Only plain identifiers: the result is read back with whitespace
+    # splitting, and an ID is never trusted as more than a name (0.1.2 M1).
+    local token='^[A-Za-z0-9._-]+$'
+    if [[ ! "$id" =~ $token || ! "$version" =~ $token ]]; then
+        echo "unknown unknown unsupported"
+        return 0
+    fi
+    case "$id $version" in
+        "ubuntu 24.04") plan=ubuntu-24.04 ;;
+        "ubuntu 22.04") plan=ubuntu-22.04 ;;
+        "debian 12") plan=debian-12 ;;
+        "debian 13") plan=debian-13 ;;
+        *) plan=unsupported ;;
+    esac
+    echo "$id $version $plan"
+}
+
+# resolve_plan <id> <version> <detected plan> <force 0|1>: sets PLAN. An
+# unsupported distribution is refused (status 2) unless forced; then the
+# Debian 12 plan is used and the choice is printed.
+resolve_plan() {
+    local id=$1 version=$2 detected=$3 force=$4
+    if [[ "$detected" != unsupported ]]; then
+        PLAN=$detected
+        return 0
+    fi
+    if [[ "$force" != 1 ]]; then
+        printf 'install.sh: unsupported distribution %s %s; Setu supports Ubuntu 22.04/24.04 and Debian 12/13 (pass --force-distro to use the Debian 12 plan)\n' \
+            "$id" "$version" >&2
+        return 2
+    fi
+    PLAN=debian-12
+    say "using the Debian 12 plan for ${id} ${version} (--force-distro)"
+}
+
+# pgdg_codename <plan>: the PGDG codename the plan needs; status 1 when the
+# distribution ships PostgreSQL 16 or 17 itself.
+pgdg_codename() {
+    case "$1" in
+        ubuntu-22.04) echo jammy ;;
+        debian-12) echo bookworm ;;
+        *) return 1 ;;
+    esac
+}
+
+# postgres_major <plan>: 17 on Debian 13, 16 everywhere else.
+postgres_major() {
+    case "$1" in
+        debian-13) echo 17 ;;
+        *) echo 16 ;;
+    esac
+}
+
+# pgdg_list_line <codename>: the apt source, bound to the pinned key.
+pgdg_list_line() {
+    printf 'deb [signed-by=%s] https://apt.postgresql.org/pub/repos/apt %s-pgdg main\n' \
+        "$PGDG_KEYRING" "$1"
+}
+
+# verify_pgdg_key <file>: status 1 unless the file is the pinned key. Runs
+# before apt sees the repository.
+verify_pgdg_key() {
+    local actual
+    actual="$(sha256sum "$1" | awk '{print $1}')"
+    if [[ "$actual" != "$PGDG_KEY_SHA256" ]]; then
+        printf 'install.sh: PGDG keyring checksum mismatch: got %s, expected %s\n' \
+            "$actual" "$PGDG_KEY_SHA256" >&2
+        return 1
+    fi
+}
+
+# Sourced by the shell unit test: define the functions, run nothing.
+if [[ -n "${SETU_INSTALL_SOURCE_ONLY:-}" ]]; then
+    return 0
+fi
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --force-distro) FORCE_DISTRO=1; shift ;;
         --panel-host) PANEL_HOST="${2:?--panel-host needs a value}"; shift 2 ;;
         --tls) TLS="${2:?--tls needs a value}"; shift 2 ;;
         --version) VERSION="${2:?--version needs a value}"; shift 2 ;;
@@ -68,12 +174,10 @@ VERSION="${VERSION#v}"
 
 [[ "$(id -u)" == 0 ]] || fail "run as root"
 [[ "$(uname -s)" == Linux ]] || fail "Linux only"
-[[ "$(uname -m)" == x86_64 ]] || fail "x86_64 only (this is $(uname -m))"
-[[ -r /etc/os-release ]] || fail "no /etc/os-release: Ubuntu 24.04 is required"
-os_id="$(. /etc/os-release && echo "${ID:-}")"
-os_version="$(. /etc/os-release && echo "${VERSION_ID:-}")"
-[[ "$os_id" == ubuntu ]] || fail "Ubuntu 24.04 is required (this is ${os_id:-unknown})"
-[[ "$os_version" == 24.04 ]] || warn "Setu is tested on Ubuntu 24.04; this is Ubuntu ${os_version}"
+TARGET="$(select_archive "$(uname -m)")" ||
+    fail "unsupported machine type $(uname -m): Setu ships x86_64 and aarch64 archives"
+read -r os_id os_version detected_plan < <(detect_distro)
+resolve_plan "$os_id" "$os_version" "$detected_plan" "$FORCE_DISTRO" || exit 2
 
 if [[ -z "$PANEL_HOST" ]]; then
     PANEL_HOST="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -86,15 +190,32 @@ PUBLIC_URL="https://${PANEL_HOST}"
 
 # ---------------------------------------------------------------- packages
 
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
 export DEBIAN_FRONTEND=noninteractive
-say "Installing packages (postgresql-16, sudo, gnupg, zstd, nftables)"
 apt-get update -q
-apt-get install -y -q curl ca-certificates postgresql-16 sudo gnupg zstd nftables
+# sudo first: Debian 12 images may lack it, and the postgres steps use it.
+apt-get install -y -q sudo gnupg ca-certificates curl
+PG_MAJOR="$(postgres_major "$PLAN")"
+if pg_codename="$(pgdg_codename "$PLAN")"; then
+    say "Adding the PostgreSQL apt repository (${pg_codename}-pgdg)"
+    curl -fsSL --retry 3 --proto '=https' -o "${tmp}/pgdg.asc" "$PGDG_KEY_URL" ||
+        fail "download failed: $PGDG_KEY_URL"
+    # A wrong key stops here, before apt has a repository to read.
+    verify_pgdg_key "${tmp}/pgdg.asc" ||
+        fail "the PostgreSQL key does not match the pinned checksum; apt was not changed"
+    install -d -m 0755 /etc/apt/keyrings
+    install -m 0644 "${tmp}/pgdg.asc" "$PGDG_KEYRING"
+    pgdg_list_line "$pg_codename" >"${tmp}/pgdg.list"
+    install -m 0644 "${tmp}/pgdg.list" "$PGDG_LIST"
+    apt-get update -q
+fi
+say "Installing packages (postgresql-${PG_MAJOR}, zstd, nftables)"
+apt-get install -y -q "postgresql-${PG_MAJOR}" zstd nftables
 
 # ---------------------------------------------------------------- download
 
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
 if [[ -z "$ARCHIVE_URL" ]]; then
     if [[ -z "$VERSION" ]]; then
         VERSION="$(curl -fsSL --proto '=https' "https://api.github.com/repos/${REPO}/releases/latest" |

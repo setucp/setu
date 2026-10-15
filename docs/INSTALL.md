@@ -1,9 +1,22 @@
 # Installing Setu
 
-Requirements: one Ubuntu 24.04 x86_64 machine (other Ubuntu releases
-get a warning, other distributions are refused), root, and ports 80
-and 443 reachable. For a real certificate, a DNS name pointing at the
-machine. The installer brings PostgreSQL 16 and Caddy itself.
+Requirements: one machine running a supported distribution (table
+below), root, and ports 80 and 443 reachable. For a real certificate, a
+DNS name pointing at the machine. The installer brings PostgreSQL and
+Caddy itself.
+
+## Support matrix
+
+| Distribution | Architectures | PostgreSQL | Notes |
+|---|---|---|---|
+| Ubuntu 24.04 | x86_64, aarch64 | 16 (distribution) | |
+| Ubuntu 22.04 | x86_64, aarch64 | 16 (PGDG apt repository) | `nftables` from the distribution |
+| Debian 12 | x86_64, aarch64 | 16 (PGDG apt repository) | `sudo` installed if absent |
+| Debian 13 | x86_64, aarch64 | 17 (distribution) | |
+
+Any other distribution is refused with `unsupported distribution <id>
+<version>`, unless `--force-distro` is given: the installer then uses
+the Debian 12 plan and prints that it does.
 
 ## The script
 
@@ -30,9 +43,12 @@ give an internal-CA certificate for a name (what
 
 What it does, in order (spec §8):
 
-1. Checks root, x86_64 Linux, Ubuntu 24.04.
-2. `apt-get install postgresql-16 sudo gnupg zstd nftables` (and curl).
-3. Downloads `setu-<ver>-x86_64-unknown-linux-musl.tar.gz` and
+1. Checks root, Linux, the machine type (x86_64 or aarch64) and the
+   distribution (the matrix above).
+2. Installs `sudo gnupg ca-certificates curl`, adds the PGDG repository
+   where the plan needs it (the key is checked against a pinned SHA-256
+   before apt sees it), then `apt-get install postgresql-<N> zstd nftables`.
+3. Downloads `setu-<ver>-<arch>-unknown-linux-musl.tar.gz` and
    `SHA256SUMS` from the release, verifies the archive, installs
    `/opt/setu/setu` (root:root 0755) and links `/usr/local/bin/setu`.
 4. Creates the system user `setu`, `/var/lib/setu` (setu 0750) and

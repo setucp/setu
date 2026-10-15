@@ -18,6 +18,7 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod dispatch;
+pub mod distro;
 pub mod doctor;
 pub mod download;
 pub mod heartbeat;

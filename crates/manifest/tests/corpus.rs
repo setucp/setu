@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-const CASES: usize = 19;
+const CASES: usize = 20;
 
 #[test]
 fn corpus() {

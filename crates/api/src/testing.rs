@@ -267,7 +267,7 @@ impl TestServer {
     ) -> Operator {
         let email = format!(
             "{email_prefix}-{}@example.com",
-            setu_common::new_id()[..8].to_lowercase()
+            setu_common::new_id()[18..].to_lowercase()
         );
         let hash = crate::auth::hash_password(password).expect("hash test password");
         self.db
