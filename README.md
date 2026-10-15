@@ -28,7 +28,7 @@ service.
   <a href="https://github.com/setucp/setu/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/release-v0.1.0-4F46E5" alt="Release v0.1.0"></a>
   <a href="https://github.com/setucp/setu/actions/workflows/ci.yml"><img src="https://github.com/setucp/setu/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/licence-AGPL--3.0-blue" alt="Licence: AGPL-3.0">
-  <img src="https://img.shields.io/badge/platform-Ubuntu%2022.04%2F24.04%20%C2%B7%20Debian%2012%2F13%20%C2%B7%20x86__64%20and%20aarch64-lightgrey" alt="Platform: Ubuntu 22.04 and 24.04, Debian 12 and 13, x86_64 and aarch64">
+  <img src="https://img.shields.io/badge/platform-Ubuntu%2022.04%2F24.04%2F26.04%20%C2%B7%20Debian%2012%2F13%20%C2%B7%20x86__64%20and%20aarch64-lightgrey" alt="Platform: Ubuntu 22.04 and 24.04, Debian 12 and 13, x86_64 and aarch64">
 </p>
 
 ## Why Setu
@@ -249,7 +249,7 @@ from the checked-in `openapi.json` (`pnpm -C ui gen:api`).
 
 ## Status and contributing
 
-Setu 0.1.2 supports Ubuntu 22.04 and 24.04 and Debian 12 and 13, on
+Setu 0.1.3 supports Ubuntu 22.04, 24.04 and 26.04 and Debian 12 and 13, on
 x86_64 and aarch64 (see the support matrix in `docs/INSTALL.md`); other
 distributions are refused by the installer unless `--force-distro` is
 given. Expect rough edges and breaking changes before

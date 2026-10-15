@@ -9,6 +9,7 @@ Caddy itself.
 
 | Distribution | Architectures | PostgreSQL | Notes |
 |---|---|---|---|
+| Ubuntu 26.04 | x86_64, aarch64 | 18 (distribution) | |
 | Ubuntu 24.04 | x86_64, aarch64 | 16 (distribution) | |
 | Ubuntu 22.04 | x86_64, aarch64 | 16 (PGDG apt repository) | `nftables` from the distribution |
 | Debian 12 | x86_64, aarch64 | 16 (PGDG apt repository) | `sudo` installed if absent |

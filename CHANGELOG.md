@@ -3,6 +3,14 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
+## 0.1.3 — 2026-10-15
+
+### Platforms
+
+- Ubuntu 26.04 (resolute) on x86_64 and aarch64, with the distribution's
+  PostgreSQL 18. The installer, `setu agent install` and the CI
+  installer matrix cover it.
+
 ## 0.1.2 — 2026-10-10
 
 Platform reach only (spec `docs/specs/2026-10-10-setu-0.1.2-design.md`):
