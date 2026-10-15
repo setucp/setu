@@ -222,11 +222,14 @@ pub fn validate(manifest: &Manifest, src: &str) -> Vec<ManifestError> {
     match run.kind {
         RunKind::Binary => {
             let targets = run.binary.as_ref().map(|b| &b.targets);
-            if !targets.is_some_and(|t| t.contains_key(&Target::X86_64Linux)) {
+            // Any architecture will do: an ARM-only app is valid, and the
+            // control plane refuses to place a site on a server whose
+            // architecture the manifest does not cover (0.1.2).
+            if !targets.is_some_and(|t| !t.is_empty()) {
                 push(
                     "run.binary".into(),
                     run_binary_line(src),
-                    "run.binary must declare x86_64-linux".into(),
+                    "run.binary must declare at least one target".into(),
                 );
             }
             if run.image.is_some() {

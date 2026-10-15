@@ -38,7 +38,7 @@ holding `ok` or the one expected error line). `POST
 | `[backup] dirs` | no | subset of `needs.dirs` to archive (derivable dirs can be left out) |
 | `[update] strategy` | yes | `"replace"`, the only strategy; `"command"` is refused as not supported in this version |
 
-Targets: `x86_64-linux` is mandatory; `aarch64-linux` is accepted
+Targets: declare at least one of `x86_64-linux` and `aarch64-linux`; a site is only placed on a server whose architecture the manifest covers.
 (Setu ships no aarch64 build until phase 2). Archives may not contain
 symlinks, hard links, devices, absolute names, `..` or
 setuid/setgid/sticky bits: the helper refuses the whole install.
@@ -267,7 +267,8 @@ The corpus also holds a smaller `hello.toml` (with a `prompt` and a
 | `health_without_slash.toml` | `error: app.health must start with / line 8` |
 | `hello.toml` | `ok` |
 | `image_kind.toml` | `ok` |
-| `missing_x86_target.toml` | `error: run.binary must declare x86_64-linux line 17` |
+| `aarch64_only.toml` | `ok` (an ARM-only app; the control plane refuses to place it on an x86_64 server) |
+| `no_targets.toml` | `error: run.binary must declare at least one target line 12` |
 | `once_without_secret.toml` | `error: env.HELLO_TOKEN once requires secret = true line 31` |
 | `unknown_key.toml` | `error: unknown field 'colour' at [app] line 11` |
 | `vyasa_0_2_0.toml` | `ok` |
