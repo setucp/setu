@@ -43,6 +43,7 @@ impl KeyFetch for FixedFetch {
 #[test]
 fn parses_each_fixture() {
     let cases = [
+        ("ubuntu-26.04", "ubuntu", "26.04", Some("resolute")),
         ("ubuntu-24.04", "ubuntu", "24.04", Some("noble")),
         ("ubuntu-22.04", "ubuntu", "22.04", Some("jammy")),
         ("debian-12", "debian", "12", Some("bookworm")),
@@ -115,6 +116,7 @@ fn fedora_is_unsupported() {
 #[test]
 fn plan_installs_sudo_first() {
     for (id, version) in [
+        ("ubuntu", "26.04"),
         ("ubuntu", "24.04"),
         ("ubuntu", "22.04"),
         ("debian", "12"),

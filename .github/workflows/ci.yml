@@ -98,6 +98,8 @@ jobs:
         # Debian 12 runs without sudo preinstalled (0.1.2 I2d): the
         # installer must bring it.
         include:
+          - image: ubuntu:26.04
+            with_sudo: 1
           - image: ubuntu:24.04
             with_sudo: 1
           - image: ubuntu:22.04

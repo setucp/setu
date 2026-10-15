@@ -113,6 +113,7 @@ pub fn plan_for(d: &Distro) -> Support {
     };
     let base = |major: u8| -> Vec<&'static str> {
         let pg = match major {
+            18 => "postgresql-18",
             17 => "postgresql-17",
             _ => "postgresql-16",
         };
@@ -127,6 +128,7 @@ pub fn plan_for(d: &Distro) -> Support {
         ]
     };
     let (repos, postgres_major) = match (d.id.as_str(), d.version_id.as_str()) {
+        ("ubuntu", "26.04") => (vec![], 18),
         ("ubuntu", "24.04") => (vec![], 16),
         ("ubuntu", "22.04") => (vec![pgdg("jammy")], 16),
         ("debian", "12") => (vec![pgdg("bookworm")], 16),

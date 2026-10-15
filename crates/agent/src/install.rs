@@ -169,7 +169,7 @@ pub fn plan_on(distro: &Distro, force: bool) -> Result<PackagePlan, InstallError
         Support::Unsupported { id, version } if !force => Err(InstallError::Step(
             "distribution",
             format!(
-                "unsupported distribution {id} {version}; Setu supports Ubuntu 22.04/24.04 and Debian 12/13 (--force-distro uses the Debian 12 plan)"
+                "unsupported distribution {id} {version}; Setu supports Ubuntu 22.04/24.04/26.04 and Debian 12/13 (--force-distro uses the Debian 12 plan)"
             ),
         )),
         Support::Unsupported { id, version } => {

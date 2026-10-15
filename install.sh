@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Setu installer (spec §8, 0.1.2 §1-2). Run as root on a fresh server
-# (Ubuntu 22.04/24.04 or Debian 12/13; x86_64 or aarch64):
+# (Ubuntu 22.04/24.04/26.04 or Debian 12/13; x86_64 or aarch64):
 #
 #   curl -fsSLO https://github.com/setucp/setu/releases/latest/download/install.sh
 #   sudo bash install.sh --panel-host setu.example.com
@@ -65,7 +65,7 @@ select_archive() {
 }
 
 # detect_distro [os-release]: prints "<id> <version> <plan>", where plan is
-# ubuntu-24.04, ubuntu-22.04, debian-12, debian-13 or unsupported; an ID or
+# ubuntu-26.04, ubuntu-24.04, ubuntu-22.04, debian-12, debian-13 or unsupported; an ID or
 # VERSION_ID outside [A-Za-z0-9._-] is unsupported. The table mirrors crates/agent/src/distro.rs (spec 0.1.2 §2).
 detect_distro() {
     local file="${1:-/etc/os-release}" id version plan
@@ -83,6 +83,7 @@ detect_distro() {
         return 0
     fi
     case "$id $version" in
+        "ubuntu 26.04") plan=ubuntu-26.04 ;;
         "ubuntu 24.04") plan=ubuntu-24.04 ;;
         "ubuntu 22.04") plan=ubuntu-22.04 ;;
         "debian 12") plan=debian-12 ;;
@@ -102,7 +103,7 @@ resolve_plan() {
         return 0
     fi
     if [[ "$force" != 1 ]]; then
-        printf 'install.sh: unsupported distribution %s %s; Setu supports Ubuntu 22.04/24.04 and Debian 12/13 (pass --force-distro to use the Debian 12 plan)\n' \
+        printf 'install.sh: unsupported distribution %s %s; Setu supports Ubuntu 22.04/24.04/26.04 and Debian 12/13 (pass --force-distro to use the Debian 12 plan)\n' \
             "$id" "$version" >&2
         return 2
     fi
@@ -111,7 +112,7 @@ resolve_plan() {
 }
 
 # pgdg_codename <plan>: the PGDG codename the plan needs; status 1 when the
-# distribution ships PostgreSQL 16 or 17 itself.
+# distribution ships PostgreSQL 16, 17 or 18 itself.
 pgdg_codename() {
     case "$1" in
         ubuntu-22.04) echo jammy ;;
@@ -120,9 +121,10 @@ pgdg_codename() {
     esac
 }
 
-# postgres_major <plan>: 17 on Debian 13, 16 everywhere else.
+# postgres_major <plan>: 18 on Ubuntu 26.04, 17 on Debian 13, 16 everywhere else.
 postgres_major() {
     case "$1" in
+        ubuntu-26.04) echo 18 ;;
         debian-13) echo 17 ;;
         *) echo 16 ;;
     esac

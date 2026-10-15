@@ -32,6 +32,7 @@ t_select_archive_other_fails() {
 }
 
 t_detect_each_fixture() {
+    [[ "$(detect_distro "$FIX/ubuntu-26.04")" == "ubuntu 26.04 ubuntu-26.04" ]] &&
     [[ "$(detect_distro "$FIX/ubuntu-24.04")" == "ubuntu 24.04 ubuntu-24.04" ]] &&
         [[ "$(detect_distro "$FIX/ubuntu-22.04")" == "ubuntu 22.04 ubuntu-22.04" ]] &&
         [[ "$(detect_distro "$FIX/debian-12")" == "debian 12 debian-12" ]] &&
@@ -73,7 +74,9 @@ t_postgres_majors() {
     [[ "$(postgres_major ubuntu-24.04)" == 16 ]] &&
         [[ "$(postgres_major ubuntu-22.04)" == 16 ]] &&
         [[ "$(postgres_major debian-12)" == 16 ]] &&
-        [[ "$(postgres_major debian-13)" == 17 ]]
+        [[ "$(postgres_major debian-13)" == 17 ]] &&
+        [[ "$(postgres_major ubuntu-26.04)" == 18 ]] &&
+        ! pgdg_codename ubuntu-26.04 >/dev/null 2>&1
 }
 
 t_pgdg_list_line() {
