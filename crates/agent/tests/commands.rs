@@ -695,13 +695,15 @@ async fn commands_for_one_site_run_in_order_while_other_sites_and_readonly_run_c
     for (r, _) in [&a1, &a2, &b1, &st] {
         assert!(r.ok, "{}: {:?}", r.id, r.error);
     }
-    let total = start.elapsed();
-    // Two 1200 ms installs on different sites run side by side: serial
-    // execution would take at least 2400 ms. The bounds leave headroom
-    // for slow CI runners while still ruling out serial behaviour.
+    // Two 1200 ms installs on different sites run side by side: had B
+    // waited for A, it would have finished at least 1200 ms after A.
+    // Comparing the two finish times instead of a wall-clock budget keeps
+    // slow CI runners (downloads, tempfiles) from failing the test.
     assert!(
-        total < Duration::from_millis(2200),
-        "sites ran serially: {total:?}"
+        b1.1 < a1.1 + Duration::from_millis(1000),
+        "sites ran serially: a1 {:?}, b1 {:?}",
+        a1.1,
+        b1.1
     );
     assert!(
         st.1 < Duration::from_millis(1200),
