@@ -28,7 +28,7 @@ impl Runner for FakeDump {
 }
 
 /// A URL the `url` crate parses (an empty host does not parse).
-const DB_URL: &str = "postgres://setu:pw@127.0.0.1:5/setu";
+const DB_URL: &str = "postgres://setu:Zq7vPassWordNeverOnArgv@127.0.0.1:5/setu";
 
 fn cfg() -> SchedulerConfig {
     SchedulerConfig {
@@ -70,7 +70,7 @@ async fn self_backup_writes_a_dump_keeps_seven_and_records_success() {
     let rec = self_backup::run_once(
         &db,
         runner.clone(),
-        "postgres://setu:pw@127.0.0.1:1/setu",
+        "postgres://setu:Zq7vPassWordNeverOnArgv@127.0.0.1:1/setu",
         data.path(),
         now,
     )
@@ -91,7 +91,7 @@ async fn self_backup_writes_a_dump_keeps_seven_and_records_success() {
         runner.seen.lock().unwrap()[0]
             .args
             .iter()
-            .all(|a| !a.contains("pw")),
+            .all(|a| !a.contains("Zq7vPassWordNeverOnArgv")),
         "password never on argv"
     );
     assert_eq!(
