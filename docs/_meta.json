@@ -1,0 +1,14 @@
+{
+  "README": "Overview",
+  "INSTALL": "Installing",
+  "OPERATIONS": "Operations",
+  "MANIFEST": "App manifests",
+  "AGENT": "Agents",
+  "TRUST": "Trust model",
+  "SECURITY": "Security model",
+  "ROADMAP": "Roadmap",
+  "E2E": {"title": "End-to-end test", "hidden": true},
+  "RELEASING": {"title": "Releasing", "hidden": true},
+  "specs": {"title": "Design specs", "hidden": true},
+  "brand": {"title": "Brand", "hidden": true}
+}
