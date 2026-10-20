@@ -3,7 +3,6 @@
 //! jobs whose lease expired (a dead runner), resets expired `running`
 //! jobs on boot, and limits `install` steps per server.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -241,21 +240,39 @@ impl Worker {
 fn open_changes(
     sealer: &Sealer,
     payload: &serde_json::Value,
-) -> Result<BTreeMap<String, String>, AppError> {
+) -> Result<crate::env_update::EnvChanges, AppError> {
+    let open = |name: &str, sealed: &serde_json::Value| {
+        sealed
+            .as_str()
+            .filter(|s| s.starts_with("v1:"))
+            .and_then(|s| sealer.open(s).ok())
+            .ok_or_else(|| {
+                tracing::error!(name = %name, "env_update change is not sealed");
+                AppError::internal()
+            })
+    };
     let Some(map) = payload.get("changes").and_then(|c| c.as_object()) else {
         return Err(AppError::validation("env_update job needs payload.changes"));
     };
-    map.iter()
-        .map(|(name, sealed)| {
-            let plain = sealed
-                .as_str()
-                .filter(|s| s.starts_with("v1:"))
-                .and_then(|s| sealer.open(s).ok())
-                .ok_or_else(|| {
-                    tracing::error!(name = %name, "env_update change is not sealed");
-                    AppError::internal()
-                })?;
-            Ok((name.clone(), plain))
-        })
-        .collect()
+    let mut changes = crate::env_update::EnvChanges::default();
+    for (name, sealed) in map {
+        changes.manifest.insert(name.clone(), open(name, sealed)?);
+    }
+    if let Some(extra) = payload.get("extra").and_then(|c| c.as_object()) {
+        for (name, entry) in extra {
+            let value = open(name, entry.get("value").unwrap_or(&serde_json::Value::Null))?;
+            let secret = entry
+                .get("secret")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            changes.extra.insert(name.clone(), (value, secret));
+        }
+    }
+    if let Some(remove) = payload.get("remove").and_then(|c| c.as_array()) {
+        changes.remove = remove
+            .iter()
+            .filter_map(|n| n.as_str().map(str::to_string))
+            .collect();
+    }
+    Ok(changes)
 }

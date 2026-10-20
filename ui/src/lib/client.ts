@@ -15,6 +15,7 @@ export type AppVersion = components["schemas"]["AppVersionOut"];
 export type Job = components["schemas"]["JobOut"];
 export type AuditEntry = components["schemas"]["AuditEntryOut"];
 export type EnvEntry = components["schemas"]["EnvEntryOut"];
+export type EnvPutBody = components["schemas"]["EnvPutRequest"];
 export type Backup = components["schemas"]["BackupOut"];
 export type ManifestError = components["schemas"]["ManifestErrorOut"];
 export type ValidateResponse = components["schemas"]["ValidateResponse"];
@@ -259,10 +260,14 @@ export const api = {
     return body.env;
   },
 
-  putSiteEnv(id: string, env: Record<string, string>): Promise<SiteJobResponse> {
+  /**
+   * Change manifest `value`/`prompt` variables (`env`), add or replace
+   * extra variables (`extra`), or delete extras (`remove`).
+   */
+  putSiteEnv(id: string, body: EnvPutBody): Promise<SiteJobResponse> {
     return request(`/api/v1/sites/${encodeURIComponent(id)}/env`, {
       method: "PUT",
-      body: JSON.stringify({ env }),
+      body: JSON.stringify(body),
     });
   },
 

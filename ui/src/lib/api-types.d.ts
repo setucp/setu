@@ -728,9 +728,10 @@ export interface paths {
          */
         get: operations["env_get"];
         /**
-         * Update non-generated env vars (operator and above): only manifest
-         *     entries spelled `value` or `prompt` may change (`generate`/`from`
-         *     are derived and rejected with `validation`). Enqueues an
+         * Update non-generated env vars (operator and above): manifest entries
+         *     spelled `value` or `prompt` may change (`generate`/`from` are derived
+         *     and rejected with `validation`), and extra variables the manifest does
+         *     not declare may be added, replaced or removed. Enqueues an
          *     `env_update` job carrying the changes sealed; the job stores them,
          *     rewrites the env file (never with `once` values) and restarts a
          *     running site.
@@ -1164,6 +1165,8 @@ export interface components {
             site: components["schemas"]["SiteOut"];
         };
         EnvEntryOut: {
+            /** @description An operator-added variable the manifest does not declare. */
+            extra: boolean;
             has_value: boolean;
             masked: boolean;
             name: string;
@@ -1176,9 +1179,19 @@ export interface components {
             env: components["schemas"]["EnvEntryOut"][];
         };
         EnvPutRequest: {
-            env: {
+            /** @description Manifest `value`/`prompt` variables to change. */
+            env?: {
                 [key: string]: string;
             };
+            /**
+             * @description Extra variables (names the manifest does not declare) to add or
+             *     replace.
+             */
+            extra?: {
+                [key: string]: components["schemas"]["ExtraVarIn"];
+            };
+            /** @description Extra variables to delete. */
+            remove?: string[];
         };
         /** @description One concrete env var to write into the site env file. */
         EnvVar: {
@@ -1194,6 +1207,11 @@ export interface components {
         ErrorDetail: {
             code: string;
             message: string;
+        };
+        /** @description One extra variable's value and whether it is stored sealed and masked. */
+        ExtraVarIn: {
+            secret?: boolean;
+            value: string;
         };
         HealthOut: {
             status: string;

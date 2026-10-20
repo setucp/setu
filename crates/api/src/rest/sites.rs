@@ -266,6 +266,8 @@ pub struct EnvEntryOut {
     pub secret: bool,
     pub once: bool,
     pub has_value: bool,
+    /// An operator-added variable the manifest does not declare.
+    pub extra: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -275,7 +277,24 @@ pub struct EnvGetOut {
 
 #[derive(Deserialize, ToSchema)]
 pub struct EnvPutRequest {
+    /// Manifest `value`/`prompt` variables to change.
+    #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Extra variables (names the manifest does not declare) to add or
+    /// replace.
+    #[serde(default)]
+    pub extra: BTreeMap<String, ExtraVarIn>,
+    /// Extra variables to delete.
+    #[serde(default)]
+    pub remove: Vec<String>,
+}
+
+/// One extra variable's value and whether it is stored sealed and masked.
+#[derive(Deserialize, ToSchema)]
+pub struct ExtraVarIn {
+    pub value: String,
+    #[serde(default)]
+    pub secret: bool,
 }
 
 // Holds env values: `Debug` prints their names only.
@@ -283,6 +302,8 @@ impl std::fmt::Debug for EnvPutRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EnvPutRequest")
             .field("env", &self.env.keys().collect::<Vec<_>>())
+            .field("extra", &self.extra.keys().collect::<Vec<_>>())
+            .field("remove", &self.remove)
             .finish()
     }
 }
@@ -994,7 +1015,11 @@ pub async fn env_get(
         .into_iter()
         .map(|v| {
             let secret = always_masked(manifest.as_ref(), &v);
+            let extra = manifest
+                .as_ref()
+                .is_some_and(|m| !m.env.contains_key(&v.name));
             Ok(EnvEntryOut {
+                extra,
                 value: if secret {
                     MASKED_VALUE.to_string()
                 } else {
@@ -1011,9 +1036,10 @@ pub async fn env_get(
     Ok(Json(EnvGetOut { env }))
 }
 
-/// Update non-generated env vars (operator and above): only manifest
-/// entries spelled `value` or `prompt` may change (`generate`/`from`
-/// are derived and rejected with `validation`). Enqueues an
+/// Update non-generated env vars (operator and above): manifest entries
+/// spelled `value` or `prompt` may change (`generate`/`from` are derived
+/// and rejected with `validation`), and extra variables the manifest does
+/// not declare may be added, replaced or removed. Enqueues an
 /// `env_update` job carrying the changes sealed; the job stores them,
 /// rewrites the env file (never with `once` values) and restarts a
 /// running site.
@@ -1048,8 +1074,10 @@ pub async fn env_put(
             site.status
         )));
     }
-    if body.env.is_empty() {
-        return Err(AppError::validation("env must not be empty"));
+    if body.env.is_empty() && body.extra.is_empty() && body.remove.is_empty() {
+        return Err(AppError::validation(
+            "env, extra and remove must not all be empty",
+        ));
     }
     let version = state
         .db
@@ -1057,33 +1085,44 @@ pub async fn env_put(
         .version(&site.app_id, &site.app_version)
         .await?;
     let manifest = load_manifest(&version)?;
+    let stored: Vec<setu_manifest::EnvVar> = stored_env(&site)
+        .into_iter()
+        .map(|v| setu_manifest::EnvVar {
+            name: v.name,
+            value: String::new(),
+            secret: v.secret,
+            once: v.once,
+        })
+        .collect();
+    let check = setu_jobs::env_update::EnvChanges {
+        manifest: body.env.clone(),
+        extra: body
+            .extra
+            .iter()
+            .map(|(k, v)| (k.clone(), (v.value.clone(), v.secret)))
+            .collect(),
+        remove: body.remove.clone(),
+    };
+    // The same rules the `env_update` job re-checks.
+    setu_jobs::env_update::validate(&manifest, &stored, &check)?;
 
-    // Validate keys against the manifest: `value`/`prompt` only (the
-    // `env_update` job re-checks), values without control characters.
-    for (key, value) in &body.env {
-        match manifest.env.get(key) {
-            Some(setu_manifest::EnvSpec::Value(_) | setu_manifest::EnvSpec::Prompt(_)) => {}
-            Some(setu_manifest::EnvSpec::Generate(_) | setu_manifest::EnvSpec::From(_)) => {
-                return Err(AppError::validation(format!(
-                    "env var {key} is generated and cannot be set"
-                )));
-            }
-            None => return Err(AppError::validation(format!("unknown env var {key}"))),
-        }
-        if !setu_common::validate::no_control(value) {
-            return Err(AppError::validation(format!(
-                "env var {key} must not contain control characters"
-            )));
-        }
-    }
-
-    // The changes ride SEALED on the job (every value `v1:`, secret or
-    // not: plaintext never sits in `jobs.payload`, security finding 4);
-    // the `env_update` job merges, stores, writes the file and restarts.
+    // Every value rides SEALED on the job (`v1:`, secret or not:
+    // plaintext never sits in `jobs.payload`, security finding 4); the
+    // `env_update` job merges, stores, writes the file and restarts.
     let changes: serde_json::Map<String, serde_json::Value> = body
         .env
         .iter()
         .map(|(k, v)| (k.clone(), serde_json::json!(state.sealer.seal(v))))
+        .collect();
+    let extra: serde_json::Map<String, serde_json::Value> = body
+        .extra
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                serde_json::json!({ "value": state.sealer.seal(&v.value), "secret": v.secret }),
+            )
+        })
         .collect();
     let job = state
         .db
@@ -1092,7 +1131,7 @@ pub async fn env_put(
             "env_update",
             Some(&site.id),
             Some(&site.server_id),
-            Some(&serde_json::json!({ "changes": changes })),
+            Some(&serde_json::json!({ "changes": changes, "extra": extra, "remove": body.remove })),
         )
         .await?;
     audit(

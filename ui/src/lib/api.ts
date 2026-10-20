@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
   type CreateSitePayload,
+  type EnvPutBody,
   type Operator,
   type PlanInput,
 } from "./client";
@@ -203,7 +204,7 @@ export function useSiteEnv(siteId: string) {
 export function usePutSiteEnv(siteId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (env: Record<string, string>) => api.putSiteEnv(siteId, env),
+    mutationFn: (body: EnvPutBody) => api.putSiteEnv(siteId, body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["sites", siteId, "env"] });
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });

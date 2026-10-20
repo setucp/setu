@@ -235,8 +235,21 @@ async fn env_step(
         db_url,
         &prompts,
     );
-    let merged =
+    let mut merged =
         setu_manifest::merge(&existing, new_manifest, &mut input).map_err(resolve_error)?;
+    // Extra variables (0.1.4 §1) ride along; a name the new version
+    // declares is its rule's from now on.
+    merged.extend(
+        existing
+            .iter()
+            .filter(|v| {
+                !old_manifest.env.contains_key(&v.name)
+                    && !new_manifest.env.contains_key(&v.name)
+                    && !merged.iter().any(|m| m.name == v.name)
+            })
+            .cloned()
+            .collect::<Vec<_>>(),
+    );
     register_secrets(ctx, &merged);
     let mut stored = merged.clone();
     stored.extend(

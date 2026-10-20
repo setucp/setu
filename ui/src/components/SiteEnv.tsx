@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Eye, Pencil, RefreshCw, X } from "lucide-react";
+import { Eye, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { usePutSiteEnv, useRevealEnv, useSiteEnv } from "@/lib/api";
 import { ApiError, type EnvEntry } from "@/lib/client";
@@ -11,7 +11,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Field } from "./ui/field";
 import { Input } from "./ui/input";
-import { Modal } from "./ui/dialog";
+import { Modal, useConfirm } from "./ui/dialog";
 import { SkeletonRows } from "./ui/skeleton";
 
 function Masked() {
@@ -30,7 +30,9 @@ function Masked() {
  * Reveal opens a dialog that asks for the operator's own password and
  * calls `POST /sites/{id}/env/{name}/reveal`, which audits every call.
  * Non-secret `value`/`prompt` variables are edited in place; saving PUTs
- * them (a restart job starts) and reports the job.
+ * them (a restart job starts) and reports the job. Extra variables (names
+ * the manifest does not declare) are added with the form below the table
+ * and removed per row; each of those saves at once.
  */
 export function SiteEnv({
   siteId,
@@ -43,6 +45,21 @@ export function SiteEnv({
   const put = usePutSiteEnv(siteId);
   const [armed, setArmed] = React.useState<Record<string, string>>({});
   const [revealing, setRevealing] = React.useState<EnvEntry | null>(null);
+  const [adding, setAdding] = React.useState(false);
+  const confirm = useConfirm();
+
+  function submit(body: Parameters<typeof put.mutate>[0], done: string, after?: () => void) {
+    put.mutate(body, {
+      onSuccess: (res) => {
+        toast.success(done);
+        after?.();
+        onSubmitted?.(res.job.id);
+      },
+      onError: (err) => {
+        toast.error(err instanceof ApiError ? err.message : "Update failed");
+      },
+    });
+  }
 
   if (env.isPending) return <SkeletonRows rows={5} label="Loading environment…" />;
   if (env.error instanceof ApiError) return <ErrorText error={env.error} />;
@@ -69,6 +86,7 @@ export function SiteEnv({
           <code className="text-xs font-medium">{row.name}</code>
           {row.secret ? <Badge variant="secondary">secret</Badge> : null}
           {row.once ? <Badge variant="warning">once</Badge> : null}
+          {row.extra ? <Badge variant="outline">extra</Badge> : null}
         </span>
       ),
     },
@@ -103,6 +121,27 @@ export function SiteEnv({
   ];
 
   function rowActions(row: EnvEntry) {
+    const remove = row.extra ? (
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        aria-label={`Remove ${row.name}`}
+        disabled={put.isPending}
+        onClick={async () => {
+          const ok = await confirm({
+            title: `Remove ${row.name}?`,
+            description: "The app no longer sees this variable. The site restarts.",
+            confirmLabel: `Remove ${row.name}`,
+            destructive: true,
+          });
+          if (ok) submit({ remove: [row.name] }, `${row.name} removed — restarting`);
+        }}
+      >
+        <Trash2 aria-hidden="true" />
+        Remove
+      </Button>
+    ) : null;
     if (armed[row.name] !== undefined) {
       return (
         <Button type="button" variant="ghost" size="sm" onClick={() => disarm(row.name)}>
@@ -128,14 +167,18 @@ export function SiteEnv({
             <RefreshCw aria-hidden="true" />
             Replace
           </Button>
+          {remove}
         </span>
       );
     }
     return (
-      <Button type="button" variant="outline" size="sm" onClick={() => arm(row.name)}>
-        <Pencil aria-hidden="true" />
-        Edit
-      </Button>
+      <span className="flex justify-end gap-1">
+        <Button type="button" variant="outline" size="sm" onClick={() => arm(row.name)}>
+          <Pencil aria-hidden="true" />
+          Edit
+        </Button>
+        {remove}
+      </span>
     );
   }
 
@@ -144,7 +187,9 @@ export function SiteEnv({
       <Alert title="Secrets stay masked">
         Reveal asks for your password and every reveal is audited. <code>once</code> values
         reached the app on its first boot only. Only <code>value</code> and <code>prompt</code>{" "}
-        variables can be changed — the server rejects generated and derived ones.
+        variables can be changed — the server rejects generated and derived ones. Add a variable
+        the app&apos;s manifest does not declare with <strong>Add variable</strong>; it survives
+        updates.
       </Alert>
       <ResponsiveTable
         label="Environment"
@@ -172,22 +217,41 @@ export function SiteEnv({
             type="button"
             loading={put.isPending}
             onClick={() => {
-              put.mutate(Object.fromEntries(edited), {
-                onSuccess: (res) => {
-                  toast.success("Environment updated — restarting");
-                  setArmed({});
-                  onSubmitted?.(res.job.id);
-                },
-                onError: (err) => {
-                  toast.error(err instanceof ApiError ? err.message : "Update failed");
-                },
-              });
+              const extras = new Set(rows.filter((r) => r.extra).map((r) => r.name));
+              const env = Object.fromEntries(edited.filter(([n]) => !extras.has(n)));
+              const extra = Object.fromEntries(
+                edited
+                  .filter(([n]) => extras.has(n))
+                  .map(([n, v]) => [n, { value: v, secret: rows.find((r) => r.name === n)?.secret ?? false }]),
+              );
+              submit(
+                Object.keys(extra).length > 0 ? { env, extra } : { env },
+                "Environment updated — restarting",
+                () => setArmed({}),
+              );
             }}
           >
             {put.isPending ? "Saving…" : `Save changes (${edited.length})`}
           </Button>
         </div>
       ) : null}
+      <div>
+        <Button type="button" variant="outline" size="sm" onClick={() => setAdding(true)}>
+          <Plus aria-hidden="true" />
+          Add variable
+        </Button>
+      </div>
+      <AddVariableDialog
+        open={adding}
+        taken={new Set(rows.map((r) => r.name))}
+        pending={put.isPending}
+        onClose={() => setAdding(false)}
+        onAdd={(name, value, secret) =>
+          submit({ extra: { [name]: { value, secret } } }, `${name} added — restarting`, () =>
+            setAdding(false),
+          )
+        }
+      />
       <RevealDialog siteId={siteId} entry={revealing} onClose={() => setRevealing(null)} />
     </div>
   );
@@ -294,6 +358,102 @@ function RevealDialog({
           </div>
         )}
       </div>
+    </Modal>
+  );
+}
+
+const NAME_RE = /^[A-Z_][A-Z0-9_]{0,127}$/;
+
+/**
+ * Name, value and Secret for one extra variable. The name is checked here
+ * for shape and clashes; the server also refuses reserved names.
+ */
+function AddVariableDialog({
+  open,
+  taken,
+  pending,
+  onClose,
+  onAdd,
+}: {
+  open: boolean;
+  taken: Set<string>;
+  pending: boolean;
+  onClose: () => void;
+  onAdd: (name: string, value: string, secret: boolean) => void;
+}) {
+  const [name, setName] = React.useState("");
+  const [value, setValue] = React.useState("");
+  const [secret, setSecret] = React.useState(false);
+
+  React.useEffect(() => {
+    if (open) {
+      setName("");
+      setValue("");
+      setSecret(false);
+    }
+  }, [open]);
+
+  const nameError =
+    name === ""
+      ? null
+      : !NAME_RE.test(name)
+        ? "Upper-case letters, digits and _, not starting with a digit."
+        : taken.has(name)
+          ? "This site already has a variable with that name."
+          : null;
+  const ok = name !== "" && nameError === null;
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Add variable"
+      description="An environment variable the app's manifest does not declare. Saving restarts the site."
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" form="add-var-form" disabled={!ok} loading={pending}>
+            {pending ? "Adding…" : "Add and restart"}
+          </Button>
+        </>
+      }
+    >
+      <form
+        id="add-var-form"
+        className="flex flex-col gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (ok) onAdd(name, value, secret);
+        }}
+      >
+        <Field label="Name" error={nameError ?? undefined}>
+          <Input
+            autoFocus
+            className="font-mono text-xs"
+            placeholder="VYASA_DEMO__ENABLED"
+            value={name}
+            onChange={(e) => setName(e.target.value.toUpperCase())}
+          />
+        </Field>
+        <Field label="Value">
+          <Input
+            type={secret ? "password" : "text"}
+            className="font-mono text-xs"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+          />
+        </Field>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={secret}
+            onChange={(e) => setSecret(e.target.checked)}
+          />
+          Secret — stored sealed, masked in this list, readable only with Reveal
+        </label>
+      </form>
     </Modal>
   );
 }
