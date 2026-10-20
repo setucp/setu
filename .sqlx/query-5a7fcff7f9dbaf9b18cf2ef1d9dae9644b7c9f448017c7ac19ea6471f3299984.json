@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM site_resets WHERE site_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5a7fcff7f9dbaf9b18cf2ef1d9dae9644b7c9f448017c7ac19ea6471f3299984"
+}

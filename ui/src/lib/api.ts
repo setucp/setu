@@ -240,6 +240,33 @@ export function useRestoreBackup(siteId: string) {
   });
 }
 
+export function useSiteReset(siteId: string) {
+  return useQuery({
+    queryKey: ["sites", siteId, "reset"],
+    queryFn: () => api.getReset(siteId),
+  });
+}
+
+export function useSetSiteReset(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { backup_id: string; every_minutes: number }) => api.putReset(siteId, body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sites", siteId, "reset"] });
+    },
+  });
+}
+
+export function useClearSiteReset(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.deleteReset(siteId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sites", siteId, "reset"] });
+    },
+  });
+}
+
 export function useDeleteBackup(siteId: string) {
   const queryClient = useQueryClient();
   return useMutation({

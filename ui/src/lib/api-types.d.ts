@@ -793,6 +793,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sites/{id}/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The site's scheduled reset (viewer and above). */
+        get: operations["reset_get"];
+        /**
+         * Set the site's scheduled reset (operator and above): every
+         *     `every_minutes` the scheduler restores `backup_id`, skipping the
+         *     pre-restore backup. The first reset is one interval from now.
+         */
+        put: operations["reset_put"];
+        post?: never;
+        /** Stop the site's scheduled reset (operator and above); 404 when none. */
+        delete: operations["reset_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sites/{id}/restart": {
         parameters: {
             query?: never;
@@ -1382,6 +1405,29 @@ export interface components {
         ReadyOut: {
             database: string;
             status: string;
+        };
+        /** @description `GET /sites/{id}/reset`: the schedule, or `null`. */
+        ResetGetOut: {
+            reset?: null | components["schemas"]["ResetOut"];
+        };
+        /** @description A site's scheduled reset (0.1.4 §2). */
+        ResetOut: {
+            backup_id: string;
+            /** Format: int32 */
+            every_minutes: number;
+            /** Format: date-time */
+            last_reset_at: string;
+            /** Format: date-time */
+            next_reset_at: string;
+        };
+        ResetPutRequest: {
+            /** @description A completed backup of this site. */
+            backup_id: string;
+            /**
+             * Format: int32
+             * @description Minutes between resets, 15 to 10080 (a week).
+             */
+            every_minutes: number;
         };
         /** @description The plaintext of one env value. Holds a secret: `Debug` redacts it. */
         RevealOut: {
@@ -3689,6 +3735,146 @@ export interface operations {
                 content?: never;
             };
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    reset_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResetGetOut"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    reset_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetPutRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResetGetOut"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    reset_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -155,6 +155,7 @@ impl<'a> Backups<'a> {
             "SELECT id, site_id, server_id, site_short_id, site_name, domain, kind, taken_at,
                     size_bytes, status FROM backups
              WHERE site_id = $1 AND kind = 'scheduled' AND status <> 'deleted'
+               AND id NOT IN (SELECT backup_id FROM site_resets)
              ORDER BY taken_at DESC, id DESC
              OFFSET $2",
             site_id,
@@ -191,6 +192,7 @@ impl<'a> Backups<'a> {
                     size_bytes, status FROM backups
              WHERE kind IN ('pre_update', 'pre_restore', 'pre_delete')
                AND status <> 'deleted'
+               AND id NOT IN (SELECT backup_id FROM site_resets)
                AND taken_at < $1
              ORDER BY taken_at, id",
             cutoff,

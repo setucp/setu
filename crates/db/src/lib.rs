@@ -14,9 +14,9 @@ pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 pub use repo::{
     AgentCommand, Allocation, App, AppVersion, Apps, Audit, AuditEntry, Backup, Backups, Commands,
     CreateError, HeartbeatInput, HeartbeatOutcome, Job, Jobs, JoinError, JoinInput, LatestMetric,
-    Metrics, NewPlan, NewSite, Operator, Operators, Plan, Plans, Server, ServerStatus, Servers,
-    Session, Sessions, Settings, Site, Sites, WaitError, NOTIFY_CHANNEL, SELF_BACKUP,
-    SETUP_TOKEN_HASH, TLS_INTERNAL,
+    Metrics, NewPlan, NewSite, Operator, Operators, Plan, Plans, Resets, Server, ServerStatus,
+    Servers, Session, Sessions, Settings, Site, SiteReset, Sites, WaitError, NOTIFY_CHANNEL,
+    SELF_BACKUP, SETUP_TOKEN_HASH, TLS_INTERNAL,
 };
 pub use setu_common::{AppError, ErrorCode};
 
@@ -111,6 +111,10 @@ impl Db {
 
     pub fn backups(&self) -> Backups<'_> {
         Backups::new(&self.pool)
+    }
+
+    pub fn resets(&self) -> Resets<'_> {
+        Resets::new(&self.pool)
     }
 
     pub fn audit(&self) -> Audit<'_> {

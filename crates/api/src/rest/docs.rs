@@ -14,7 +14,9 @@ use super::apps::{
     PromptOut, PublishRequest, PublishResponse, ValidateRequest, ValidateResponse,
 };
 use super::auth::{LoginRequest, OperatorOut};
-use super::backups::{BackupJobResponse, BackupListOut, BackupOut};
+use super::backups::{
+    BackupJobResponse, BackupListOut, BackupOut, ResetGetOut, ResetOut, ResetPutRequest,
+};
 use super::jobs::{AuditEntryOut, AuditListOut, AuditQuery, JobListOut, JobsQuery};
 use super::operators::{CreateOperatorRequest, OperatorListOut, SetPasswordRequest};
 use super::panel::SelfBackupOut;
@@ -83,6 +85,9 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::backups::list,
         super::backups::create,
         super::backups::restore,
+        super::backups::reset_get,
+        super::backups::reset_put,
+        super::backups::reset_delete,
         super::backups::delete,
         super::backups::list_all,
         super::backups::delete_any,
@@ -150,6 +155,9 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         EnvGetOut,
         EnvPutRequest,
         BackupOut,
+        ResetGetOut,
+        ResetOut,
+        ResetPutRequest,
         BackupListOut,
         BackupJobResponse,
         JobListOut,

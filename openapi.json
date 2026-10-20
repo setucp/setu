@@ -2721,6 +2721,191 @@
         }
       }
     },
+    "/api/v1/sites/{id}/reset": {
+      "get": {
+        "tags": [
+          "super::backups"
+        ],
+        "summary": "The site's scheduled reset (viewer and above).",
+        "operationId": "reset_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetGetOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "super::backups"
+        ],
+        "summary": "Set the site's scheduled reset (operator and above): every\n`every_minutes` the scheduler restores `backup_id`, skipping the\npre-restore backup. The first reset is one interval from now.",
+        "operationId": "reset_put",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetGetOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "super::backups"
+        ],
+        "summary": "Stop the site's scheduled reset (operator and above); 404 when none.",
+        "operationId": "reset_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sites/{id}/restart": {
       "post": {
         "tags": [
@@ -4715,6 +4900,67 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "ResetGetOut": {
+        "type": "object",
+        "description": "`GET /sites/{id}/reset`: the schedule, or `null`.",
+        "properties": {
+          "reset": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResetOut"
+              }
+            ]
+          }
+        }
+      },
+      "ResetOut": {
+        "type": "object",
+        "description": "A site's scheduled reset (0.1.4 §2).",
+        "required": [
+          "backup_id",
+          "every_minutes",
+          "last_reset_at",
+          "next_reset_at"
+        ],
+        "properties": {
+          "backup_id": {
+            "type": "string"
+          },
+          "every_minutes": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "last_reset_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "next_reset_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ResetPutRequest": {
+        "type": "object",
+        "required": [
+          "backup_id",
+          "every_minutes"
+        ],
+        "properties": {
+          "backup_id": {
+            "type": "string",
+            "description": "A completed backup of this site."
+          },
+          "every_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes between resets, 15 to 10080 (a week)."
           }
         }
       },

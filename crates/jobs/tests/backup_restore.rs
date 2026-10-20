@@ -24,7 +24,9 @@ async fn backup_uses_60_minute_ttl() {
     );
     assert_eq!(agent.commands_of("backup")[0]["backup_id"], id.as_str());
 
-    restore::run(&ctx, &fx.site_id, &id).await.expect("restore");
+    restore::run(&ctx, &fx.site_id, &id, false)
+        .await
+        .expect("restore");
     let ttls: Vec<(String, u64)> = agent
         .ttls()
         .into_iter()
@@ -68,7 +70,7 @@ async fn restore_takes_pre_restore_backup_stops_restores_starts() {
         serde_json::json!({"backup_id": source}),
     )
     .await;
-    restore::run(&ctx, &fx.site_id, &source)
+    restore::run(&ctx, &fx.site_id, &source, false)
         .await
         .expect("restore");
 
@@ -100,12 +102,45 @@ async fn restore_takes_pre_restore_backup_stops_restores_starts() {
     // A failing restore marks the site failed at that step.
     agent.fail_next("restore");
     let (ctx, _logs) = ctx_with_logs(fx.db.clone(), &agent);
-    restore::run(&ctx, &fx.site_id, &source)
+    restore::run(&ctx, &fx.site_id, &source, false)
         .await
         .expect_err("restore fails");
     let site = fx.db.sites().get(&fx.site_id).await.unwrap();
     assert_eq!(
         (site.status.as_str(), site.failed_step.as_deref()),
         ("failed", Some("restore"))
+    );
+}
+
+#[tokio::test]
+async fn a_reset_restores_without_a_pre_restore_backup() {
+    let (_test_db, fx) = setup(&manifest_toml("0.1.0")).await;
+    let agent = FakeAgent::new();
+    let (ctx, _logs) = ctx_with_logs(fx.db.clone(), &agent);
+    provision::run(&ctx, &fx.site_id).await.expect("provision");
+    let id = backup::run(&ctx, &fx.site_id, "manual")
+        .await
+        .expect("backup");
+    let backups_before = agent.commands_of("backup").len();
+
+    restore::run(&ctx, &fx.site_id, &id, true)
+        .await
+        .expect("reset");
+
+    assert_eq!(agent.commands_of("backup").len(), backups_before);
+    assert_eq!(agent.commands_of("restore").len(), 1);
+    let kinds: Vec<String> = fx
+        .db
+        .backups()
+        .list_for_site(&fx.site_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|b| b.kind)
+        .collect();
+    assert_eq!(kinds, ["manual"]);
+    assert_eq!(
+        fx.db.sites().get(&fx.site_id).await.unwrap().status,
+        "running"
     );
 }

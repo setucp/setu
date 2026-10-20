@@ -16,6 +16,7 @@ export type Job = components["schemas"]["JobOut"];
 export type AuditEntry = components["schemas"]["AuditEntryOut"];
 export type EnvEntry = components["schemas"]["EnvEntryOut"];
 export type EnvPutBody = components["schemas"]["EnvPutRequest"];
+export type ResetGetOut = components["schemas"]["ResetGetOut"];
 export type Backup = components["schemas"]["BackupOut"];
 export type ManifestError = components["schemas"]["ManifestErrorOut"];
 export type ValidateResponse = components["schemas"]["ValidateResponse"];
@@ -290,6 +291,23 @@ export const api = {
     return request(`/api/v1/sites/${encodeURIComponent(siteId)}/backups`, {
       method: "POST",
     });
+  },
+
+  /** The site's scheduled reset, or `null`. */
+  getReset(siteId: string): Promise<ResetGetOut> {
+    return request(`/api/v1/sites/${encodeURIComponent(siteId)}/reset`);
+  },
+
+  /** Restore `backup_id` every `every_minutes`; the first is one interval away. */
+  putReset(siteId: string, body: { backup_id: string; every_minutes: number }): Promise<ResetGetOut> {
+    return request(`/api/v1/sites/${encodeURIComponent(siteId)}/reset`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+  },
+
+  deleteReset(siteId: string): Promise<void> {
+    return request(`/api/v1/sites/${encodeURIComponent(siteId)}/reset`, { method: "DELETE" });
   },
 
   restoreBackup(siteId: string, backupId: string): Promise<{ job: Job }> {

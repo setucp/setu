@@ -3,6 +3,29 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
+## 0.1.4 — 2026-10-20
+
+Spec: `docs/specs/2026-10-20-setu-0.1.4-design.md`.
+
+### Added
+
+- **Extra env variables.** On a site's Env tab, **Add variable** sets a
+  variable the app's manifest does not declare (for example a demo or
+  trusted-key switch). It can be secret, in which case it is sealed and
+  masked. It can be edited or removed, and it survives updates. If a later
+  version declares the same name, the manifest's rule takes over. `PUT
+  /api/v1/sites/{id}/env` gains `extra` and `remove`. Reserved names
+  (`PATH`, `LD_*`, `SETU_*`, systemd's) are refused.
+- **Scheduled resets.** On the Backups tab, **Use as reset point** restores
+  that backup every 15 minutes up to weekly. This is useful for public
+  demos and sandboxes. A reset takes no safety backup, and the reset point
+  is never pruned or deleted while the schedule stands. The API is `GET`,
+  `PUT` and `DELETE /api/v1/sites/{id}/reset`.
+
+### Migrations
+
+- `0003_site_resets.sql` (forward-only): the `site_resets` table.
+
 ## 0.1.3 — 2026-10-15
 
 ### Platforms

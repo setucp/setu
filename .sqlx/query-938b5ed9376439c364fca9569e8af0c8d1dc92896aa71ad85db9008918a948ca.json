@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT site_id, backup_id, every_minutes, last_reset_at FROM site_resets\n             ORDER BY site_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "site_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "site_resets",
+            "name": "site_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "backup_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "site_resets",
+            "name": "backup_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "every_minutes",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "site_resets",
+            "name": "every_minutes"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "last_reset_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "site_resets",
+            "name": "last_reset_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "938b5ed9376439c364fca9569e8af0c8d1dc92896aa71ad85db9008918a948ca"
+}

@@ -201,7 +201,12 @@ impl Worker {
                 let backup_id = payload_str("backup_id").ok_or_else(|| {
                     AppError::validation("restore_site job needs payload.backup_id")
                 })?;
-                crate::restore::run(&ctx, &site("restore_site")?, &backup_id).await
+                let reset = job
+                    .payload
+                    .get("reset")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                crate::restore::run(&ctx, &site("restore_site")?, &backup_id, reset).await
             }
             "delete_site" => {
                 if let Some(site_id) = job.site_id.as_deref() {
