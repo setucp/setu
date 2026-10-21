@@ -4,6 +4,10 @@
 //!
 //! A failure before `restore` (the data is untouched) leaves the site
 //! `running`; at or after `restore` it is `failed` with the step.
+//!
+//! A scheduled reset (0.1.4 §2, `reset`) passes `backup` without taking
+//! one: a sandbox reset every hour would otherwise keep a month of
+//! `pre_restore` copies.
 
 use setu_common::AppError;
 use setu_proto::Command;
@@ -15,8 +19,14 @@ pub const STEPS: &[&str] = &[
     "validate", "backup", "stop", "restore", "start", "health", "finish",
 ];
 
-/// Restore the site from `backup_id`; ends `running`.
-pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), AppError> {
+/// Restore the site from `backup_id`; ends `running`. `reset` skips the
+/// `pre_restore` backup.
+pub async fn run(
+    ctx: &JobCtx,
+    site_id: &str,
+    backup_id: &str,
+    reset: bool,
+) -> Result<(), AppError> {
     let site = ctx.db.sites().get(site_id).await?;
     let steps = Steps::run_from(ctx.cursor().await.as_deref(), STEPS);
     let manifest = load_manifest(&ctx.db, &site.app_id, &site.app_version).await?;
@@ -47,14 +57,16 @@ pub async fn run(ctx: &JobCtx, site_id: &str, backup_id: &str) -> Result<(), App
         let _ = ctx.db.sites().set_status(site_id, "running", None).await;
         e
     };
-    if let Err(e) = steps
-        .run(
-            ctx,
-            "backup",
-            crate::backup::take(ctx, &site, "pre_restore", "pre_backup_id"),
-        )
-        .await
-    {
+    let pre_backup = async {
+        if reset {
+            Ok(())
+        } else {
+            crate::backup::take(ctx, &site, "pre_restore", "pre_backup_id")
+                .await
+                .map(|_| ())
+        }
+    };
+    if let Err(e) = steps.run(ctx, "backup", pre_backup).await {
         return Err(untouched(e).await);
     }
     if let Err(e) = steps

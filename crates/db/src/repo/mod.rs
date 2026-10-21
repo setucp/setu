@@ -6,6 +6,7 @@ pub mod jobs;
 pub mod metrics;
 pub mod operators;
 pub mod plans;
+pub mod resets;
 pub mod servers;
 pub mod sessions;
 pub mod settings;
@@ -19,6 +20,7 @@ pub use jobs::{Job, Jobs};
 pub use metrics::{LatestMetric, Metrics};
 pub use operators::{Operator, Operators};
 pub use plans::{NewPlan, Plan, Plans};
+pub use resets::{Resets, SiteReset};
 pub use servers::{
     HeartbeatInput, HeartbeatOutcome, JoinError, JoinInput, Server, ServerStatus, Servers,
 };

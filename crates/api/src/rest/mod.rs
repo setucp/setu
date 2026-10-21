@@ -106,6 +106,12 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/sites/{id}/backups/{bid}", delete(backups::delete))
         .route("/sites/{id}/backups/{bid}/restore", post(backups::restore))
+        .route(
+            "/sites/{id}/reset",
+            get(backups::reset_get)
+                .put(backups::reset_put)
+                .delete(backups::reset_delete),
+        )
         .route("/backups", get(backups::list_all))
         .route("/backups/{bid}", delete(backups::delete_any))
         .route("/jobs", get(jobs::list))

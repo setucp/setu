@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
   type CreateSitePayload,
+  type EnvPutBody,
   type Operator,
   type PlanInput,
 } from "./client";
@@ -203,7 +204,7 @@ export function useSiteEnv(siteId: string) {
 export function usePutSiteEnv(siteId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (env: Record<string, string>) => api.putSiteEnv(siteId, env),
+    mutationFn: (body: EnvPutBody) => api.putSiteEnv(siteId, body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["sites", siteId, "env"] });
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
@@ -235,6 +236,33 @@ export function useRestoreBackup(siteId: string) {
     mutationFn: (backupId: string) => api.restoreBackup(siteId, backupId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+export function useSiteReset(siteId: string) {
+  return useQuery({
+    queryKey: ["sites", siteId, "reset"],
+    queryFn: () => api.getReset(siteId),
+  });
+}
+
+export function useSetSiteReset(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { backup_id: string; every_minutes: number }) => api.putReset(siteId, body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sites", siteId, "reset"] });
+    },
+  });
+}
+
+export function useClearSiteReset(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.deleteReset(siteId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sites", siteId, "reset"] });
     },
   });
 }

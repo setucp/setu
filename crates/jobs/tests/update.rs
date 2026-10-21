@@ -358,3 +358,43 @@ async fn update_rollback_failure_marks_failed() {
     assert_eq!(site.status, "failed");
     assert_eq!(site.failed_step.as_deref(), Some("rollback"));
 }
+
+#[tokio::test]
+async fn extra_vars_survive_an_update_unless_the_new_version_declares_them() {
+    let (_test_db, fx, agent) = provisioned(&labeled("0.1.0", "old")).await;
+    let (env_ctx, _) = ctx_with_logs(fx.db.clone(), &agent);
+    let extras = setu_jobs::env_update::EnvChanges {
+        extra: std::collections::BTreeMap::from([
+            ("KEEP_ME".to_string(), ("kept".to_string(), true)),
+            ("HELLO_NEXT".to_string(), ("operator".to_string(), false)),
+        ]),
+        ..Default::default()
+    };
+    setu_jobs::env_update::run(&env_ctx, &fx.site_id, &extras)
+        .await
+        .expect("extras");
+    let next = labeled("0.1.1", "new").replace(
+        "HELLO_PORT = { from = \"port\" }",
+        "HELLO_PORT = { from = \"port\" }\nHELLO_NEXT = { value = \"rule\" }",
+    );
+    publish_version(&fx.db, &next).await;
+    let (ctx, _job_id, _logs) = job_ctx(
+        &fx.db,
+        &agent,
+        "update_site",
+        &fx.site_id,
+        serde_json::json!({"to_version": "0.1.1"}),
+    )
+    .await;
+    update::run(&ctx, &fx.site_id, "0.1.1")
+        .await
+        .expect("update must succeed");
+
+    let written = agent.write_env_calls().last().unwrap().clone();
+    assert!(written
+        .iter()
+        .any(|v| v.name == "KEEP_ME" && v.value == "kept" && v.secret));
+    let next_vars: Vec<_> = written.iter().filter(|v| v.name == "HELLO_NEXT").collect();
+    assert_eq!(next_vars.len(), 1);
+    assert_eq!(next_vars[0].value, "rule", "the new version's rule wins");
+}

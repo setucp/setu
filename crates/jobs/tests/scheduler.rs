@@ -171,3 +171,77 @@ async fn scheduler_enqueues_delete_backup_beyond_seven() {
         "seven scheduled, recent pre_delete, manual"
     );
 }
+
+#[tokio::test]
+async fn scheduler_resets_a_site_when_due_once_per_window() {
+    let (test_db, fx) = setup(&manifest_toml("0.1.0")).await;
+    fx.db
+        .sites()
+        .set_status(&fx.site_id, "running", None)
+        .await
+        .unwrap();
+    let site = fx.db.sites().get(&fx.site_id).await.unwrap();
+    let point = fx.db.backups().create(&site, "scheduled").await.unwrap();
+    exec(
+        &test_db,
+        "UPDATE backups SET status = 'completed', taken_at = '2026-01-01T00:00:00Z' WHERE id = $1",
+        &point.id,
+    )
+    .await;
+    let t0 = Utc.with_ymd_and_hms(2026, 10, 9, 12, 0, 0).unwrap();
+    fx.db
+        .resets()
+        .set(&fx.site_id, &point.id, 60, t0)
+        .await
+        .unwrap();
+    let clock = FixedClock::new(t0 + chrono::Duration::minutes(30));
+    let cfg = config();
+
+    let r = Scheduler::tick(&fx.db, &clock, &cfg).await.unwrap();
+    assert!(r.resets.is_empty(), "not due yet: {r:?}");
+
+    // Two hours late: one reset, not two.
+    clock.set(t0 + chrono::Duration::minutes(125));
+    let r = Scheduler::tick(&fx.db, &clock, &cfg).await.unwrap();
+    assert_eq!(r.resets, std::slice::from_ref(&fx.site_id));
+    let job = fx
+        .db
+        .jobs()
+        .active_for_site(&fx.site_id)
+        .await
+        .unwrap()
+        .expect("job");
+    assert_eq!(job.kind, "restore_site");
+    assert_eq!(job.payload["backup_id"], point.id.as_str());
+    assert_eq!(job.payload["reset"], true);
+    let r = Scheduler::tick(&fx.db, &clock, &cfg).await.unwrap();
+    assert!(r.resets.is_empty(), "{r:?}");
+    common::lease_to_test_worker(&fx.db, &job.id).await;
+    common::finish_job(&fx.db, &job.id, true).await;
+    let r = Scheduler::tick(&fx.db, &clock, &cfg).await.unwrap();
+    assert!(r.resets.is_empty(), "the next is an interval later: {r:?}");
+
+    // A stopped site is not reset.
+    clock.set(t0 + chrono::Duration::minutes(200));
+    fx.db
+        .sites()
+        .set_status(&fx.site_id, "stopped", None)
+        .await
+        .unwrap();
+    let r = Scheduler::tick(&fx.db, &clock, &cfg).await.unwrap();
+    assert!(r.resets.is_empty(), "{r:?}");
+
+    // The reset point is never pruned, even as an old scheduled copy.
+    for day in 1..=9 {
+        let row = fx.db.backups().create(&site, "scheduled").await.unwrap();
+        exec(
+            &test_db,
+            &format!("UPDATE backups SET taken_at = '2026-10-{day:02}T03:00:00Z' WHERE id = $1"),
+            &row.id,
+        )
+        .await;
+    }
+    let r = Scheduler::tick(&fx.db, &clock, &cfg).await.unwrap();
+    assert!(!r.deletes.contains(&point.id), "{r:?}");
+    assert!(fx.db.resets().is_reset_point(&point.id).await.unwrap());
+}

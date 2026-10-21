@@ -65,6 +65,8 @@ pub struct TickReport {
     pub backups: Vec<String>,
     /// Backup ids that got a `delete_backup`.
     pub deletes: Vec<String>,
+    /// Site ids that got a scheduled reset (`restore_site` with `reset`).
+    pub resets: Vec<String>,
 }
 
 /// Background scheduler.
@@ -83,10 +85,12 @@ impl Scheduler {
             loop {
                 every.tick().await;
                 match Self::tick(&db, clock.as_ref(), &config).await {
-                    Ok(r) if r.backups.is_empty() && r.deletes.is_empty() => {}
+                    Ok(r)
+                        if r.backups.is_empty() && r.deletes.is_empty() && r.resets.is_empty() => {}
                     Ok(r) => tracing::info!(
                         backups = r.backups.len(),
                         deletes = r.deletes.len(),
+                        resets = r.resets.len(),
                         "scheduler enqueued jobs"
                     ),
                     Err(e) => tracing::error!(error = %e, "scheduler tick failed"),
@@ -136,6 +140,8 @@ impl Scheduler {
             }
         }
 
+        report.resets = enqueue_due_resets(db, now, &sites).await?;
+
         let mut expired = Vec::new();
         for site in &sites {
             expired.extend(
@@ -176,6 +182,59 @@ impl Scheduler {
         db.sessions().purge_expired().await?;
         Ok(report)
     }
+}
+
+/// Scheduled resets (0.1.4 §2): restore each site's reset point once
+/// its interval has passed, skipping a busy or stopped site until a later
+/// tick. One reset per missed window, never a backlog. Returns the reset
+/// site ids.
+async fn enqueue_due_resets(
+    db: &Db,
+    now: DateTime<Utc>,
+    sites: &[setu_db::Site],
+) -> Result<Vec<String>, AppError> {
+    let mut resets = Vec::new();
+    for reset in db.resets().list().await? {
+        if now < reset.next_at() {
+            continue;
+        }
+        let Some(site) = sites.iter().find(|s| s.id == reset.site_id) else {
+            continue;
+        };
+        if site.status != "running" {
+            continue;
+        }
+        let usable = db
+            .backups()
+            .get(&reset.backup_id)
+            .await
+            .is_ok_and(|b| b.status == "completed");
+        if !usable {
+            continue;
+        }
+        if db.jobs().active_for_site(&site.id).await?.is_some() {
+            continue;
+        }
+        let payload = serde_json::json!({ "backup_id": reset.backup_id, "reset": true });
+        match db
+            .jobs()
+            .enqueue(
+                "restore_site",
+                Some(&site.id),
+                Some(&site.server_id),
+                Some(&payload),
+            )
+            .await
+        {
+            Ok(_) => {
+                db.resets().touch(&site.id, now).await?;
+                resets.push(site.id.clone());
+            }
+            Err(e) if e.code == setu_common::ErrorCode::Conflict => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(resets)
 }
 
 /// Today's (local) due time of `site_id`'s nightly backup:

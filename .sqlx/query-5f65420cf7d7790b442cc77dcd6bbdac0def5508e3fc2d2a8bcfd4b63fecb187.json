@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, site_id, server_id, site_short_id, site_name, domain, kind, taken_at,\n                    size_bytes, status FROM backups\n             WHERE site_id = $1 AND kind = 'scheduled' AND status <> 'deleted'\n             ORDER BY taken_at DESC, id DESC\n             OFFSET $2",
+  "query": "SELECT id, site_id, server_id, site_short_id, site_name, domain, kind, taken_at,\n                    size_bytes, status FROM backups\n             WHERE kind IN ('pre_update', 'pre_restore', 'pre_delete')\n               AND status <> 'deleted'\n               AND id NOT IN (SELECT backup_id FROM site_resets)\n               AND taken_at < $1\n             ORDER BY taken_at, id",
   "describe": {
     "columns": [
       {
@@ -116,8 +116,7 @@
     ],
     "parameters": {
       "Left": [
-        "Text",
-        "Int8"
+        "Timestamptz"
       ]
     },
     "nullable": [
@@ -133,5 +132,5 @@
       false
     ]
   },
-  "hash": "f21133d60109bbbb12b4c34395cc8a3b676f2c147abe7c9f0eea6df3e9471c0f"
+  "hash": "5f65420cf7d7790b442cc77dcd6bbdac0def5508e3fc2d2a8bcfd4b63fecb187"
 }

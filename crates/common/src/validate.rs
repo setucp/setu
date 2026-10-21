@@ -48,9 +48,75 @@ pub fn no_control(s: &str) -> bool {
     !s.chars().any(char::is_control)
 }
 
+/// Most extra (operator-added) env variables one site may carry.
+pub const MAX_EXTRA_ENV: usize = 64;
+
+/// Names the process environment or systemd gives meaning to, which an
+/// operator-added variable must not shadow.
+const RESERVED_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "PWD",
+    "TMPDIR",
+    "LANG",
+    "NOTIFY_SOCKET",
+];
+const RESERVED_ENV_PREFIXES: &[&str] = &[
+    "LD_",
+    "SYSTEMD_",
+    "LISTEN_",
+    "INVOCATION_",
+    "CREDENTIALS_",
+    "SETU_",
+];
+
+/// An extra env variable's name: `^[A-Z_][A-Z0-9_]{0,127}$` and not
+/// reserved. Whether it collides with the site's manifest is the
+/// caller's check.
+pub fn extra_env_name(name: &str) -> Result<(), String> {
+    let mut chars = name.chars();
+    let shape = name.len() <= 128
+        && chars
+            .next()
+            .is_some_and(|c| c.is_ascii_uppercase() || c == '_')
+        && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    if !shape {
+        return Err(format!(
+            "env var name {name:?} must be upper-case letters, digits and _ (not starting with a digit)"
+        ));
+    }
+    if RESERVED_ENV.contains(&name) || RESERVED_ENV_PREFIXES.iter().any(|p| name.starts_with(p)) {
+        return Err(format!("env var {name} is reserved"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extra_env_names() {
+        for ok in ["VYASA_DEMO__ENABLED", "_X", "A1"] {
+            assert!(extra_env_name(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "",
+            "1A",
+            "lower",
+            "A-B",
+            "PATH",
+            "LD_PRELOAD",
+            "SETU_X",
+            "SYSTEMD_EXEC_PID",
+        ] {
+            assert!(extra_env_name(bad).is_err(), "{bad}");
+        }
+        assert!(extra_env_name(&"A".repeat(129)).is_err());
+    }
 
     #[test]
     fn validate_exec_rejects_dotdot_and_newline() {

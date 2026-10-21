@@ -2039,3 +2039,91 @@ async fn version_prompts_lists_only_prompt_rules_and_no_values() {
         .expect("sends");
     assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn a_reset_schedule_is_set_read_guarded_and_stopped() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let viewer = srv.login_as("viewer").await;
+    let (site_id, _server_id) = running_site(&srv, &owner, "reset").await;
+    let take: Value = owner
+        .post(srv.url(&format!("/api/v1/sites/{site_id}/backups")))
+        .send()
+        .await
+        .expect("backup sends")
+        .json()
+        .await
+        .expect("json");
+    let bk_job = take["job"]["id"].as_str().expect("job id").to_string();
+    poll_job(&srv, &owner, &bk_job).await.expect("backup done");
+    let list: Value = owner
+        .get(srv.url(&format!("/api/v1/sites/{site_id}/backups")))
+        .send()
+        .await
+        .expect("list")
+        .json()
+        .await
+        .expect("json");
+    let bid = list["backups"][0]["id"].as_str().expect("bid").to_string();
+    let url = srv.url(&format!("/api/v1/sites/{site_id}/reset"));
+
+    let none: Value = viewer
+        .get(&url)
+        .send()
+        .await
+        .expect("get")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(none["reset"], Value::Null);
+    let denied = viewer
+        .put(&url)
+        .json(&json!({"backup_id": bid, "every_minutes": 60}))
+        .send()
+        .await
+        .expect("put");
+    assert_eq!(denied.status(), reqwest::StatusCode::FORBIDDEN);
+    for (body, why) in [
+        (json!({"backup_id": bid, "every_minutes": 5}), "between 15"),
+        (json!({"backup_id": "nope", "every_minutes": 60}), ""),
+    ] {
+        let bad = owner.put(&url).json(&body).send().await.expect("put");
+        assert!(bad.status().is_client_error(), "{body}");
+        let text = bad.text().await.unwrap_or_default();
+        assert!(text.contains(why), "{text}");
+    }
+
+    let set = owner
+        .put(&url)
+        .json(&json!({"backup_id": bid, "every_minutes": 60}))
+        .send()
+        .await
+        .expect("put");
+    assert_eq!(set.status(), reqwest::StatusCode::OK);
+    let got: Value = viewer
+        .get(&url)
+        .send()
+        .await
+        .expect("get")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(got["reset"]["backup_id"], json!(bid));
+    assert_eq!(got["reset"]["every_minutes"], json!(60));
+    assert!(got["reset"]["next_reset_at"].is_string());
+
+    // The reset point cannot be deleted while the schedule stands.
+    let del = owner
+        .delete(srv.url(&format!("/api/v1/sites/{site_id}/backups/{bid}")))
+        .send()
+        .await
+        .expect("delete");
+    assert_eq!(del.status(), reqwest::StatusCode::CONFLICT);
+    assert!(del.text().await.unwrap_or_default().contains("reset point"));
+
+    let stop = owner.delete(&url).send().await.expect("stop");
+    assert_eq!(stop.status(), reqwest::StatusCode::NO_CONTENT);
+    let again = owner.delete(&url).send().await.expect("stop");
+    assert_eq!(again.status(), reqwest::StatusCode::NOT_FOUND);
+}

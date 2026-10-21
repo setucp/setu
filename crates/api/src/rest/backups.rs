@@ -9,7 +9,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use setu_common::AppError;
 use utoipa::ToSchema;
 
@@ -276,6 +276,11 @@ async fn enqueue_delete(
     if backup.status == "deleted" {
         return Err(AppError::conflict("backup already deleted"));
     }
+    if state.db.resets().is_reset_point(&backup.id).await? {
+        return Err(AppError::conflict(
+            "backup is the site's reset point; stop the scheduled reset first",
+        ));
+    }
     if state
         .db
         .jobs()
@@ -313,4 +318,154 @@ async fn enqueue_delete(
             job: JobOut::from_row(&job),
         }),
     ))
+}
+
+/// A site's scheduled reset (0.1.4 §2).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ResetOut {
+    pub backup_id: String,
+    pub every_minutes: i32,
+    pub last_reset_at: chrono::DateTime<chrono::Utc>,
+    pub next_reset_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl ResetOut {
+    fn from_row(r: &setu_db::SiteReset) -> Self {
+        Self {
+            backup_id: r.backup_id.clone(),
+            every_minutes: r.every_minutes,
+            last_reset_at: r.last_reset_at,
+            next_reset_at: r.next_at(),
+        }
+    }
+}
+
+/// `GET /sites/{id}/reset`: the schedule, or `null`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ResetGetOut {
+    pub reset: Option<ResetOut>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ResetPutRequest {
+    /// A completed backup of this site.
+    pub backup_id: String,
+    /// Minutes between resets, 15 to 10080 (a week).
+    pub every_minutes: i32,
+}
+
+/// The site's scheduled reset (viewer and above).
+#[utoipa::path(
+    get,
+    path = "/api/v1/sites/{id}/reset",
+    params(("id" = String, Path, description = "Site id")),
+    responses(
+        (status = 200, body = ResetGetOut),
+        (status = 401, body = super::ErrorBody),
+        (status = 404, body = super::ErrorBody),
+    )
+)]
+pub async fn reset_get(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    require_role(&session, Role::Viewer).await?;
+    let site = state.db.sites().get(&id).await?;
+    let reset = state.db.resets().get(&site.id).await?;
+    Ok(Json(ResetGetOut {
+        reset: reset.as_ref().map(ResetOut::from_row),
+    }))
+}
+
+/// Set the site's scheduled reset (operator and above): every
+/// `every_minutes` the scheduler restores `backup_id`, skipping the
+/// pre-restore backup. The first reset is one interval from now.
+#[utoipa::path(
+    put,
+    path = "/api/v1/sites/{id}/reset",
+    params(("id" = String, Path, description = "Site id")),
+    request_body = ResetPutRequest,
+    responses(
+        (status = 200, body = ResetGetOut),
+        (status = 400, body = super::ErrorBody),
+        (status = 401, body = super::ErrorBody),
+        (status = 403, body = super::ErrorBody),
+        (status = 404, body = super::ErrorBody),
+    )
+)]
+pub async fn reset_put(
+    State(state): State<AppState>,
+    session: Session,
+    ip: ClientIp,
+    Path(id): Path<String>,
+    super::ApiJson(body): super::ApiJson<ResetPutRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = require_role(&session, Role::Operator).await?;
+    let site = state.db.sites().get(&id).await?;
+    if !(15..=10_080).contains(&body.every_minutes) {
+        return Err(AppError::validation(
+            "every_minutes must be between 15 and 10080",
+        ));
+    }
+    let backup = state.db.backups().get(&body.backup_id).await?;
+    if backup.site_id.as_deref() != Some(site.id.as_str()) {
+        return Err(AppError::validation("backup does not belong to this site"));
+    }
+    if backup.status != "completed" {
+        return Err(AppError::validation(format!(
+            "backup {} is {}",
+            backup.id, backup.status
+        )));
+    }
+    let row = state
+        .db
+        .resets()
+        .set(&site.id, &backup.id, body.every_minutes, state.clock.now())
+        .await?;
+    audit(
+        &state.db,
+        Some(&caller.id),
+        "site.reset_set",
+        Some(&site.id),
+        ip.as_deref(),
+    )
+    .await;
+    Ok(Json(ResetGetOut {
+        reset: Some(ResetOut::from_row(&row)),
+    }))
+}
+
+/// Stop the site's scheduled reset (operator and above); 404 when none.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/sites/{id}/reset",
+    params(("id" = String, Path, description = "Site id")),
+    responses(
+        (status = 204),
+        (status = 401, body = super::ErrorBody),
+        (status = 403, body = super::ErrorBody),
+        (status = 404, body = super::ErrorBody),
+    )
+)]
+pub async fn reset_delete(
+    State(state): State<AppState>,
+    session: Session,
+    ip: ClientIp,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = require_role(&session, Role::Operator).await?;
+    let site = state.db.sites().get(&id).await?;
+    if !state.db.resets().clear(&site.id).await? {
+        return Err(AppError::not_found("this site has no scheduled reset"));
+    }
+    audit(
+        &state.db,
+        Some(&caller.id),
+        "site.reset_clear",
+        Some(&site.id),
+        ip.as_deref(),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
 }

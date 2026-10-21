@@ -103,4 +103,48 @@ describe("env", () => {
     await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith("job-env"));
     expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ env: { PORT: "20002" } });
   });
+
+  it("adds an extra variable and removes one", async () => {
+    const withExtra = {
+      env: [
+        ...envBody.env.map((e) => ({ ...e, extra: false })),
+        { name: "DEMO_MODE", value: "true", masked: false, secret: false, once: false, has_value: true, extra: true },
+      ],
+    };
+    const calls = stubFetch((url, method) => {
+      if (url.endsWith("/api/v1/sites/s1/env") && method === "PUT") {
+        return json({ site: { id: "s1" }, job: { id: "job-env", status: "queued" } }, 202);
+      }
+      if (url.endsWith("/api/v1/sites/s1/env")) return json(withExtra);
+      return notFound();
+    });
+    const user = userEvent.setup();
+    renderWithClient(<SiteEnv siteId="s1" />);
+    await screen.findByText("DEMO_MODE");
+    // Only extra rows can be removed.
+    expect(screen.getAllByRole("button", { name: /^remove /i })).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: /add variable/i }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText(/^name/i), "port");
+    expect(dialog).toHaveTextContent(/already has a variable/i);
+    await user.clear(within(dialog).getByLabelText(/^name/i));
+    await user.type(within(dialog).getByLabelText(/^name/i), "trusted_keys");
+    await user.type(within(dialog).getByLabelText(/^value/i), "abc");
+    await user.click(within(dialog).getByRole("checkbox"));
+    await user.click(within(dialog).getByRole("button", { name: /add and restart/i }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === "PUT")?.body).toEqual({
+        extra: { TRUSTED_KEYS: { value: "abc", secret: true } },
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /remove demo_mode/i }));
+    await user.click(await screen.findByTestId("confirm-accept"));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.method === "PUT").at(-1)?.body).toEqual({
+        remove: ["DEMO_MODE"],
+      }),
+    );
+  }, 20000);
 });
