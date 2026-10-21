@@ -3,7 +3,7 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
-## 0.1.6 — 2026-10-22
+## 0.1.6 — 2026-10-23
 
 ### Fixed
 
@@ -11,6 +11,8 @@ matching the tag.
   (colours, cursor moves, window titles) from each journal line, so an app
   that colours its logs under systemd no longer fills the Logs tab with
   `ESC[32m` noise.
+- **Apps page on phones.** A followed manifest URL no longer widens the
+  app card past the screen, which made the whole page scroll sideways.
 
 ## 0.1.5 — 2026-10-21
 

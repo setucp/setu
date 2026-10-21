@@ -84,7 +84,7 @@ function AppCard({ app }: { app: AppInfo }) {
   const list = versions.data ?? [];
   const [latest, ...older] = list;
   return (
-    <li className="group flex flex-col rounded-lg border bg-card p-5 shadow-card transition-colors hover:border-primary/40">
+    <li className="group flex min-w-0 flex-col rounded-lg border bg-card p-5 shadow-card transition-colors hover:border-primary/40">
       <div className="flex items-start gap-3">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary-subtle text-link ring-1 ring-primary/15">
           <Package className="size-5" aria-hidden="true" />
