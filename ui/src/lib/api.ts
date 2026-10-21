@@ -70,6 +70,26 @@ export function useAppVersions(appId: string | null) {
   });
 }
 
+export function useCheckApp(appId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.checkApp(appId),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["apps"] });
+    },
+  });
+}
+
+export function useClearAppSource(appId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.clearAppSource(appId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["apps"] });
+    },
+  });
+}
+
 export function usePlans() {
   return useQuery({ queryKey: ["plans"], queryFn: () => api.listPlans() });
 }
@@ -178,8 +198,7 @@ export function useCreatePlan() {
 export function useUpdatePlan() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, input }: { id: string; input: PlanInput }) =>
-      api.updatePlan(id, input),
+    mutationFn: ({ id, input }: { id: string; input: PlanInput }) => api.updatePlan(id, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["plans"] });
     },
@@ -289,8 +308,7 @@ export function useRevealEnv(siteId: string) {
 export function useSiteAction(siteId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (action: "start" | "stop" | "restart" | "retry") =>
-      api.siteAction(siteId, action),
+    mutationFn: (action: "start" | "stop" | "restart" | "retry") => api.siteAction(siteId, action),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["sites", siteId] });
       void queryClient.invalidateQueries({ queryKey: ["sites"] });
@@ -329,15 +347,8 @@ export function useOperators() {
 export function useCreateOperator() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      email,
-      password,
-      role,
-    }: {
-      email: string;
-      password: string;
-      role: string;
-    }) => api.createOperator(email, password, role),
+    mutationFn: ({ email, password, role }: { email: string; password: string; role: string }) =>
+      api.createOperator(email, password, role),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["operators"] });
     },

@@ -1,7 +1,7 @@
 {
   "name": "setu-ui",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.1.5",
   "type": "module",
   "scripts": {
     "gen:api": "tsx scripts/gen-api.ts",

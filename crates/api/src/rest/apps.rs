@@ -1,11 +1,13 @@
 //! `GET /api/v1/apps`, `POST /apps/validate`, `POST /apps`,
-//! `GET /api/v1/apps/{id}/versions`.
+//! `GET /api/v1/apps/{id}/versions`, `POST /apps/{id}/check`,
+//! `DELETE /apps/{id}/source`.
 //!
 //! Publishing accepts either pasted TOML or a URL. URL fetches carry the
 //! same guard rules as the installer: public hosts only (private, loopback,
 //! link-local and other special ranges are rejected before connecting), a
 //! 1 MiB response cap and a 10 s timeout, with redirects disabled so a
-//! public URL cannot bounce to an internal one.
+//! public URL cannot bounce to an internal one. An app published from a
+//! URL follows it (0.1.5 §1, [`crate::follow`]).
 
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
@@ -35,6 +37,33 @@ pub struct AppOut {
     pub id: String,
     pub name: String,
     pub homepage: Option<String>,
+    /// The manifest URL the app follows, if any.
+    pub source: Option<AppSourceOut>,
+}
+
+/// A followed manifest URL and its last check.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AppSourceOut {
+    pub url: String,
+    pub checked_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_error: Option<String>,
+}
+
+impl From<setu_db::AppSource> for AppSourceOut {
+    fn from(s: setu_db::AppSource) -> Self {
+        Self {
+            url: s.url,
+            checked_at: s.checked_at,
+            last_error: s.last_error,
+        }
+    }
+}
+
+/// `POST /apps/{id}/check`: the version the check published, if any.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CheckOut {
+    pub published: Option<String>,
+    pub source: AppSourceOut,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -103,10 +132,19 @@ pub async fn list(
 ) -> Result<impl IntoResponse, AppError> {
     require_role(&session, Role::Viewer).await?;
     let apps = state.db.apps().list().await?;
+    let mut sources: std::collections::HashMap<String, setu_db::AppSource> = state
+        .db
+        .app_sources()
+        .list()
+        .await?
+        .into_iter()
+        .map(|s| (s.app_id.clone(), s))
+        .collect();
     Ok(Json(AppListOut {
         apps: apps
             .into_iter()
             .map(|a| AppOut {
+                source: sources.remove(&a.id).map(Into::into),
                 id: a.id,
                 name: a.name,
                 homepage: a.homepage,
@@ -154,9 +192,9 @@ pub async fn publish(
     ApiJson(body): ApiJson<PublishRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let caller = require_role(&session, Role::Operator).await?;
-    let src = match (body.toml, body.url) {
+    let src = match (body.toml, body.url.as_deref()) {
         (Some(toml), None) => toml,
-        (None, Some(url)) => fetch_manifest_url(&url).await?,
+        (None, Some(url)) => state.fetcher.fetch(url).await?,
         (Some(_), Some(_)) => {
             return Err(AppError::validation("provide exactly one of toml, url"));
         }
@@ -171,6 +209,10 @@ pub async fn publish(
     })?;
     let row = state.db.apps().upsert_version(&json).await?;
     let app = state.db.apps().get(&row.app_id).await?;
+    let source = match body.url.as_deref() {
+        Some(url) => Some(state.db.app_sources().set(&app.id, url).await?),
+        None => state.db.app_sources().get(&app.id).await?,
+    };
     audit(
         &state.db,
         Some(&caller.id),
@@ -186,6 +228,7 @@ pub async fn publish(
                 id: app.id,
                 name: app.name,
                 homepage: app.homepage,
+                source: source.map(Into::into),
             },
             version: AppVersionOut {
                 id: row.id,
@@ -231,6 +274,84 @@ pub async fn versions(
     }))
 }
 
+/// Fetch the app's followed URL now and publish its version when new
+/// (operator and above).
+#[utoipa::path(
+    post,
+    path = "/api/v1/apps/{id}/check",
+    params(("id" = String, Path, description = "App id")),
+    responses(
+        (status = 200, body = CheckOut),
+        (status = 400, body = super::ErrorBody),
+        (status = 401, body = super::ErrorBody),
+        (status = 403, body = super::ErrorBody),
+        (status = 404, body = super::ErrorBody),
+    )
+)]
+pub async fn check(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    require_role(&session, Role::Operator).await?;
+    let source = state
+        .db
+        .app_sources()
+        .get(&id)
+        .await?
+        .ok_or_else(|| AppError::not_found("app follows no manifest URL"))?;
+    let published = crate::follow::check(
+        &state.db,
+        state.fetcher.as_ref(),
+        state.clock.as_ref(),
+        &source,
+    )
+    .await?;
+    let source = state
+        .db
+        .app_sources()
+        .get(&id)
+        .await?
+        .ok_or_else(|| AppError::not_found("app follows no manifest URL"))?;
+    Ok(Json(CheckOut {
+        published,
+        source: source.into(),
+    }))
+}
+
+/// Stop following the app's manifest URL (operator and above).
+#[utoipa::path(
+    delete,
+    path = "/api/v1/apps/{id}/source",
+    params(("id" = String, Path, description = "App id")),
+    responses(
+        (status = 204),
+        (status = 401, body = super::ErrorBody),
+        (status = 403, body = super::ErrorBody),
+        (status = 404, body = super::ErrorBody),
+    )
+)]
+pub async fn clear_source(
+    State(state): State<AppState>,
+    session: Session,
+    ip: ClientIp,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = require_role(&session, Role::Operator).await?;
+    if !state.db.app_sources().clear(&id).await? {
+        return Err(AppError::not_found("app follows no manifest URL"));
+    }
+    audit(
+        &state.db,
+        Some(&caller.id),
+        "app.source_clear",
+        Some(&id),
+        ip.as_deref(),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 fn validate_toml(src: &str) -> ValidateResponse {
     match setu_manifest::Manifest::parse(src) {
         Ok(_) => ValidateResponse {
@@ -251,7 +372,7 @@ fn validate_toml(src: &str) -> ValidateResponse {
     }
 }
 
-fn parse_or_validation(src: &str) -> Result<setu_manifest::Manifest, AppError> {
+pub(crate) fn parse_or_validation(src: &str) -> Result<setu_manifest::Manifest, AppError> {
     setu_manifest::Manifest::parse(src).map_err(|errors| {
         let first = errors
             .iter()
@@ -325,7 +446,7 @@ fn is_non_public(ip: IpAddr) -> bool {
 /// the URL keeps its host name, so https still verifies the certificate
 /// against it (SNI). This closes the TOCTOU the Task 7 ruling accepted
 /// (M3, R138).
-async fn fetch_manifest_url(url_str: &str) -> Result<String, AppError> {
+pub(crate) async fn fetch_manifest_url(url_str: &str) -> Result<String, AppError> {
     let url =
         url::Url::parse(url_str).map_err(|_| AppError::validation("url is not a valid URL"))?;
     if url.scheme() != "http" && url.scheme() != "https" {

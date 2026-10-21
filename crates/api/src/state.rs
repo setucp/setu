@@ -40,6 +40,8 @@ pub struct AppState {
     pub agent: Arc<dyn AgentClient>,
     /// Wakes `GET /agent/v1/commands` long polls on enqueue.
     pub notifier: Notifier,
+    /// Fetches followed manifest URLs (tests swap in a fake).
+    pub fetcher: Arc<dyn crate::follow::ManifestFetcher>,
     login_failures: Arc<tokio::sync::Mutex<HashMap<IpAddr, Vec<Instant>>>>,
     agent_polls: Arc<tokio::sync::Mutex<HashMap<String, Vec<Instant>>>>,
     agent_poll_limit: usize,
@@ -76,6 +78,7 @@ impl AppState {
             clock,
             agent,
             notifier,
+            fetcher: Arc::new(crate::follow::HttpFetcher),
             login_failures: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             agent_polls: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             agent_poll_limit: MAX_AGENT_POLLS,
@@ -87,6 +90,13 @@ impl AppState {
     #[allow(clippy::return_self_not_must_use)] // reviewed: kept as-is (R150)
     pub fn with_agent_poll_limit(mut self, limit: usize) -> Self {
         self.agent_poll_limit = limit;
+        self
+    }
+
+    /// Replace the manifest fetcher (tests serve manifests from memory).
+    #[must_use]
+    pub fn with_fetcher(mut self, fetcher: Arc<dyn crate::follow::ManifestFetcher>) -> Self {
+        self.fetcher = fetcher;
         self
     }
 

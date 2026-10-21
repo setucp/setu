@@ -134,7 +134,8 @@ the first line of stdin.
 
 ## Upgrading
 
-Re-run `install.sh --version <new> …` with the same flags: it verifies
+Run `setu upgrade` as root (0.1.5; [OPERATIONS.md](OPERATIONS.md#upgrading)),
+or re-run `install.sh --version <new> …` with the same flags: it verifies
 the new archive, replaces the binary and restarts `setu.service`
 (migrations run on boot) and, when the local agent is installed,
 `setu-agent.service` (only when the binary changed; R139). Upgrade other

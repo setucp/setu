@@ -1,11 +1,83 @@
-import { ExternalLink, Package } from "lucide-react";
-import { useApps, useAppVersions } from "@/lib/api";
+import { ExternalLink, Package, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
+import { useApps, useAppVersions, useCheckApp, useClearAppSource } from "@/lib/api";
 import { ApiError, type AppInfo } from "@/lib/client";
 import { EmptyState } from "./EmptyState";
 import { ErrorText } from "./ErrorText";
+import { RelativeTime } from "./RelativeTime";
 import { Badge } from "./ui/badge";
-import { buttonVariants } from "./ui/button";
+import { Button, buttonVariants } from "./ui/button";
+import { useConfirm } from "./ui/dialog";
 import { Skeleton } from "./ui/skeleton";
+
+/**
+ * The manifest URL an app follows (0.1.5): Setu checks it every 6 hours
+ * and publishes new versions; Check now runs one check.
+ */
+function AppSource({ app }: { app: AppInfo }) {
+  const check = useCheckApp(app.id);
+  const clear = useClearAppSource(app.id);
+  const confirm = useConfirm();
+  const source = app.source;
+  if (source === null || source === undefined) return null;
+
+  function onCheck() {
+    check.mutate(undefined, {
+      onSuccess: (out) =>
+        out.published
+          ? toast.success(`Published ${app.name} ${out.published}`)
+          : toast.success(`${app.name} is up to date`),
+      onError: (err) => toast.error(err instanceof ApiError ? err.message : "Check failed"),
+    });
+  }
+
+  function onStop() {
+    void (async () => {
+      const ok = await confirm({
+        title: `Stop following ${app.name}'s manifest URL?`,
+        description: "Published versions stay. New versions appear only when you publish them.",
+        confirmLabel: "Stop following",
+      });
+      if (!ok) return;
+      clear.mutate(undefined, {
+        onSuccess: () => toast.success("Stopped following"),
+        onError: (err) => toast.error(err instanceof ApiError ? err.message : "Stop failed"),
+      });
+    })();
+  }
+
+  return (
+    <div className="space-y-1 border-t pt-2">
+      <p className="truncate" title={source.url}>
+        Follows <span className="font-mono">{source.url.replace(/^https?:\/\//, "")}</span>
+      </p>
+      {source.last_error ? (
+        <p className="text-destructive">Last check failed: {source.last_error}</p>
+      ) : source.checked_at ? (
+        <p>
+          Checked <RelativeTime iso={source.checked_at} />
+        </p>
+      ) : (
+        <p>Not checked yet</p>
+      )}
+      <div className="flex flex-wrap gap-2 pt-1">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          loading={check.isPending}
+          onClick={onCheck}
+        >
+          <RefreshCw className="size-3.5" aria-hidden="true" />
+          Check now
+        </Button>
+        <Button type="button" size="sm" variant="ghost" loading={clear.isPending} onClick={onStop}>
+          Stop following
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function AppCard({ app }: { app: AppInfo }) {
   const versions = useAppVersions(app.id);
@@ -35,7 +107,14 @@ function AppCard({ app }: { app: AppInfo }) {
             ? "Loading versions…"
             : list.length === 0
               ? "No versions published."
-              : `${list.length} ${list.length === 1 ? "version" : "versions"}${older.length > 0 ? `; earlier: ${older.slice(0, 3).map((v) => v.version).join(", ")}${older.length > 3 ? "…" : ""}` : ""}`}
+              : `${list.length} ${list.length === 1 ? "version" : "versions"}${
+                  older.length > 0
+                    ? `; earlier: ${older
+                        .slice(0, 3)
+                        .map((v) => v.version)
+                        .join(", ")}${older.length > 3 ? "…" : ""}`
+                    : ""
+                }`}
         </p>
         {app.homepage ? (
           <a
@@ -48,6 +127,7 @@ function AppCard({ app }: { app: AppInfo }) {
             <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
           </a>
         ) : null}
+        <AppSource app={app} />
       </div>
     </li>
   );
@@ -77,11 +157,7 @@ export function AppsCatalogue({ onAdd }: { onAdd?: () => void }) {
         description="Publish an app manifest to make it available for new sites."
         action={
           onAdd !== undefined ? (
-            <button
-              type="button"
-              onClick={onAdd}
-              className={buttonVariants()}
-            >
+            <button type="button" onClick={onAdd} className={buttonVariants()}>
               Add app
             </button>
           ) : undefined

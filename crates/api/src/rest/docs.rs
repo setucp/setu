@@ -10,8 +10,8 @@ use utoipa::OpenApi;
 use crate::auth::{require_role, Role, Session};
 
 use super::apps::{
-    AppListOut, AppOut, AppVersionListOut, AppVersionOut, ManifestErrorOut, PromptListOut,
-    PromptOut, PublishRequest, PublishResponse, ValidateRequest, ValidateResponse,
+    AppListOut, AppOut, AppSourceOut, AppVersionListOut, AppVersionOut, CheckOut, ManifestErrorOut,
+    PromptListOut, PromptOut, PublishRequest, PublishResponse, ValidateRequest, ValidateResponse,
 };
 use super::auth::{LoginRequest, OperatorOut};
 use super::backups::{
@@ -63,6 +63,8 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::apps::validate,
         super::apps::publish,
         super::apps::versions,
+        super::apps::check,
+        super::apps::clear_source,
         super::apps::version_prompts,
         super::panel::backup_status,
         super::plans::list,
@@ -124,6 +126,8 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         LocalServerResponse,
         AppOut,
         AppListOut,
+        AppSourceOut,
+        CheckOut,
         AppVersionOut,
         AppVersionListOut,
         ValidateRequest,

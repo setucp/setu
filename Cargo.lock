@@ -977,7 +977,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hello"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "axum",
  "reqwest",
@@ -2170,7 +2170,7 @@ dependencies = [
 
 [[package]]
 name = "setu-agent"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2204,7 +2204,7 @@ dependencies = [
 
 [[package]]
 name = "setu-api"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "argon2",
  "async-trait",
@@ -2212,6 +2212,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "flate2",
  "futures",
  "hex",
  "hostname",
@@ -2223,6 +2224,7 @@ dependencies = [
  "rand 0.9.5",
  "reqwest",
  "rust-embed",
+ "semver",
  "serde",
  "serde_json",
  "setu-agent",
@@ -2234,6 +2236,7 @@ dependencies = [
  "setu-testkit",
  "sha2 0.10.9",
  "sqlx",
+ "tar",
  "tempfile",
  "tokio",
  "tower",
@@ -2245,7 +2248,7 @@ dependencies = [
 
 [[package]]
 name = "setu-common"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -2271,7 +2274,7 @@ dependencies = [
 
 [[package]]
 name = "setu-db"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2293,7 +2296,7 @@ dependencies = [
 
 [[package]]
 name = "setu-jobs"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2314,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "setu-manifest"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "hex",
  "rand 0.9.5",
@@ -2328,7 +2331,7 @@ dependencies = [
 
 [[package]]
 name = "setu-proto"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "chrono",
  "serde",
@@ -2338,7 +2341,7 @@ dependencies = [
 
 [[package]]
 name = "setu-testkit"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "sqlx",
  "tokio",

@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO app_sources (app_id, url) VALUES ($1, $2)\n             ON CONFLICT (app_id) DO UPDATE\n                SET url = EXCLUDED.url,\n                    checked_at = CASE WHEN app_sources.url = EXCLUDED.url\n                                      THEN app_sources.checked_at END,\n                    last_error = CASE WHEN app_sources.url = EXCLUDED.url\n                                      THEN app_sources.last_error END\n             RETURNING app_id, url, checked_at, last_error",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "app_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "app_sources",
+            "name": "app_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "app_sources",
+            "name": "url"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "checked_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "app_sources",
+            "name": "checked_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "last_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "app_sources",
+            "name": "last_error"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "33fe8be23d0952bcd9e3e3e312aecfbb2922625384ec931684f05b3aaf7adcdb"
+}

@@ -133,6 +133,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/apps/{id}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch the app's followed URL now and publish its version when new
+         *     (operator and above).
+         */
+        post: operations["check"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/apps/{id}/source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Stop following the app's manifest URL (operator and above). */
+        delete: operations["clear_source"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/apps/{id}/versions": {
         parameters: {
             query?: never;
@@ -953,6 +990,14 @@ export interface components {
             homepage?: string | null;
             id: string;
             name: string;
+            source?: null | components["schemas"]["AppSourceOut"];
+        };
+        /** @description A followed manifest URL and its last check. */
+        AppSourceOut: {
+            /** Format: date-time */
+            checked_at?: string | null;
+            last_error?: string | null;
+            url: string;
         };
         AppVersionListOut: {
             versions: components["schemas"]["AppVersionOut"][];
@@ -1020,6 +1065,11 @@ export interface components {
             sha256: string;
             url: string;
             version: string;
+        };
+        /** @description `POST /apps/{id}/check`: the version the check published, if any. */
+        CheckOut: {
+            published?: string | null;
+            source: components["schemas"]["AppSourceOut"];
         };
         /** @description Idempotent agent commands, JSON-tagged by `kind` (snake_case). */
         Command: {
@@ -1945,6 +1995,104 @@ export interface operations {
                 };
             };
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    check: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description App id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckOut"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    clear_source: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description App id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

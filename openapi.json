@@ -376,6 +376,133 @@
         }
       }
     },
+    "/api/v1/apps/{id}/check": {
+      "post": {
+        "tags": [
+          "super::apps"
+        ],
+        "summary": "Fetch the app's followed URL now and publish its version when new\n(operator and above).",
+        "operationId": "check",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "App id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/apps/{id}/source": {
+      "delete": {
+        "tags": [
+          "super::apps"
+        ],
+        "summary": "Stop following the app's manifest URL (operator and above).",
+        "operationId": "clear_source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "App id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/apps/{id}/versions": {
       "get": {
         "tags": [
@@ -3363,6 +3490,42 @@
           },
           "name": {
             "type": "string"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AppSourceOut",
+                "description": "The manifest URL the app follows, if any."
+              }
+            ]
+          }
+        }
+      },
+      "AppSourceOut": {
+        "type": "object",
+        "description": "A followed manifest URL and its last check.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": "string"
           }
         }
       },
@@ -3577,6 +3740,24 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "CheckOut": {
+        "type": "object",
+        "description": "`POST /apps/{id}/check`: the version the check published, if any.",
+        "required": [
+          "source"
+        ],
+        "properties": {
+          "published": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/AppSourceOut"
           }
         }
       },

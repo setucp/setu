@@ -3,6 +3,36 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
+## 0.1.5 — 2026-10-21
+
+Spec: `docs/specs/2026-10-21-setu-0.1.5-design.md`.
+
+### Added
+
+- **Apps follow their manifest URL.** An app published from a URL is
+  checked again every 6 hours, and any new version is published, so it
+  appears in each site's Updates tab without publishing it again by hand.
+  Sites are never updated on their own, and a check never replaces a
+  version that is already published. The Apps page shows the URL and the
+  last check, with **Check now** and **Stop following**. The API is
+  `POST /api/v1/apps/{id}/check` and `DELETE /api/v1/apps/{id}/source`,
+  and `AppOut` gains `source`.
+- **`setu upgrade [--version <ver>]`.** Run as root, it upgrades this
+  server to a release (the latest by default). It verifies the checksum,
+  backs up the control plane, installs the binary, restarts `setu` and
+  `setu-agent`, and waits for `/healthz`. Older releases are refused
+  unless `--allow-downgrade`.
+
+### Changed
+
+- `setu` reads `/etc/setu/setu.toml` when the current directory has no
+  `setu.toml`, so `setu backup` and `setu upgrade` work from any
+  directory.
+
+### Migrations
+
+- `0004_app_sources.sql` (forward-only): the `app_sources` table.
+
 ## 0.1.4 — 2026-10-20
 
 Spec: `docs/specs/2026-10-20-setu-0.1.4-design.md`.

@@ -95,9 +95,12 @@ database is sealed with `secret_key` from `setu.toml`, and without that
 key they cannot be opened.
 
 ```sh
-cd /etc/setu
 sudo -u setu setu backup --out /var/lib/setu/setu-$(date +%F).dump
 ```
+
+`setu` reads `setu.toml` from the current directory, else
+`/etc/setu/setu.toml` when the user running it can read it (root or
+`setu`; since 0.1.5, so no `cd /etc/setu` is needed).
 
 `setu backup --out <file>` runs `pg_dump -Fc` against the configured
 `database_url`, passing the password in `pg_dump`'s environment, never
@@ -138,21 +141,34 @@ stored step once the lease expires.
 
 ## Upgrading
 
-Back up the control plane first (migrations are forward-only). Then,
-on the control-plane box, re-run the installer with the same flags and
-the new version:
+On each server, as root:
 
 ```sh
-bash install.sh --panel-host setu.example.com --version 0.1.2
+setu upgrade                    # the latest release
+setu upgrade --version 0.1.5    # a given release
 ```
 
-The installer verifies the archive, replaces `/opt/setu/setu`, and
-restarts `setu.service` (migrations run on boot) and the local
-`setu-agent.service` when it is installed — only when the binary
-changed, so a re-run of the same version restarts nothing (R139). On other
-servers, replace `/opt/setu/setu` with the new binary from the same
-release (root:root 0755) and `systemctl restart setu-agent`. Site apps
-are updated separately, per site, from the UI.
+`setu upgrade` (0.1.5) downloads the release archive for this machine
+and `SHA256SUMS`, refuses a checksum mismatch, and checks the new binary
+reports the version asked for. On the control-plane box
+(`setu.service` enabled) it then takes a control-plane backup into
+`/var/lib/setu/backups/setu/` (the nightly dump's directory and
+rotation) and stops if that fails. It installs `/opt/setu/setu`,
+restarts `setu.service` (migrations run on boot) and, when enabled,
+`setu-agent.service`, and on the control plane waits up to 90 s for
+`/healthz`. Upgrade the control plane first, then the other servers.
+Older releases are refused (migrations are forward-only) unless
+`--allow-downgrade`.
+
+Re-running the installer with the same flags and `--version <new>` still
+works and does the same install and restarts, without the backup.
+
+Site apps are updated separately, per site, from the UI. An app
+published from a URL follows it: Setu fetches the URL every 6 hours and
+publishes any new version, which then appears in each site's Updates
+tab. **Check now** on the Apps page checks at once. Sites are never
+updated on their own, and a version already published is never
+replaced by a check (publish by hand to replace it).
 
 ## Changing the TLS mode or the panel host
 

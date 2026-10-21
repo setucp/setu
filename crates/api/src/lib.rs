@@ -4,18 +4,21 @@
 //! sessions, the client IP, role checks, the `Origin` guard and password
 //! hashing; [`rest`] assembles the router; [`listen`] binds the unix
 //! socket or TCP listener; [`notifier`] wakes agent long polls; [`cli`]
-//! backs `setu operator create` and `setu backup`;
+//! backs `setu operator create` and `setu backup`; [`upgrade`] is
+//! `setu upgrade`; [`follow`] re-checks followed manifest URLs;
 //! [`testing::TestServer`] boots the whole stack against a throwaway
 //! database for integration tests.
 
 pub mod auth;
 pub mod cli;
 pub mod embed;
+pub mod follow;
 pub mod listen;
 pub mod notifier;
 pub mod rest;
 pub mod self_backup;
 pub mod state;
 pub mod testing;
+pub mod upgrade;
 
 pub use state::AppState;

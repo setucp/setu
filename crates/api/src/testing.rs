@@ -41,6 +41,8 @@ pub struct TestOptions {
     /// TCP; this only changes what handlers read, e.g. the local install
     /// command).
     pub config_listen: Option<Listen>,
+    /// The manifest fetcher (default: the guarded HTTP fetch).
+    pub fetcher: Option<Arc<dyn crate::follow::ManifestFetcher>>,
 }
 
 /// A running control plane for integration tests.
@@ -156,6 +158,9 @@ impl TestServer {
         );
         if let Some(limit) = opts.agent_poll_limit {
             state = state.with_agent_poll_limit(limit);
+        }
+        if let Some(fetcher) = opts.fetcher {
+            state = state.with_fetcher(fetcher);
         }
         let app = crate::rest::router(state.clone());
         let serve_app = app.clone();
