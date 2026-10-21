@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE app_sources SET checked_at = $2, last_error = $3 WHERE app_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9fed993e8dfbc0e7eeca1b6c01683e8341aba5e59f72e1a58025e7b13583a69a"
+}

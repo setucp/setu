@@ -47,6 +47,9 @@ base64.workspace = true
 ipnet.workspace = true
 nix.workspace = true
 tempfile.workspace = true
+semver.workspace = true
+tar.workspace = true
+flate2.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 setu-common = { path = "../common" }

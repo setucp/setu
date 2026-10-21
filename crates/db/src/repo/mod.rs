@@ -1,3 +1,4 @@
+pub mod app_sources;
 pub mod apps;
 pub mod audit;
 pub mod backups;
@@ -12,6 +13,7 @@ pub mod sessions;
 pub mod settings;
 pub mod sites;
 
+pub use app_sources::{AppSource, AppSources};
 pub use apps::{App, AppVersion, Apps};
 pub use audit::{Audit, AuditEntry};
 pub use backups::{Backup, Backups};

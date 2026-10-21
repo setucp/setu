@@ -33,9 +33,7 @@ function renderWithClient(ui: React.ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
-    <QueryClientProvider client={client}>{ui}</QueryClientProvider>,
-  );
+  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
 }
 
 describe("apps", () => {
@@ -52,6 +50,48 @@ describe("apps", () => {
     renderWithClient(<AppsCatalogue />);
     expect(await screen.findByText("Hello")).toBeInTheDocument();
     expect(await screen.findByText("0.1.0")).toBeInTheDocument();
+  });
+
+  it("a followed app shows its URL and Check now runs a check", async () => {
+    const checks: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        const path = String(url);
+        if (path.endsWith("/api/v1/apps/hello/check") && init?.method === "POST") {
+          checks.push(path);
+          return json({
+            published: "0.2.0",
+            source: {
+              url: "https://m.example/hello.toml",
+              checked_at: "2026-10-21T00:00:00Z",
+              last_error: null,
+            },
+          });
+        }
+        if (path.endsWith("/api/v1/apps")) {
+          return json({
+            apps: [
+              {
+                ...appsBody.apps[0],
+                source: {
+                  url: "https://m.example/hello.toml",
+                  checked_at: null,
+                  last_error: "manifest fetch failed with status 404",
+                },
+              },
+            ],
+          });
+        }
+        if (path.includes("/api/v1/apps/hello/versions")) return json(versionsBody);
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    renderWithClient(<AppsCatalogue />);
+    expect(await screen.findByText("m.example/hello.toml")).toBeInTheDocument();
+    expect(screen.getByText(/Last check failed: manifest fetch failed/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Check now/ }));
+    await waitFor(() => expect(checks).toHaveLength(1));
   });
 
   it("publish validates the manifest inline before submitting", async () => {
@@ -87,9 +127,7 @@ describe("apps", () => {
     );
     const user = userEvent.setup();
     const onPublished = vi.fn();
-    renderWithClient(
-      <PublishAppDialog open onClose={() => undefined} onPublished={onPublished} />,
-    );
+    renderWithClient(<PublishAppDialog open onClose={() => undefined} onPublished={onPublished} />);
 
     // Publish is gated on a fresh validation: no validate, no submit.
     expect(screen.getByRole("button", { name: /^publish$/i })).toBeDisabled();
@@ -101,7 +139,7 @@ describe("apps", () => {
     expect(publishes).toHaveLength(0);
 
     await user.clear(screen.getByLabelText(/manifest toml/i));
-    await user.type(screen.getByLabelText(/manifest toml/i), 'schema = 1');
+    await user.type(screen.getByLabelText(/manifest toml/i), "schema = 1");
     // Editing after a validation re-arms the gate.
     expect(screen.getByRole("button", { name: /^publish$/i })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: /validate/i }));

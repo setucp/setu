@@ -1,8 +1,9 @@
 //! Control-plane configuration (`setu.toml` + `SETU_*` env).
 //!
 //! Sources, in increasing precedence: built-in defaults, `setu.toml` in the
-//! current directory when present, then `SETU_*` environment variables.
-//! Environment always wins over the file.
+//! current directory when present (else `/etc/setu/setu.toml` when it is
+//! readable, 0.1.5), then `SETU_*` environment variables. Environment
+//! always wins over the file.
 
 use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr};
 
@@ -128,6 +129,22 @@ pub enum ConfigError {
     Load(String),
 }
 
+/// The installed config, used when the current directory has none.
+const SYSTEM_CONFIG: &str = "/etc/setu/setu.toml";
+
+/// `setu.toml` in the current directory, else [`SYSTEM_CONFIG`] when this
+/// user can read it (it is 0600: root or `setu`), else the current
+/// directory's (absent, so defaults and env only).
+fn config_file() -> &'static str {
+    if std::path::Path::new("setu.toml").exists() {
+        "setu.toml"
+    } else if std::fs::File::open(SYSTEM_CONFIG).is_ok() {
+        SYSTEM_CONFIG
+    } else {
+        "setu.toml"
+    }
+}
+
 impl Config {
     /// Load from `setu.toml` (if present) with `SETU_*` env overriding.
     pub fn load() -> Result<Self, ConfigError> {
@@ -140,7 +157,7 @@ impl Config {
             // site paths from the short id, never from this.
             .set_default("data_dir", "/var/lib/setu")
             .map_err(|e| ConfigError::Load(e.to_string()))?
-            .add_source(config::File::with_name("setu").required(false))
+            .add_source(config::File::with_name(config_file()).required(false))
             .add_source(
                 config::Environment::with_prefix("SETU")
                     .prefix_separator("_")

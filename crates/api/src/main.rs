@@ -1,7 +1,8 @@
 //! The one `setu` binary (spec §8): `serve` is the control plane,
 //! `agent …` the per-server agent and `helper …` its privileged writer
 //! (both from the `setu-agent` library crate), plus operator management,
-//! the control plane's own database backup and OpenAPI export.
+//! the control plane's own database backup, OpenAPI export and
+//! `upgrade` (0.1.5 §2).
 
 use std::sync::Arc;
 
@@ -49,6 +50,16 @@ enum Cmd {
         #[arg(long, default_value = "openapi.json")]
         out: std::path::PathBuf,
     },
+    /// Upgrade this server's `setu` to a release (default: the latest):
+    /// verify, back up the control plane, install, restart. Run as root.
+    Upgrade {
+        /// Release version, e.g. `0.1.5`.
+        #[arg(long)]
+        version: Option<String>,
+        /// Allow installing an older release (migrations are forward-only).
+        #[arg(long)]
+        allow_downgrade: bool,
+    },
     /// Per-server agent (library crate `setu-agent`).
     Agent {
         #[command(subcommand)]
@@ -91,6 +102,16 @@ async fn main() {
             cmd: SettingCmd::Set { key, value },
         } => setting_set(&key, &value).await,
         Cmd::Openapi { out } => openapi(&out).await,
+        Cmd::Upgrade {
+            version,
+            allow_downgrade,
+        } => {
+            setu_api::upgrade::run(setu_api::upgrade::UpgradeArgs {
+                version,
+                allow_downgrade,
+            })
+            .await
+        }
         Cmd::Agent { cmd } => {
             // The agent's own log (journald captures stderr); stdout
             // stays clean for `doctor`'s table and install output.
@@ -171,6 +192,14 @@ async fn serve() -> Result<(), String> {
         db.clone(),
         clock.clone(),
         setu_jobs::SchedulerConfig::default(),
+    );
+    // Followed manifest URLs, every 6 h (0.1.5 §1); the first round a
+    // minute after start so a restart picks up new versions soon.
+    let _follow = setu_api::follow::spawn(
+        db.clone(),
+        state.fetcher.clone(),
+        clock.clone(),
+        std::time::Duration::from_mins(1),
     );
     // Nightly pg_dump of Setu's own database (0.1.1 #9, R145).
     let _self_backup = setu_api::self_backup::spawn(

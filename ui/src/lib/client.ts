@@ -11,6 +11,7 @@ export type Server = components["schemas"]["ServerOut"];
 export type RotateTokenResponse = components["schemas"]["RotateTokenResponse"];
 export type SelfBackup = components["schemas"]["SelfBackupOut"];
 export type AppInfo = components["schemas"]["AppOut"];
+export type AppCheckOut = components["schemas"]["CheckOut"];
 export type AppVersion = components["schemas"]["AppVersionOut"];
 export type Job = components["schemas"]["JobOut"];
 export type AuditEntry = components["schemas"]["AuditEntryOut"];
@@ -32,10 +33,7 @@ export interface PlanLimits {
 }
 
 /** `PlanOut` with its opaque `limits`/`allowed_app_ids` JSON narrowed. */
-export type Plan = Omit<
-  components["schemas"]["PlanOut"],
-  "limits" | "allowed_app_ids"
-> & {
+export type Plan = Omit<components["schemas"]["PlanOut"], "limits" | "allowed_app_ids"> & {
   limits: PlanLimits;
   allowed_app_ids: string[];
 };
@@ -80,11 +78,7 @@ function toApiError(status: number, text: string): ApiError {
     const parsed = JSON.parse(text) as ErrorEnvelope | null;
     const err = parsed?.error;
     if (err !== null && typeof err === "object" && typeof err?.message === "string") {
-      return new ApiError(
-        status,
-        typeof err.code === "string" ? err.code : "unknown",
-        err.message,
-      );
+      return new ApiError(status, typeof err.code === "string" ? err.code : "unknown", err.message);
     }
   } catch {
     // Not JSON: fall through to the status-based message.
@@ -157,6 +151,16 @@ export const api = {
   async listApps(): Promise<AppInfo[]> {
     const body = await request<{ apps: AppInfo[] }>("/api/v1/apps");
     return body.apps;
+  },
+
+  /** Fetch the app's followed manifest URL now; publishes a new version. */
+  checkApp(appId: string): Promise<AppCheckOut> {
+    return request(`/api/v1/apps/${encodeURIComponent(appId)}/check`, { method: "POST" });
+  },
+
+  /** Stop following the app's manifest URL. */
+  clearAppSource(appId: string): Promise<void> {
+    return request(`/api/v1/apps/${encodeURIComponent(appId)}/source`, { method: "DELETE" });
   },
 
   /** The `prompt` rules of one version: name, label, secret. Never a value. */
@@ -255,9 +259,7 @@ export const api = {
   },
 
   async getSiteEnv(id: string): Promise<EnvEntry[]> {
-    const body = await request<{ env: EnvEntry[] }>(
-      `/api/v1/sites/${encodeURIComponent(id)}/env`,
-    );
+    const body = await request<{ env: EnvEntry[] }>(`/api/v1/sites/${encodeURIComponent(id)}/env`);
     return body.env;
   },
 
@@ -299,7 +301,10 @@ export const api = {
   },
 
   /** Restore `backup_id` every `every_minutes`; the first is one interval away. */
-  putReset(siteId: string, body: { backup_id: string; every_minutes: number }): Promise<ResetGetOut> {
+  putReset(
+    siteId: string,
+    body: { backup_id: string; every_minutes: number },
+  ): Promise<ResetGetOut> {
     return request(`/api/v1/sites/${encodeURIComponent(siteId)}/reset`, {
       method: "PUT",
       body: JSON.stringify(body),
@@ -324,10 +329,7 @@ export const api = {
     );
   },
 
-  siteAction(
-    id: string,
-    action: "start" | "stop" | "restart" | "retry",
-  ): Promise<SiteJobResponse> {
+  siteAction(id: string, action: "start" | "stop" | "restart" | "retry"): Promise<SiteJobResponse> {
     return request(`/api/v1/sites/${encodeURIComponent(id)}/${action}`, {
       method: "POST",
     });
@@ -368,11 +370,7 @@ export const api = {
   },
 
   /** Own password needs `current_password`; the owner sets anyone else's. */
-  setOperatorPassword(
-    id: string,
-    password: string,
-    currentPassword?: string,
-  ): Promise<void> {
+  setOperatorPassword(id: string, password: string, currentPassword?: string): Promise<void> {
     return request(`/api/v1/operators/${encodeURIComponent(id)}/password`, {
       method: "PUT",
       body: JSON.stringify(
