@@ -40,19 +40,62 @@ pub fn parse_journal_json(text: &str) -> LogStream {
             next = Some(c.to_string());
         }
         match v.get("MESSAGE") {
-            Some(serde_json::Value::String(s)) => lines.push(s.clone()),
+            Some(serde_json::Value::String(s)) => lines.push(strip_ansi(s)),
             // Non-UTF-8 messages arrive as a byte array.
             Some(serde_json::Value::Array(bytes)) => {
                 let raw: Vec<u8> = bytes
                     .iter()
                     .filter_map(|b| b.as_u64().and_then(|b| u8::try_from(b).ok()))
                     .collect();
-                lines.push(String::from_utf8_lossy(&raw).into_owned());
+                lines.push(strip_ansi(&String::from_utf8_lossy(&raw)));
             }
             _ => {}
         }
     }
     LogStream { lines, next }
+}
+
+/// Drops terminal escape sequences (colours, cursor moves, titles) from a
+/// log line. Apps colour their logs whether or not a terminal is reading,
+/// and the panel shows plain text, so `ESC[32mINFO` would arrive as
+/// garbage. Handles CSI (`ESC [ … final`), OSC (`ESC ] … BEL` or
+/// `ESC \\`) and two-byte `ESC x` escapes; any other text is kept.
+pub fn strip_ansi(line: &str) -> String {
+    if !line.contains('\u{1b}') {
+        return line.to_owned();
+    }
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            // CSI: parameters and intermediates up to a final byte in @..~.
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            // OSC: up to BEL or the string terminator ESC \.
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\u{7}' {
+                        break;
+                    }
+                    if c == '\u{1b}' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Read up to `lines` entries after `cursor`.
@@ -108,5 +151,37 @@ mod tests {
         let s = parse_journal_json(text);
         assert_eq!(s.lines, ["hello", "hi"]);
         assert_eq!(s.next.as_deref(), Some("c2"));
+    }
+
+    #[test]
+    fn colour_codes_are_stripped_from_messages() {
+        // What a tracing subscriber writes when it thinks a terminal is
+        // reading: dim timestamp, green level, dim target.
+        let coloured = "\u{1b}[2m2026-10-22T06:37:20Z\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m \u{1b}[2mvyasa::host\u{1b}[0m\u{1b}[2m:\u{1b}[0m docs sync finished";
+        let text = format!(
+            "{}\n{}\n",
+            serde_json::json!({"__CURSOR": "c1", "MESSAGE": coloured}),
+            // journald hands control characters over as a byte array.
+            serde_json::json!({"__CURSOR": "c2", "MESSAGE": "\u{1b}[31mfail\u{1b}[0m".bytes().collect::<Vec<_>>()}),
+        );
+        let s = parse_journal_json(&text);
+        assert_eq!(
+            s.lines,
+            [
+                "2026-10-22T06:37:20Z  INFO vyasa::host: docs sync finished",
+                "fail"
+            ]
+        );
+    }
+
+    #[test]
+    fn strip_ansi_keeps_plain_text_and_drops_osc_titles() {
+        assert_eq!(strip_ansi("plain [text] ok"), "plain [text] ok");
+        assert_eq!(strip_ansi("\u{1b}]0;title\u{7}after"), "after");
+        assert_eq!(
+            strip_ansi("a\u{1b}]8;;http://x\u{1b}\\link\u{1b}]8;;\u{1b}\\b"),
+            "alinkb"
+        );
+        assert_eq!(strip_ansi("bold \u{1b}[1;31mred\u{1b}[0m"), "bold red");
     }
 }

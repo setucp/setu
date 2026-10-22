@@ -3,6 +3,15 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
+## 0.1.6 — 2026-10-22
+
+### Fixed
+
+- **Site logs are plain text.** The agent strips terminal escape sequences
+  (colours, cursor moves, window titles) from each journal line, so an app
+  that colours its logs under systemd no longer fills the Logs tab with
+  `ESC[32m` noise.
+
 ## 0.1.5 — 2026-10-21
 
 Spec: `docs/specs/2026-10-21-setu-0.1.5-design.md`.
