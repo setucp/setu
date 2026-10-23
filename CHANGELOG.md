@@ -14,6 +14,10 @@ matching the tag.
 - **Apps page on phones.** A followed manifest URL no longer widens the
   app card past the screen, which made the whole page scroll sideways.
 
+### Security
+
+- tokio 1.54.1 and ctutils 0.4.5 (RUSTSEC-2026-0385, RUSTSEC-2026-0386).
+
 ## 0.1.5 — 2026-10-21
 
 Spec: `docs/specs/2026-10-21-setu-0.1.5-design.md`.
