@@ -3,6 +3,21 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
+## 0.1.6 — 2026-10-23
+
+### Fixed
+
+- **Site logs are plain text.** The agent strips terminal escape sequences
+  (colours, cursor moves, window titles) from each journal line, so an app
+  that colours its logs under systemd no longer fills the Logs tab with
+  `ESC[32m` noise.
+- **Apps page on phones.** A followed manifest URL no longer widens the
+  app card past the screen, which made the whole page scroll sideways.
+
+### Security
+
+- tokio 1.54.1 and ctutils 0.4.5 (RUSTSEC-2026-0385, RUSTSEC-2026-0386).
+
 ## 0.1.5 — 2026-10-21
 
 Spec: `docs/specs/2026-10-21-setu-0.1.5-design.md`.
