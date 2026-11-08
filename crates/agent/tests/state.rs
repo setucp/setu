@@ -35,6 +35,7 @@ fn state_round_trips_and_caps_results() {
                 port: 20001,
                 version: "1.2.3".into(),
                 db: Some("site_abcd1234".into()),
+                basic_auth: None,
             }
         })
         .expect("site");

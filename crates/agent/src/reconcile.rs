@@ -60,7 +60,14 @@ where
         }
         wanted.insert(id.clone());
         if let Err(e) = caddy
-            .upsert_route(&id, domain, &site_upstream(site.port))
+            .upsert_route_auth(
+                &id,
+                domain,
+                &site_upstream(site.port),
+                site.basic_auth
+                    .as_ref()
+                    .map(|(u, h)| (u.as_str(), h.as_str())),
+            )
             .await
         {
             tracing::warn!(route = %id, error = %e, "reconcile: cannot upsert route");

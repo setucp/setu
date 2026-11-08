@@ -100,6 +100,38 @@ fn valid_upstream(upstream: &str) -> bool {
 
 /// The route object (golden, see `tests/golden/route-*.json`).
 pub fn route_json(id: &str, domain: &str, upstream: &str) -> anyhow::Result<serde_json::Value> {
+    route_json_with_auth(id, domain, upstream, None)
+}
+
+/// Letters, digits and `._-`, 1..=64: the basic-auth user name.
+fn valid_auth_user(user: &str) -> bool {
+    (1..=64).contains(&user.len())
+        && user
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+}
+
+/// A bcrypt hash as Caddy's `hash-password` writes it: `$2a$`/`$2b$`/`$2y$`,
+/// two-digit cost, 53 characters of the bcrypt alphabet (60 in all).
+fn valid_bcrypt(hash: &str) -> bool {
+    hash.len() == 60
+        && ["$2a$", "$2b$", "$2y$"].iter().any(|p| hash.starts_with(p))
+        && hash.as_bytes()[6] == b'$'
+        && hash[4..6].chars().all(|c| c.is_ascii_digit())
+        && hash[7..]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '/')
+}
+
+/// [`route_json`] with an optional HTTP basic-auth `(user, bcrypt hash)`
+/// in front of the proxy (site routes only; the hash, never the password,
+/// is what reaches Caddy).
+pub fn route_json_with_auth(
+    id: &str,
+    domain: &str,
+    upstream: &str,
+    auth: Option<(&str, &str)>,
+) -> anyhow::Result<serde_json::Value> {
     if !valid_route_id(id) {
         anyhow::bail!("invalid route id {id:?}");
     }
@@ -109,13 +141,33 @@ pub fn route_json(id: &str, domain: &str, upstream: &str) -> anyhow::Result<serd
     if !valid_upstream(upstream) {
         anyhow::bail!("invalid upstream {upstream:?}");
     }
+    let mut handle = Vec::new();
+    if let Some((user, hash)) = auth {
+        if id == PANEL_ROUTE_ID {
+            anyhow::bail!("the panel route takes no basic auth");
+        }
+        if !valid_auth_user(user) {
+            anyhow::bail!("invalid basic-auth user name");
+        }
+        if !valid_bcrypt(hash) {
+            anyhow::bail!("invalid basic-auth hash");
+        }
+        handle.push(serde_json::json!({
+            "handler": "authentication",
+            "providers": { "http_basic": {
+                "accounts": [{ "username": user, "password": hash }],
+                "realm": domain,
+            }},
+        }));
+    }
+    handle.push(serde_json::json!({
+        "handler": "reverse_proxy",
+        "upstreams": [{ "dial": upstream }],
+    }));
     Ok(serde_json::json!({
         "@id": id,
         "match": [{ "host": [domain] }],
-        "handle": [{
-            "handler": "reverse_proxy",
-            "upstreams": [{ "dial": upstream }],
-        }],
+        "handle": handle,
         "terminal": true,
     }))
 }
@@ -124,7 +176,17 @@ pub fn route_json(id: &str, domain: &str, upstream: &str) -> anyhow::Result<serd
 #[async_trait::async_trait]
 pub trait CaddyAdmin: Send + Sync {
     /// Create or replace the route `id` (`GET /id` → `PATCH` | `POST`).
-    async fn upsert_route(&self, id: &str, domain: &str, upstream: &str) -> anyhow::Result<()>;
+    async fn upsert_route(&self, id: &str, domain: &str, upstream: &str) -> anyhow::Result<()> {
+        self.upsert_route_auth(id, domain, upstream, None).await
+    }
+    /// [`CaddyAdmin::upsert_route`] with an optional basic-auth `(user, hash)`.
+    async fn upsert_route_auth(
+        &self,
+        id: &str,
+        domain: &str,
+        upstream: &str,
+        auth: Option<(&str, &str)>,
+    ) -> anyhow::Result<()>;
     /// Delete route `id`; a missing route is success.
     async fn remove_route(&self, id: &str) -> anyhow::Result<()>;
     /// `@id`s of the routes of server `setu`, in order.
@@ -243,8 +305,14 @@ impl<T: AdminTransport> CaddyClient<T> {
 
 #[async_trait::async_trait]
 impl<T: AdminTransport> CaddyAdmin for CaddyClient<T> {
-    async fn upsert_route(&self, id: &str, domain: &str, upstream: &str) -> anyhow::Result<()> {
-        let route = route_json(id, domain, upstream)?;
+    async fn upsert_route_auth(
+        &self,
+        id: &str,
+        domain: &str,
+        upstream: &str,
+        auth: Option<(&str, &str)>,
+    ) -> anyhow::Result<()> {
+        let route = route_json_with_auth(id, domain, upstream, auth)?;
         let body = serde_json::to_vec(&route)?;
         let path = format!("/id/{id}");
         let (status, resp) = self.transport.request("GET", &path, None).await?;

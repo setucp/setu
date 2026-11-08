@@ -94,6 +94,23 @@ impl fmt::Debug for EnvVar {
     }
 }
 
+/// HTTP basic-auth for one site: the user name and a bcrypt hash (never
+/// the password). `Debug` redacts the hash.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct BasicAuth {
+    pub username: String,
+    pub password_hash: String,
+}
+
+impl fmt::Debug for BasicAuth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BasicAuth")
+            .field("username", &self.username)
+            .field("password_hash", &"[redacted]")
+            .finish()
+    }
+}
+
 /// Everything the agent needs to materialise one site. No paths, no
 /// user, no env file: the agent derives them from `short_id` (spec §4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -165,6 +182,9 @@ pub enum Command {
         site_short_id: String,
         domain: String,
         port: u16,
+        /// Absent (and not serialised) for a site without basic auth.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        basic_auth: Option<BasicAuth>,
     },
     RemoveRoute {
         site_short_id: String,
@@ -556,6 +576,7 @@ mod tests {
                     site_short_id: short(),
                     domain: "example.com".to_string(),
                     port: 20001,
+                    basic_auth: None,
                 },
                 "set_route",
             ),
