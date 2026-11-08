@@ -2127,3 +2127,99 @@ async fn a_reset_schedule_is_set_read_guarded_and_stopped() {
     let again = owner.delete(&url).send().await.expect("stop");
     assert_eq!(again.status(), reqwest::StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn basic_auth_is_set_hashed_sent_to_the_agent_guarded_and_removed() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let viewer = srv.login_as("viewer").await;
+    let (site_id, _server_id) = running_site(&srv, &owner, "bauth").await;
+    let url = srv.url(&format!("/api/v1/sites/{site_id}/basic-auth"));
+
+    let none: Value = viewer
+        .get(&url)
+        .send()
+        .await
+        .expect("get")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(none["basic_auth"], Value::Null);
+    let denied = viewer
+        .put(&url)
+        .json(&json!({"username": "alice", "password": "correct-horse"}))
+        .send()
+        .await
+        .expect("put");
+    assert_eq!(denied.status(), reqwest::StatusCode::FORBIDDEN);
+    for body in [
+        json!({"username": "", "password": "correct-horse"}),
+        json!({"username": "a b", "password": "correct-horse"}),
+        json!({"username": "alice", "password": "short"}),
+        json!({"username": "alice", "password": "x".repeat(73)}),
+        json!({"username": "alice", "password": "with\u{7}bell-char"}),
+    ] {
+        let bad = owner.put(&url).json(&body).send().await.expect("put");
+        assert_eq!(bad.status(), reqwest::StatusCode::BAD_REQUEST, "{body}");
+        let text = bad.text().await.unwrap_or_default();
+        assert!(
+            !text.contains("correct-horse") && !text.contains("with"),
+            "{text}"
+        );
+    }
+    let gone = owner.delete(&url).send().await.expect("delete");
+    assert_eq!(
+        gone.status(),
+        reqwest::StatusCode::NOT_FOUND,
+        "nothing to remove yet"
+    );
+
+    let set = owner
+        .put(&url)
+        .json(&json!({"username": "alice", "password": "correct-horse"}))
+        .send()
+        .await
+        .expect("put");
+    assert_eq!(set.status(), reqwest::StatusCode::ACCEPTED);
+    let text = set.text().await.expect("body");
+    assert!(
+        !text.contains("correct-horse") && !text.contains("$2"),
+        "{text}"
+    );
+    let body: Value = serde_json::from_str(&text).expect("json");
+    assert_eq!(body["basic_auth"]["username"], "alice");
+    let job = body["job"]["id"].as_str().expect("job id").to_string();
+    let done = poll_job(&srv, &owner, &job).await.expect("job");
+    assert_eq!(done["status"], "done", "{done}");
+
+    let routes = srv.agent.commands_of("set_route");
+    let last = routes.last().expect("a set_route command");
+    let auth = &last["basic_auth"];
+    assert_eq!(auth["username"], "alice");
+    let hash = auth["password_hash"].as_str().expect("hash");
+    assert!(hash.starts_with("$2b$") && hash.len() == 60, "{hash}");
+    assert!(bcrypt::verify("correct-horse", hash).expect("verify"));
+
+    let got: Value = viewer
+        .get(&url)
+        .send()
+        .await
+        .expect("get")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(got["basic_auth"]["username"], "alice");
+    assert!(!got.to_string().contains("$2"), "{got}");
+
+    let del = owner.delete(&url).send().await.expect("delete");
+    assert_eq!(del.status(), reqwest::StatusCode::ACCEPTED);
+    let body: Value = del.json().await.expect("json");
+    let job = body["job"]["id"].as_str().expect("job id").to_string();
+    let done = poll_job(&srv, &owner, &job).await.expect("job");
+    assert_eq!(done["status"], "done", "{done}");
+    let routes = srv.agent.commands_of("set_route");
+    assert!(routes.last().expect("route")["basic_auth"].is_null());
+    let again = owner.delete(&url).send().await.expect("delete");
+    assert_eq!(again.status(), reqwest::StatusCode::NOT_FOUND);
+}
