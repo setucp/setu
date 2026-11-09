@@ -3,6 +3,17 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
+## 0.1.7 — Unreleased
+
+### Added
+
+- **Per-site HTTP basic auth.** `PUT /api/v1/sites/{id}/basic-auth` with a
+  user name and password puts a login in front of one site; `DELETE`
+  removes it and `GET` shows the user name. Caddy enforces it on the
+  site's route. Only a bcrypt hash is stored, and no response or log
+  carries the password or the hash. A change runs as a `route_update` job
+  and leaves the site's status alone.
+
 ## 0.1.6 — 2026-10-23
 
 ### Fixed

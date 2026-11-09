@@ -8,8 +8,8 @@
 use std::path::PathBuf;
 
 use setu_agent::caddy::{
-    route_json, route_json_with_auth, site_route_id, site_upstream, CaddyAdmin, CaddySocket, FakeAdmin, FakeCaddy,
-    PANEL_ROUTE_ID, ROUTES_PATH,
+    route_json, route_json_with_auth, site_route_id, site_upstream, CaddyAdmin, CaddySocket,
+    FakeAdmin, FakeCaddy, PANEL_ROUTE_ID, ROUTES_PATH,
 };
 
 const SHORT: &str = "abcd1234";

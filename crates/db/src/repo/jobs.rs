@@ -24,6 +24,7 @@ pub const JOB_KINDS: &[&str] = &[
     "restart_site",
     "stop_site",
     "start_site",
+    "route_update",
 ];
 
 /// One unit of background work. `payload` may carry sealed values and

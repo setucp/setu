@@ -2570,6 +2570,218 @@
         }
       }
     },
+    "/api/v1/sites/{id}/basic-auth": {
+      "get": {
+        "tags": [
+          "super::basic_auth"
+        ],
+        "summary": "The site's basic-auth user name (viewer and above).",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BasicAuthGetOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "super::basic_auth"
+        ],
+        "summary": "Set or replace the site's basic auth (operator and above); enqueues a\nroute update.",
+        "operationId": "put",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BasicAuthPutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BasicAuthJobResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "super::basic_auth"
+        ],
+        "summary": "Remove the site's basic auth (operator and above); 404 when none.",
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BasicAuthJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sites/{id}/env": {
       "get": {
         "tags": [
@@ -3706,6 +3918,95 @@
           }
         }
       },
+      "BasicAuth": {
+        "type": "object",
+        "description": "HTTP basic-auth for one site: the user name and a bcrypt hash (never\nthe password). `Debug` redacts the hash.",
+        "required": [
+          "username",
+          "password_hash"
+        ],
+        "properties": {
+          "password_hash": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "BasicAuthGetOut": {
+        "type": "object",
+        "description": "`GET /sites/{id}/basic-auth`: the setting, or `null` when the site is open.",
+        "properties": {
+          "basic_auth": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicAuthOut"
+              }
+            ]
+          }
+        }
+      },
+      "BasicAuthJobResponse": {
+        "type": "object",
+        "description": "`PUT`/`DELETE` result: the setting after the change and the route job.",
+        "required": [
+          "job"
+        ],
+        "properties": {
+          "basic_auth": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicAuthOut"
+              }
+            ]
+          },
+          "job": {
+            "$ref": "#/components/schemas/JobOut"
+          }
+        }
+      },
+      "BasicAuthOut": {
+        "type": "object",
+        "description": "A site's basic-auth setting: the user name only.",
+        "required": [
+          "username",
+          "updated_at"
+        ],
+        "properties": {
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "BasicAuthPutRequest": {
+        "type": "object",
+        "description": "`PUT /sites/{id}/basic-auth` body.",
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "8 to 72 bytes, no control characters. Never stored or returned."
+          },
+          "username": {
+            "type": "string",
+            "description": "Letters, digits and `._-`, 1 to 64."
+          }
+        }
+      },
       "BinaryFormat": {
         "type": "string",
         "description": "What a [`BinaryRef`] download is.",
@@ -4015,6 +4316,17 @@
               "kind"
             ],
             "properties": {
+              "basic_auth": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/BasicAuth",
+                    "description": "Absent (and not serialised) for a site without basic auth."
+                  }
+                ]
+              },
               "domain": {
                 "type": "string"
               },
