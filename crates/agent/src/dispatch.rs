@@ -138,6 +138,7 @@ where
             site_short_id,
             domain,
             port,
+            basic_auth,
         } => {
             let id = match crate::caddy::site_route_id(site_short_id) {
                 Ok(id) => id,
@@ -149,10 +150,24 @@ where
             if let Err(e) = rt.update_state(site_short_id, |r| {
                 r.domain = Some(domain.clone());
                 r.port = *port;
+                r.basic_auth = basic_auth
+                    .as_ref()
+                    .map(|a| (a.username.clone(), a.password_hash.clone()));
             }) {
                 return err(cmd_id, "set_route failed", e);
             }
-            match rt.caddy().upsert_route(&id, domain, &upstream).await {
+            match rt
+                .caddy()
+                .upsert_route_auth(
+                    &id,
+                    domain,
+                    &upstream,
+                    basic_auth
+                        .as_ref()
+                        .map(|a| (a.username.as_str(), a.password_hash.as_str())),
+                )
+                .await
+            {
                 Ok(()) => ok(
                     cmd_id,
                     serde_json::json!({"domain": domain, "route_id": id}),

@@ -31,6 +31,9 @@ pub struct SiteRecord {
     pub domain: Option<String>,
     #[serde(default)]
     pub port: u16,
+    /// `(user, bcrypt hash)` recorded by `SetRoute`; reconcile puts it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basic_auth: Option<(String, String)>,
     #[serde(default)]
     pub version: String,
     #[serde(default)]

@@ -11,6 +11,7 @@ fn record(domain: Option<&str>, port: u16) -> SiteRecord {
         domain: domain.map(str::to_string),
         port,
         version: "1.0.0".into(),
+        basic_auth: None,
         db: None,
     }
 }
@@ -185,4 +186,39 @@ async fn reconcile_keeps_panel_route_first() {
         vec!["setu-panel", "setu-site-aaaaaaaa", "setu-site-bbbbbbbb"],
         "panel first, sites kept in order"
     );
+}
+
+#[tokio::test]
+async fn reconcile_restores_basic_auth_and_drops_it_when_cleared() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = Paths::new(Some(dir.path().to_path_buf()));
+    let config = AgentConfig {
+        sites_root: p.sites(),
+        state_path: p.state(),
+        ..AgentConfig::default()
+    };
+    let hash = "$2a$14$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234";
+    let mut state = State::default();
+    let mut rec = record(Some("a.example.test"), 20001);
+    rec.basic_auth = Some(("alice".into(), hash.into()));
+    state.sites.insert("aaaaaaaa".into(), rec);
+    let (caddy, helper, postgres) = (FakeCaddy::new(), FakeHelper::new(), FakePostgres::new());
+
+    setu_agent::reconcile::run(&state, &config, &helper, &caddy, &postgres)
+        .await
+        .expect("reconcile");
+    let routes = caddy.admin().routes();
+    let r = route(&routes, "setu-site-aaaaaaaa").expect("a");
+    assert_eq!(r["handle"][0]["handler"], "authentication");
+    assert_eq!(r["handle"][1]["handler"], "reverse_proxy");
+
+    // Auth cleared in state: the route goes back to the plain proxy.
+    state.sites.get_mut("aaaaaaaa").unwrap().basic_auth = None;
+    setu_agent::reconcile::run(&state, &config, &helper, &caddy, &postgres)
+        .await
+        .expect("reconcile");
+    let routes = caddy.admin().routes();
+    let r = route(&routes, "setu-site-aaaaaaaa").expect("a");
+    assert_eq!(r["handle"].as_array().unwrap().len(), 1);
+    assert_eq!(r["handle"][0]["handler"], "reverse_proxy");
 }

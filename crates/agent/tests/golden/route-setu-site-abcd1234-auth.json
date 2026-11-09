@@ -1,0 +1,35 @@
+{
+  "@id": "setu-site-abcd1234",
+  "handle": [
+    {
+      "handler": "authentication",
+      "providers": {
+        "http_basic": {
+          "accounts": [
+            {
+              "password": "$2a$14$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234",
+              "username": "alice"
+            }
+          ],
+          "realm": "a.example.test"
+        }
+      }
+    },
+    {
+      "handler": "reverse_proxy",
+      "upstreams": [
+        {
+          "dial": "127.0.0.1:20001"
+        }
+      ]
+    }
+  ],
+  "match": [
+    {
+      "host": [
+        "a.example.test"
+      ]
+    }
+  ],
+  "terminal": true
+}

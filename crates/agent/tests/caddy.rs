@@ -8,8 +8,8 @@
 use std::path::PathBuf;
 
 use setu_agent::caddy::{
-    route_json, site_route_id, site_upstream, CaddyAdmin, CaddySocket, FakeAdmin, FakeCaddy,
-    PANEL_ROUTE_ID, ROUTES_PATH,
+    route_json, route_json_with_auth, site_route_id, site_upstream, CaddyAdmin, CaddySocket,
+    FakeAdmin, FakeCaddy, PANEL_ROUTE_ID, ROUTES_PATH,
 };
 
 const SHORT: &str = "abcd1234";
@@ -311,5 +311,45 @@ async fn caddy_socket_against_real_caddy_when_available() {
     assert_eq!(
         caddy.list_route_ids().await.expect("ids"),
         vec![PANEL_ROUTE_ID.to_string()]
+    );
+}
+
+#[test]
+fn caddy_route_with_basic_auth_is_golden_and_validated() {
+    let hash = "$2a$14$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234";
+    let route = route_json_with_auth(
+        &site_route_id(SHORT).expect("id"),
+        "a.example.test",
+        &site_upstream(20001),
+        Some(("alice", hash)),
+    )
+    .expect("auth route");
+    assert_eq!(
+        serde_json::to_string_pretty(&route).expect("json") + "\n",
+        include_str!("golden/route-setu-site-abcd1234-auth.json")
+    );
+    // No credential: identical to the plain route.
+    assert_eq!(
+        route_json_with_auth("setu-site-abcd1234", "a.test", "127.0.0.1:1", None).expect("plain"),
+        route_json("setu-site-abcd1234", "a.test", "127.0.0.1:1").expect("plain")
+    );
+    // Hostile names and non-bcrypt hashes never reach the config.
+    for (u, h) in [
+        ("", hash),
+        ("a\"b", hash),
+        ("a b", hash),
+        ("alice", ""),
+        ("alice", "plaintext"),
+        ("alice", "$2a$14$x\"y"),
+    ] {
+        assert!(
+            route_json_with_auth("setu-site-abcd1234", "a.test", "127.0.0.1:1", Some((u, h)))
+                .is_err(),
+            "{u:?} {h:?}"
+        );
+    }
+    // The panel route never takes a credential.
+    assert!(
+        route_json_with_auth("setu-panel", "a.test", "127.0.0.1:1", Some(("alice", hash))).is_err()
     );
 }
