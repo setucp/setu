@@ -138,6 +138,7 @@ where
             site_short_id,
             domain,
             port,
+            www_redirect,
         } => {
             let id = match crate::caddy::site_route_id(site_short_id) {
                 Ok(id) => id,
@@ -149,13 +150,32 @@ where
             if let Err(e) = rt.update_state(site_short_id, |r| {
                 r.domain = Some(domain.clone());
                 r.port = *port;
+                r.no_www = !*www_redirect;
             }) {
                 return err(cmd_id, "set_route failed", e);
             }
-            match rt.caddy().upsert_route(&id, domain, &upstream).await {
+            if let Err(e) = rt.caddy().upsert_route(&id, domain, &upstream).await {
+                return err(cmd_id, "set_route failed", e);
+            }
+            // The `www.` name of an apex domain redirects to it; opting out
+            // (or a domain that has none) removes a redirect left from before.
+            let www_id = match crate::caddy::site_www_route_id(site_short_id) {
+                Ok(id) => id,
+                Err(e) => return err(cmd_id, "set_route failed", e),
+            };
+            let www = if *www_redirect {
+                crate::caddy::www_name(domain)
+            } else {
+                None
+            };
+            let applied = match &www {
+                Some(_) => rt.caddy().upsert_www_route(&www_id, domain).await,
+                None => rt.caddy().remove_route(&www_id).await,
+            };
+            match applied {
                 Ok(()) => ok(
                     cmd_id,
-                    serde_json::json!({"domain": domain, "route_id": id}),
+                    serde_json::json!({"domain": domain, "route_id": id, "www": www}),
                     "set_route ok",
                 ),
                 Err(e) => err(cmd_id, "set_route failed", e),
@@ -176,7 +196,15 @@ where
                     return err(cmd_id, "remove_route failed", e);
                 }
             }
-            match rt.caddy().remove_route(&id).await {
+            let removed = match crate::caddy::site_www_route_id(site_short_id) {
+                Ok(www_id) => rt.caddy().remove_route(&www_id).await,
+                Err(e) => Err(e),
+            };
+            let removed = match removed {
+                Ok(()) => rt.caddy().remove_route(&id).await,
+                Err(e) => Err(e),
+            };
+            match removed {
                 Ok(()) => ok(
                     cmd_id,
                     serde_json::json!({"domain": domain, "route_id": id}),

@@ -80,7 +80,53 @@ pub fn valid_route_id(id: &str) -> bool {
     id == PANEL_ROUTE_ID
         || id
             .strip_prefix("setu-site-")
-            .is_some_and(setu_common::is_short_id)
+            .is_some_and(|rest| setu_common::is_short_id(rest.strip_suffix("-www").unwrap_or(rest)))
+}
+
+/// `setu-site-<short>-www`: the redirect route of a site's `www.` name.
+pub fn site_www_route_id(short: &str) -> anyhow::Result<String> {
+    Ok(format!("{}-www", site_route_id(short)?))
+}
+
+/// Second-level labels that act as a public suffix under a country code
+/// (`example.co.uk`): a small fixed list, not the public suffix list.
+const SECOND_LEVEL: &[&str] = &["co", "com", "org", "net", "gov", "ac", "edu"];
+
+/// The `www.` name served beside `domain` when `domain` is an apex
+/// (`example.com`, `example.co.uk`); `None` for a subdomain or a name
+/// that already starts with `www.`.
+pub fn www_name(domain: &str) -> Option<String> {
+    let labels: Vec<&str> = domain.split('.').collect();
+    let apex = match labels.as_slice() {
+        [name, tld] => !name.is_empty() && tld.len() >= 2,
+        [name, sld, cc] => {
+            !name.is_empty() && SECOND_LEVEL.contains(sld) && cc.len() == 2 && *name != "www"
+        }
+        _ => false,
+    };
+    (apex && labels[0] != "www" && valid_domain(domain)).then(|| format!("www.{domain}"))
+}
+
+/// The redirect route (golden, see `tests/golden/route-setu-site-*-www.json`):
+/// `www.<domain>` answers `301` to `https://<domain>` keeping the URI. Naming
+/// the host in a matcher is what makes Caddy get its certificate.
+pub fn www_route_json(id: &str, domain: &str) -> anyhow::Result<serde_json::Value> {
+    if !valid_route_id(id) || !id.ends_with("-www") {
+        anyhow::bail!("invalid route id {id:?}");
+    }
+    let Some(www) = www_name(domain) else {
+        anyhow::bail!("{domain:?} has no www name");
+    };
+    Ok(serde_json::json!({
+        "@id": id,
+        "match": [{ "host": [www] }],
+        "handle": [{
+            "handler": "static_response",
+            "status_code": 301,
+            "headers": { "Location": [format!("https://{domain}{{http.request.uri}}")] },
+        }],
+        "terminal": true,
+    }))
 }
 
 /// `127.0.0.1:<port>` or `unix/<absolute path>` with a conservative
@@ -125,6 +171,8 @@ pub fn route_json(id: &str, domain: &str, upstream: &str) -> anyhow::Result<serd
 pub trait CaddyAdmin: Send + Sync {
     /// Create or replace the route `id` (`GET /id` → `PATCH` | `POST`).
     async fn upsert_route(&self, id: &str, domain: &str, upstream: &str) -> anyhow::Result<()>;
+    /// Create or replace the `www.` → apex redirect route `id`.
+    async fn upsert_www_route(&self, id: &str, domain: &str) -> anyhow::Result<()>;
     /// Delete route `id`; a missing route is success.
     async fn remove_route(&self, id: &str) -> anyhow::Result<()>;
     /// `@id`s of the routes of server `setu`, in order.
@@ -241,11 +289,10 @@ impl<T: AdminTransport> CaddyClient<T> {
     }
 }
 
-#[async_trait::async_trait]
-impl<T: AdminTransport> CaddyAdmin for CaddyClient<T> {
-    async fn upsert_route(&self, id: &str, domain: &str, upstream: &str) -> anyhow::Result<()> {
-        let route = route_json(id, domain, upstream)?;
-        let body = serde_json::to_vec(&route)?;
+impl<T: AdminTransport> CaddyClient<T> {
+    /// `GET /id` then `PATCH` (exists) or `POST` (missing) the route.
+    async fn put_route(&self, id: &str, route: &serde_json::Value) -> anyhow::Result<()> {
+        let body = serde_json::to_vec(route)?;
         let path = format!("/id/{id}");
         let (status, resp) = self.transport.request("GET", &path, None).await?;
         match status {
@@ -260,6 +307,17 @@ impl<T: AdminTransport> CaddyAdmin for CaddyClient<T> {
             other => anyhow::bail!("caddy get route: HTTP {other}: {}", first_line(&resp)),
         }
         Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl<T: AdminTransport> CaddyAdmin for CaddyClient<T> {
+    async fn upsert_route(&self, id: &str, domain: &str, upstream: &str) -> anyhow::Result<()> {
+        self.put_route(id, &route_json(id, domain, upstream)?).await
+    }
+
+    async fn upsert_www_route(&self, id: &str, domain: &str) -> anyhow::Result<()> {
+        self.put_route(id, &www_route_json(id, domain)?).await
     }
 
     async fn remove_route(&self, id: &str) -> anyhow::Result<()> {

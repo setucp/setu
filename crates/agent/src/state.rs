@@ -31,6 +31,9 @@ pub struct SiteRecord {
     pub domain: Option<String>,
     #[serde(default)]
     pub port: u16,
+    /// The operator opted out of the `www.` → apex redirect.
+    #[serde(default)]
+    pub no_www: bool,
     #[serde(default)]
     pub version: String,
     #[serde(default)]

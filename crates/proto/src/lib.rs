@@ -165,6 +165,10 @@ pub enum Command {
         site_short_id: String,
         domain: String,
         port: u16,
+        /// Serve `www.<domain>` with a 301 to the apex (apex domains only).
+        /// Absent in commands queued by an older control plane: on.
+        #[serde(default = "default_true")]
+        www_redirect: bool,
     },
     RemoveRoute {
         site_short_id: String,
@@ -206,6 +210,10 @@ pub const BACKUP_TIMEOUT: Duration = Duration::from_hours(1);
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_mins(2);
 /// Added to `startup_grace_s` for `health`.
 pub const HEALTH_SLACK: Duration = Duration::from_secs(30);
+
+fn default_true() -> bool {
+    true
+}
 
 impl Command {
     /// The snake-case `kind` tag (the JSON discriminator).
@@ -556,6 +564,7 @@ mod tests {
                     site_short_id: short(),
                     domain: "example.com".to_string(),
                     port: 20001,
+                    www_redirect: true,
                 },
                 "set_route",
             ),

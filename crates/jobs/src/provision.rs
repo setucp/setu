@@ -154,6 +154,7 @@ async fn machine(ctx: &JobCtx, site: &Site, steps: &Steps) -> Result<(), (&'stat
             site_short_id: short.clone(),
             domain: site.domain.clone(),
             port: prep.spec.port,
+            www_redirect: true,
         }
     );
     steps
