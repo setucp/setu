@@ -227,6 +227,7 @@ async fn every_command_kind_is_handled() {
             site_short_id: s(),
             domain: "example.com".to_string(),
             port: servers.health_port,
+            www_redirect: true,
         },
         Command::Backup {
             site: s(),
@@ -342,7 +343,14 @@ async fn every_command_kind_is_handled() {
                 let inv: InventoryReport =
                     serde_json::from_value(result.output.clone()).expect("inventory");
                 assert_eq!(inv.sites_on_disk, [short]);
-                assert_eq!(inv.routes, [format!("setu-site-{short}")]);
+                // example.com is an apex: its www redirect route is listed too.
+                assert_eq!(
+                    inv.routes,
+                    [
+                        format!("setu-site-{short}"),
+                        format!("setu-site-{short}-www")
+                    ]
+                );
                 assert_eq!(inv.databases, ["site_00000001"]);
                 assert_eq!(inv.units.len(), 1);
                 assert_eq!(inv.units[0].short_id, short);
@@ -486,6 +494,7 @@ async fn route_commands_key_off_the_site_short_id() {
         site_short_id: "abcd1234".to_string(),
         domain: "a.example.test".to_string(),
         port: 20001,
+        www_redirect: true,
     };
     let r = setu_agent::execute("c1", &set, &rt).await;
     assert!(r.ok, "{:?}", r.error);
@@ -506,6 +515,7 @@ async fn route_commands_key_off_the_site_short_id() {
         site_short_id: String::new(),
         domain: "b.example.test".to_string(),
         port: 20002,
+        www_redirect: true,
     };
     assert!(!setu_agent::execute("c2", &empty_short, &rt).await.ok);
 

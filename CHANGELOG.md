@@ -3,6 +3,19 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
+## Unreleased
+
+### Added
+
+- **`www.` redirect for apex domains.** A site on `example.com` also serves
+  `www.example.com`: the agent's Caddy config adds the `www` host (Caddy
+  fetches its certificate) with a `301` to `https://example.com{uri}`. The
+  agent understands an opt-out (`www_redirect: false` in `set_route`); the
+  control plane sends it on for every site for now, and the per-site setting
+  and the panel line are not wired yet. A subdomain or a `www.` name gets no
+  redirect (the apex check is a two-label rule plus `co.uk`-style second
+  levels, not the public suffix list).
+
 ## 0.1.6 — 2026-10-23
 
 ### Fixed

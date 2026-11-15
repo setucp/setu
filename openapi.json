@@ -4031,6 +4031,10 @@
               },
               "site_short_id": {
                 "type": "string"
+              },
+              "www_redirect": {
+                "type": "boolean",
+                "description": "Serve `www.<domain>` with a 301 to the apex (apex domains only).\nAbsent in commands queued by an older control plane: on."
               }
             }
           },

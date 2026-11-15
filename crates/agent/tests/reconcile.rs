@@ -12,6 +12,7 @@ fn record(domain: Option<&str>, port: u16) -> SiteRecord {
         port,
         version: "1.0.0".into(),
         db: None,
+        no_www: false,
     }
 }
 
@@ -185,4 +186,53 @@ async fn reconcile_keeps_panel_route_first() {
         vec!["setu-panel", "setu-site-aaaaaaaa", "setu-site-bbbbbbbb"],
         "panel first, sites kept in order"
     );
+}
+
+/// An apex domain gets its `www.` redirect rebuilt, an opted-out site and a
+/// subdomain get none, and the redirect of a vanished site is removed.
+#[tokio::test]
+async fn reconcile_serves_the_www_redirect_of_apex_domains_only() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = Paths::new(Some(dir.path().to_path_buf()));
+    let config = AgentConfig {
+        sites_root: p.sites(),
+        state_path: p.state(),
+        ..AgentConfig::default()
+    };
+    let mut state = State::default();
+    state
+        .sites
+        .insert("aaaaaaaa".into(), record(Some("example.test"), 20001));
+    let mut off = record(Some("other.test"), 20002);
+    off.no_www = true;
+    state.sites.insert("bbbbbbbb".into(), off);
+    state
+        .sites
+        .insert("cccccccc".into(), record(Some("blog.example.test"), 20003));
+    let caddy = FakeCaddy::new();
+    // A redirect left by a site the state no longer has.
+    caddy
+        .upsert_www_route("setu-site-zzzzzzzz-www", "gone.test")
+        .await
+        .expect("seed");
+    let (postgres, helper) = (FakePostgres::new(), FakeHelper::new());
+    for _ in 0..2 {
+        setu_agent::reconcile::run(&state, &config, &helper, &caddy, &postgres)
+            .await
+            .expect("reconcile");
+        let routes = caddy.admin().routes();
+        let www = route(&routes, "setu-site-aaaaaaaa-www").expect("www route");
+        assert_eq!(www["match"][0]["host"][0], "www.example.test");
+        assert_eq!(www["handle"][0]["status_code"], 301);
+        assert!(
+            route(&routes, "setu-site-bbbbbbbb-www").is_none(),
+            "opted out"
+        );
+        assert!(
+            route(&routes, "setu-site-cccccccc-www").is_none(),
+            "subdomain"
+        );
+        assert!(route(&routes, "setu-site-zzzzzzzz-www").is_none(), "stale");
+        assert_eq!(routes.len(), 4, "3 sites + 1 www: {routes:?}");
+    }
 }

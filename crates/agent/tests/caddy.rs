@@ -8,8 +8,8 @@
 use std::path::PathBuf;
 
 use setu_agent::caddy::{
-    route_json, site_route_id, site_upstream, CaddyAdmin, CaddySocket, FakeAdmin, FakeCaddy,
-    PANEL_ROUTE_ID, ROUTES_PATH,
+    route_json, site_route_id, site_upstream, site_www_route_id, valid_route_id, www_name,
+    www_route_json, CaddyAdmin, CaddySocket, FakeAdmin, FakeCaddy, PANEL_ROUTE_ID, ROUTES_PATH,
 };
 
 const SHORT: &str = "abcd1234";
@@ -312,4 +312,60 @@ async fn caddy_socket_against_real_caddy_when_available() {
         caddy.list_route_ids().await.expect("ids"),
         vec![PANEL_ROUTE_ID.to_string()]
     );
+}
+
+#[test]
+fn www_name_exists_for_apex_domains_only() {
+    for (domain, want) in [
+        ("example.com", Some("www.example.com")),
+        ("example.co.uk", Some("www.example.co.uk")),
+        ("www.example.com", None),
+        ("blog.example.com", None),
+        ("a.b.example.com", None),
+        ("localhost", None),
+        ("a.example.test", None),
+    ] {
+        assert_eq!(www_name(domain).as_deref(), want, "{domain}");
+    }
+}
+
+#[test]
+fn the_www_route_is_a_301_to_the_apex_and_is_golden() {
+    let id = site_www_route_id(SHORT).expect("id");
+    assert_eq!(id, "setu-site-abcd1234-www");
+    assert!(valid_route_id(&id));
+    assert!(!valid_route_id("setu-site-abcd1234-wwx"));
+    let route = www_route_json(&id, "example.test").expect("route");
+    assert_eq!(
+        serde_json::to_string_pretty(&route).expect("json") + "\n",
+        include_str!("golden/route-setu-site-abcd1234-www.json")
+    );
+    assert!(
+        www_route_json(&id, "a.example.test").is_err(),
+        "no www name"
+    );
+    assert!(www_route_json("setu-site-abcd1234", "example.test").is_err());
+}
+
+#[tokio::test]
+async fn the_www_route_is_upserted_beside_the_site_route() {
+    let caddy = FakeCaddy::new();
+    let id = site_route_id(SHORT).expect("id");
+    let www = site_www_route_id(SHORT).expect("id");
+    caddy
+        .upsert_route(&id, "example.test", &site_upstream(20001))
+        .await
+        .expect("site");
+    caddy
+        .upsert_www_route(&www, "example.test")
+        .await
+        .expect("www");
+    caddy
+        .upsert_www_route(&www, "example.test")
+        .await
+        .expect("again");
+    let routes = caddy.admin().routes();
+    assert_eq!(routes.len(), 2, "no duplicate: {routes:?}");
+    caddy.remove_route(&www).await.expect("remove");
+    assert_eq!(caddy.admin().routes().len(), 1);
 }
