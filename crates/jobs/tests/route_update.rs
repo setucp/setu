@@ -146,3 +146,30 @@ async fn a_site_that_is_not_settled_is_refused() {
         .expect_err("still provisioning");
     assert!(err.message.contains("cannot change its route"), "{err}");
 }
+
+#[tokio::test]
+async fn a_retried_provision_keeps_the_stored_credentials() {
+    let (_test_db, fx) = setup(&manifest_toml("0.1.0")).await;
+    let agent = FakeAgent::new();
+    let (ctx, _logs) = ctx_with_logs(fx.db.clone(), &agent);
+    provision::run(&ctx, &fx.site_id).await.expect("provision");
+
+    let hash = format!("$2b$12${}", "b".repeat(53));
+    fx.db
+        .basic_auths()
+        .set_with_route_job(
+            &fx.site_id,
+            &fx.server_id,
+            "alice",
+            &hash,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    // A failed job followed by Retry runs provision again from step 1:
+    // the route it sends must not make the site public.
+    provision::run(&ctx, &fx.site_id).await.expect("retry");
+    let last = agent.commands_of("set_route").pop().unwrap();
+    assert_eq!(last["basic_auth"]["username"], "alice");
+    assert_eq!(last["basic_auth"]["password_hash"], hash.as_str());
+}
