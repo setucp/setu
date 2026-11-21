@@ -22,8 +22,8 @@ use crate::config::atomic_write;
 /// How many results `recent` keeps (spec §5: "last 1000").
 pub const RECENT_CAP: usize = 1000;
 
-/// One site the agent knows about.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// One site the agent knows about. `Debug` redacts the bcrypt hash.
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SiteRecord {
     /// Recorded by `SetRoute`, cleared by `RemoveRoute`: reconcile
     /// rebuilds `setu-site-<short>` from it.
@@ -31,10 +31,31 @@ pub struct SiteRecord {
     pub domain: Option<String>,
     #[serde(default)]
     pub port: u16,
+    /// `(user, bcrypt hash)` recorded by `SetRoute`; reconcile puts it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basic_auth: Option<(String, String)>,
     #[serde(default)]
     pub version: String,
     #[serde(default)]
     pub db: Option<String>,
+}
+
+impl std::fmt::Debug for SiteRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SiteRecord")
+            .field("domain", &self.domain)
+            .field("port", &self.port)
+            .field(
+                "basic_auth",
+                &self
+                    .basic_auth
+                    .as_ref()
+                    .map(|(user, _)| (user, "[redacted]")),
+            )
+            .field("version", &self.version)
+            .field("db", &self.db)
+            .finish()
+    }
 }
 
 /// One persisted command result; `posted` once the control plane
@@ -215,6 +236,25 @@ impl StateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_never_prints_the_basic_auth_hash() {
+        let hash = format!("$2b$12${}", "a".repeat(53));
+        let mut state = State::default();
+        state.sites.insert(
+            "abc".into(),
+            SiteRecord {
+                basic_auth: Some(("alice".into(), hash.clone())),
+                ..SiteRecord::default()
+            },
+        );
+        let shown = format!("{state:?}");
+        assert!(
+            shown.contains("alice") && shown.contains("[redacted]"),
+            "{shown}"
+        );
+        assert!(!shown.contains(&hash) && !shown.contains("$2b$"), "{shown}");
+    }
 
     #[test]
     fn missing_file_is_empty_state() {

@@ -286,6 +286,10 @@ pub fn secrets_of(cmd: &Command) -> Vec<String> {
     let mut out: Vec<String> = match cmd {
         Command::CreateDatabase { password, .. } => vec![password.clone()],
         Command::WriteEnv { env, .. } => env.iter().map(|v| v.value.clone()).collect(),
+        Command::SetRoute {
+            basic_auth: Some(auth),
+            ..
+        } => vec![auth.password_hash.clone()],
         _ => Vec::new(),
     };
     out.retain(|s| !s.is_empty());
@@ -346,6 +350,31 @@ mod tests {
         );
         assert_eq!(r.log, "wrote ***");
         assert_eq!(r.error.as_deref(), Some("bad value ***"));
+    }
+
+    #[test]
+    fn redaction_masks_the_set_route_hash() {
+        let cmd = Command::SetRoute {
+            site_short_id: "abcd1234".into(),
+            domain: "a.example".into(),
+            port: 8080,
+            basic_auth: Some(setu_proto::BasicAuth {
+                username: "ops".into(),
+                password_hash: "$2b$12$hashvalue".into(),
+            }),
+        };
+        let r = redact_result(
+            CommandResult {
+                id: "c".into(),
+                ok: false,
+                output: serde_json::Value::Null,
+                log: "caddy got $2b$12$hashvalue".into(),
+                error: Some("refused $2b$12$hashvalue".into()),
+            },
+            &secrets_of(&cmd),
+        );
+        assert_eq!(r.log, "caddy got ***");
+        assert_eq!(r.error.as_deref(), Some("refused ***"));
     }
 
     /// `create_database`/`drop_database` name `site_<short>`: they queue

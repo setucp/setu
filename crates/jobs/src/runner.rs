@@ -229,6 +229,7 @@ impl Worker {
                 let changes = open_changes(&self.sealer, &job.payload)?;
                 crate::env_update::run(&ctx, &site("env_update")?, &changes).await
             }
+            "route_update" => crate::route_update::run(&ctx, &site("route_update")?).await,
             kind @ ("restart_site" | "stop_site" | "start_site") => {
                 let op = crate::lifecycle::Op::from_job_kind(kind).ok_or_else(|| {
                     AppError::validation(format!("unknown lifecycle kind {kind}"))

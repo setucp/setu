@@ -17,7 +17,7 @@
 use setu_common::{AppError, ErrorCode};
 use setu_db::{Plan, Site};
 use setu_manifest::Manifest;
-use setu_proto::{Command, EnvVar, InventoryReport, SiteSpec};
+use setu_proto::{BasicAuth, Command, EnvVar, InventoryReport, SiteSpec};
 
 use crate::{
     binary_ref, build_spec, load_manifest, mark_failed, server_target, site_env, without_once,
@@ -148,14 +148,33 @@ async fn machine(ctx: &JobCtx, site: &Site, steps: &Steps) -> Result<(), (&'stat
             site: prep.spec.clone()
         }
     );
-    agent_step!(
-        "set_route",
-        Command::SetRoute {
-            site_short_id: short.clone(),
-            domain: site.domain.clone(),
-            port: prep.spec.port,
-        }
-    );
+    // A retried provision of a site that has basic auth must not publish
+    // it: the route carries the stored credentials (route_update does the
+    // same).
+    steps
+        .run(ctx, "set_route", async {
+            let basic_auth = ctx
+                .db
+                .basic_auths()
+                .get(&site.id)
+                .await?
+                .map(|a| BasicAuth {
+                    username: a.username,
+                    password_hash: a.password_hash,
+                });
+            ctx.agent_ok(
+                server,
+                Command::SetRoute {
+                    site_short_id: short.clone(),
+                    domain: site.domain.clone(),
+                    port: prep.spec.port,
+                    basic_auth,
+                },
+            )
+            .await
+        })
+        .await
+        .map_err(|e| ("set_route", e))?;
     steps
         .run(ctx, "verify", verify(ctx, site))
         .await

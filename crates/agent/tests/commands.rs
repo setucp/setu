@@ -227,6 +227,7 @@ async fn every_command_kind_is_handled() {
             site_short_id: s(),
             domain: "example.com".to_string(),
             port: servers.health_port,
+            basic_auth: None,
         },
         Command::Backup {
             site: s(),
@@ -486,6 +487,7 @@ async fn route_commands_key_off_the_site_short_id() {
         site_short_id: "abcd1234".to_string(),
         domain: "a.example.test".to_string(),
         port: 20001,
+        basic_auth: None,
     };
     let r = setu_agent::execute("c1", &set, &rt).await;
     assert!(r.ok, "{:?}", r.error);
@@ -506,6 +508,7 @@ async fn route_commands_key_off_the_site_short_id() {
         site_short_id: String::new(),
         domain: "b.example.test".to_string(),
         port: 20002,
+        basic_auth: None,
     };
     assert!(!setu_agent::execute("c2", &empty_short, &rt).await.ok);
 
