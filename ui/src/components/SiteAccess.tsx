@@ -72,7 +72,10 @@ export function SiteAccess({
   }, [current]);
 
   if (auth.isPending) return <SkeletonRows rows={3} label="Loading access…" />;
-  if (auth.error instanceof ApiError) return <ErrorText error={auth.error} />;
+  // Any failure (not only an ApiError: a dropped connection throws a
+  // TypeError) must not read as "open to everyone".
+  if (auth.isError) return <ErrorText error={auth.error} />;
+  if (auth.data === undefined) return <SkeletonRows rows={3} label="Loading access…" />;
 
   const canEdit = me.data !== undefined && me.data.role !== "viewer";
   const busy = !settled(site.status);

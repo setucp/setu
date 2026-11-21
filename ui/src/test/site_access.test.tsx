@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Toaster } from "sonner";
 import { describe, expect, it, vi } from "vitest";
 import { passwordError, SiteAccess, usernameError } from "@/components/SiteAccess";
 import type { SiteDetail } from "@/lib/client";
@@ -126,12 +127,34 @@ describe("site access (basic auth)", () => {
 
     view.unmount();
     const onSubmitted = vi.fn();
-    renderWithClient(<SiteAccess site={site()} onSubmitted={onSubmitted} />);
+    renderWithClient(
+      <>
+        <SiteAccess site={site()} onSubmitted={onSubmitted} />
+        <Toaster />
+      </>,
+    );
     await user.type(await screen.findByLabelText("User name"), "ada");
     await user.type(screen.getByLabelText("Password"), "12345678");
     await user.type(screen.getByLabelText("Password again"), "12345678");
     await user.click(screen.getByRole("button", { name: /protect site/i }));
     await waitFor(() => expect(screen.getByLabelText("Password")).toHaveValue("12345678"));
     expect(onSubmitted).not.toHaveBeenCalled();
+    // The server's reason reaches the operator.
+    expect(await screen.findByText("a job is already running for this site")).toBeInTheDocument();
+  });
+
+  it('a failed load is an error, never "open to everyone"', async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        if (String(url).endsWith("/api/v1/auth/me")) return json(me("owner"));
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+    renderWithClient(<SiteAccess site={site()} />);
+    expect(await screen.findByText("Failed to fetch")).toBeInTheDocument();
+    expect(screen.queryByText("Open to everyone")).toBeNull();
+    expect(screen.queryByText("Password protected")).toBeNull();
+    expect(screen.queryByRole("button", { name: /protect site/i })).toBeNull();
   });
 });
