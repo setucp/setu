@@ -168,6 +168,11 @@ async fn a_retried_provision_keeps_the_stored_credentials() {
         .unwrap();
     // A failed job followed by Retry runs provision again from step 1:
     // the route it sends must not make the site public.
+    fx.db
+        .sites()
+        .set_status(&fx.site_id, "failed", Some("set_route"))
+        .await
+        .unwrap();
     provision::run(&ctx, &fx.site_id).await.expect("retry");
     let last = agent.commands_of("set_route").pop().unwrap();
     assert_eq!(last["basic_auth"]["username"], "alice");
