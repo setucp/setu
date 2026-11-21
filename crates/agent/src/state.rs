@@ -34,6 +34,11 @@ pub struct SiteRecord {
     /// `(user, bcrypt hash)` recorded by `SetRoute`; reconcile puts it back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub basic_auth: Option<(String, String)>,
+    /// The site's `www.` → apex redirect is on. Off when absent (a state
+    /// file from before 0.1.7, a command from an older control plane): an
+    /// upgrade changes no site until its setting is sent.
+    #[serde(default)]
+    pub www_redirect: bool,
     #[serde(default)]
     pub version: String,
     #[serde(default)]
@@ -52,6 +57,7 @@ impl std::fmt::Debug for SiteRecord {
                     .as_ref()
                     .map(|(user, _)| (user, "[redacted]")),
             )
+            .field("www_redirect", &self.www_redirect)
             .field("version", &self.version)
             .field("db", &self.db)
             .finish()
@@ -93,6 +99,39 @@ pub enum StateError {
 }
 
 impl State {
+    /// The `www.` name `short`'s route redirects to its apex domain: none
+    /// when the site opted out, its domain is not an apex, or another site
+    /// on this server serves that very name (first-match routing would let
+    /// the redirect shadow the other site).
+    pub fn www_host(&self, short: &str) -> Option<String> {
+        let site = self.sites.get(short)?;
+        if !site.www_redirect {
+            return None;
+        }
+        let www = crate::caddy::www_name(site.domain.as_deref()?)?;
+        let taken = self
+            .sites
+            .iter()
+            .any(|(other, r)| other != short && r.domain.as_deref() == Some(www.as_str()));
+        (!taken).then_some(www)
+    }
+
+    /// The other sites whose `www.` name is `domain`: their redirect
+    /// appears or disappears when a site starts or stops serving `domain`.
+    pub fn www_neighbours(&self, short: &str, domain: &str) -> Vec<String> {
+        self.sites
+            .iter()
+            .filter(|(other, r)| {
+                other.as_str() != short
+                    && r.domain
+                        .as_deref()
+                        .and_then(crate::caddy::www_name)
+                        .is_some_and(|w| w == domain)
+            })
+            .map(|(other, _)| other.clone())
+            .collect()
+    }
+
     /// Load from `path`; a missing file is empty state (fresh agent).
     pub fn load(path: &Path) -> Result<Self, StateError> {
         match std::fs::read_to_string(path) {

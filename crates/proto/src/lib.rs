@@ -185,6 +185,10 @@ pub enum Command {
         /// Absent (and not serialised) for a site without basic auth.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         basic_auth: Option<BasicAuth>,
+        /// Serve `www.<domain>` with a 301 to the apex (apex domains only).
+        /// Absent in commands queued by an older control plane: off.
+        #[serde(default)]
+        www_redirect: bool,
     },
     RemoveRoute {
         site_short_id: String,
@@ -595,6 +599,7 @@ mod tests {
                         username: "alice".to_string(),
                         password_hash: SECRET.to_string(),
                     }),
+                    www_redirect: true,
                 },
                 "set_route",
             ),
@@ -856,12 +861,25 @@ mod tests {
     }
 
     #[test]
+    fn set_route_without_www_redirect_means_off() {
+        let cmd: Command = serde_json::from_str(
+            r#"{"kind":"set_route","site_short_id":"abcd1234","domain":"example.com","port":20001}"#,
+        )
+        .unwrap();
+        let Command::SetRoute { www_redirect, .. } = cmd else {
+            panic!("not set_route");
+        };
+        assert!(!www_redirect);
+    }
+
+    #[test]
     fn set_route_without_basic_auth_has_no_secret() {
         let open = Command::SetRoute {
             site_short_id: short(),
             domain: "example.com".to_string(),
             port: 20001,
             basic_auth: None,
+            www_redirect: true,
         };
         assert!(!open.has_secrets());
         assert_eq!(open.redact(), serde_json::to_value(&open).unwrap());

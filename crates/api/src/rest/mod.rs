@@ -13,6 +13,7 @@ pub mod plans;
 pub mod servers;
 pub mod setup;
 pub mod sites;
+pub mod www_redirect;
 
 use axum::{
     extract::{FromRequest, Request, State},
@@ -109,6 +110,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/sites/{id}/backups/{bid}", delete(backups::delete))
         .route("/sites/{id}/backups/{bid}/restore", post(backups::restore))
+        .route("/sites/{id}/www-redirect", put(www_redirect::set))
         .route(
             "/sites/{id}/basic-auth",
             get(basic_auth::get)

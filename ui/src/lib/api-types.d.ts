@@ -1721,6 +1721,8 @@ export interface components {
             status: string;
             /** Format: date-time */
             updated_at: string;
+            /** @description `www.<domain>` redirects to the domain (apex domains only). */
+            www_redirect: boolean;
         };
         /**
          * @description Everything the agent needs to materialise one site. No paths, no
@@ -1782,6 +1784,15 @@ export interface components {
          * @enum {string}
          */
         Workdir: "exec_dir" | "bin" | "data";
+        /** @description `PUT /sites/{id}/www-redirect` body. */
+        WwwRedirectRequest: {
+            enabled: boolean;
+        };
+        /** @description The setting after the change and the route job that applies it. */
+        WwwRedirectResponse: {
+            job: components["schemas"]["JobOut"];
+            www_redirect: boolean;
+        };
     };
     responses: never;
     parameters: never;

@@ -139,6 +139,7 @@ export function siteFixture(partial: Record<string, unknown> = {}) {
     port: 20001,
     db_name: "site_abcd1234",
     owner_email: "owner@example.com",
+    www_redirect: false,
     failed_step: null,
     created_at: NOW,
     updated_at: NOW,

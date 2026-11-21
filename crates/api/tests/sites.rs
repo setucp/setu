@@ -2397,3 +2397,61 @@ async fn a_failed_route_change_shows_as_failed_until_it_is_applied() {
     let again = owner.delete(&url).send().await.expect("delete");
     assert_eq!(again.status(), reqwest::StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn the_www_redirect_is_off_for_old_sites_on_for_new_and_switchable() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let viewer = srv.login_as("viewer").await;
+    let (site_id, _server_id) = running_site(&srv, &owner, "wwwred").await;
+    let url = srv.url(&format!("/api/v1/sites/{site_id}/www-redirect"));
+
+    let site: Value = owner
+        .get(srv.url(&format!("/api/v1/sites/{site_id}")))
+        .send()
+        .await
+        .expect("get")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(site["www_redirect"], true, "new sites have it on: {site}");
+
+    let denied = viewer
+        .put(&url)
+        .json(&json!({"enabled": false}))
+        .send()
+        .await
+        .expect("put");
+    assert_eq!(denied.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let off = owner
+        .put(&url)
+        .json(&json!({"enabled": false}))
+        .send()
+        .await
+        .expect("put");
+    assert_eq!(off.status(), reqwest::StatusCode::ACCEPTED);
+    let body: Value = off.json().await.expect("json");
+    assert_eq!(body["www_redirect"], false);
+    let job = body["job"]["id"].as_str().expect("job").to_string();
+    let done = poll_job(&srv, &owner, &job).await.expect("job");
+    assert_eq!(done["status"], "done", "{done}");
+    let routes = srv.agent.commands_of("set_route");
+    assert_eq!(routes.last().expect("set_route")["www_redirect"], false);
+
+    let on = owner
+        .put(&url)
+        .json(&json!({"enabled": true}))
+        .send()
+        .await
+        .expect("put");
+    assert_eq!(on.status(), reqwest::StatusCode::ACCEPTED);
+    let job = on.json::<Value>().await.expect("json")["job"]["id"]
+        .as_str()
+        .expect("job")
+        .to_string();
+    poll_job(&srv, &owner, &job).await.expect("job");
+    let routes = srv.agent.commands_of("set_route");
+    assert_eq!(routes.last().expect("set_route")["www_redirect"], true);
+}
