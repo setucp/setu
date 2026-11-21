@@ -179,7 +179,7 @@ where
                 r.basic_auth = basic_auth
                     .as_ref()
                     .map(|a| (a.username.clone(), a.password_hash.clone()));
-                r.no_www = !*www_redirect;
+                r.www_redirect = *www_redirect;
             }) {
                 return err(cmd_id, "set_route failed", e);
             }

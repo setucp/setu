@@ -36,7 +36,7 @@ fn state_round_trips_and_caps_results() {
                 version: "1.2.3".into(),
                 db: Some("site_abcd1234".into()),
                 basic_auth: None,
-                no_www: false,
+                www_redirect: true,
             }
         })
         .expect("site");
@@ -147,6 +147,7 @@ fn www_host_follows_the_opt_out_the_apex_rule_and_other_sites() {
     let site = |domain: &str| SiteRecord {
         domain: Some(domain.to_string()),
         port: 20001,
+        www_redirect: true,
         ..SiteRecord::default()
     };
     let mut st = State::default();
@@ -169,6 +170,17 @@ fn www_host_follows_the_opt_out_the_apex_rule_and_other_sites() {
     st.sites.get_mut("cccccccc").unwrap().domain = None;
     assert_eq!(st.www_host("aaaaaaaa").as_deref(), Some("www.example.test"));
 
-    st.sites.get_mut("aaaaaaaa").unwrap().no_www = true;
+    st.sites.get_mut("aaaaaaaa").unwrap().www_redirect = false;
     assert_eq!(st.www_host("aaaaaaaa"), None, "opted out");
+}
+
+#[test]
+fn a_state_record_from_before_0_1_7_has_no_www_redirect() {
+    use setu_agent::state::State;
+    let st: State = serde_json::from_str(
+        r#"{"sites":{"aaaaaaaa":{"domain":"example.test","port":20001,"version":"1"}}}"#,
+    )
+    .expect("old state");
+    assert!(!st.sites["aaaaaaaa"].www_redirect);
+    assert_eq!(st.www_host("aaaaaaaa"), None);
 }

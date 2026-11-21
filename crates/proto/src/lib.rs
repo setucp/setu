@@ -186,8 +186,8 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         basic_auth: Option<BasicAuth>,
         /// Serve `www.<domain>` with a 301 to the apex (apex domains only).
-        /// Absent in commands queued by an older control plane: on.
-        #[serde(default = "default_true")]
+        /// Absent in commands queued by an older control plane: off.
+        #[serde(default)]
         www_redirect: bool,
     },
     RemoveRoute {
@@ -230,10 +230,6 @@ pub const BACKUP_TIMEOUT: Duration = Duration::from_hours(1);
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_mins(2);
 /// Added to `startup_grace_s` for `health`.
 pub const HEALTH_SLACK: Duration = Duration::from_secs(30);
-
-fn default_true() -> bool {
-    true
-}
 
 impl Command {
     /// The snake-case `kind` tag (the JSON discriminator).
@@ -862,6 +858,18 @@ mod tests {
             Command::Health { site: slow }.default_timeout(),
             Duration::from_secs(330)
         );
+    }
+
+    #[test]
+    fn set_route_without_www_redirect_means_off() {
+        let cmd: Command = serde_json::from_str(
+            r#"{"kind":"set_route","site_short_id":"abcd1234","domain":"example.com","port":20001}"#,
+        )
+        .unwrap();
+        let Command::SetRoute { www_redirect, .. } = cmd else {
+            panic!("not set_route");
+        };
+        assert!(!www_redirect);
     }
 
     #[test]

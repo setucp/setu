@@ -34,9 +34,11 @@ pub struct SiteRecord {
     /// `(user, bcrypt hash)` recorded by `SetRoute`; reconcile puts it back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub basic_auth: Option<(String, String)>,
-    /// The operator opted out of the `www.` → apex redirect.
+    /// The site's `www.` → apex redirect is on. Off when absent (a state
+    /// file from before 0.1.7, a command from an older control plane): an
+    /// upgrade changes no site until its setting is sent.
     #[serde(default)]
-    pub no_www: bool,
+    pub www_redirect: bool,
     #[serde(default)]
     pub version: String,
     #[serde(default)]
@@ -55,7 +57,7 @@ impl std::fmt::Debug for SiteRecord {
                     .as_ref()
                     .map(|(user, _)| (user, "[redacted]")),
             )
-            .field("no_www", &self.no_www)
+            .field("www_redirect", &self.www_redirect)
             .field("version", &self.version)
             .field("db", &self.db)
             .finish()
@@ -103,7 +105,7 @@ impl State {
     /// the redirect shadow the other site).
     pub fn www_host(&self, short: &str) -> Option<String> {
         let site = self.sites.get(short)?;
-        if site.no_www {
+        if !site.www_redirect {
             return None;
         }
         let www = crate::caddy::www_name(site.domain.as_deref()?)?;

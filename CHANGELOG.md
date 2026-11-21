@@ -32,7 +32,9 @@ matching the tag.
   `https://example.com{uri}`. It is a per-site setting: on for sites
   created from 0.1.7, off for existing sites (nothing changes on upgrade);
   `PUT /api/v1/sites/{id}/www-redirect` with `{"enabled": bool}` turns it on
-  or off through a `route_update` job, and `SiteOut` shows `www_redirect`.
+  or off through a `route_update` job (API only for now; the panel has no
+  switch yet), and `SiteOut` shows `www_redirect`. The agent treats a site
+  without the setting as off, so upgrading changes no existing site.
   A subdomain or a `www.` name gets no redirect (the apex check is a
   two-label rule plus `co.uk`-style second levels, not the public suffix
   list), and neither does an apex whose `www.` name is itself a site on the
