@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
+  type BasicAuthPutBody,
   type CreateSitePayload,
   type EnvPutBody,
   type Operator,
@@ -226,6 +227,26 @@ export function usePutSiteEnv(siteId: string) {
     mutationFn: (body: EnvPutBody) => api.putSiteEnv(siteId, body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["sites", siteId, "env"] });
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+export function useBasicAuth(siteId: string) {
+  return useQuery({
+    queryKey: ["sites", siteId, "basic-auth"],
+    queryFn: () => api.getBasicAuth(siteId),
+  });
+}
+
+/** `PUT` with a body sets or replaces the credentials; `null` removes them. */
+export function useSetBasicAuth(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BasicAuthPutBody | null) =>
+      body === null ? api.deleteBasicAuth(siteId) : api.putBasicAuth(siteId, body),
+    onSuccess: (res) => {
+      queryClient.setQueryData(["sites", siteId, "basic-auth"], res.basic_auth ?? null);
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
     },
   });

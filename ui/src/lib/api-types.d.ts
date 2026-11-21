@@ -751,6 +751,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sites/{id}/basic-auth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The site's basic-auth user name (viewer and above). */
+        get: operations["get"];
+        /**
+         * Set or replace the site's basic auth (operator and above); enqueues a
+         *     route update.
+         */
+        put: operations["put"];
+        post?: never;
+        /** Remove the site's basic auth (operator and above); 404 when none. */
+        delete: operations["delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sites/{id}/env": {
         parameters: {
             query?: never;
@@ -1046,6 +1068,36 @@ export interface components {
             taken_at: string;
         };
         /**
+         * @description HTTP basic-auth for one site: the user name and a bcrypt hash (never
+         *     the password). `Debug` redacts the hash.
+         */
+        BasicAuth: {
+            password_hash: string;
+            username: string;
+        };
+        /** @description `GET /sites/{id}/basic-auth`: the setting, or `null` when the site is open. */
+        BasicAuthGetOut: {
+            basic_auth?: null | components["schemas"]["BasicAuthOut"];
+        };
+        /** @description `PUT`/`DELETE` result: the setting after the change and the route job. */
+        BasicAuthJobResponse: {
+            basic_auth?: null | components["schemas"]["BasicAuthOut"];
+            job: components["schemas"]["JobOut"];
+        };
+        /** @description A site's basic-auth setting: the user name only. */
+        BasicAuthOut: {
+            /** Format: date-time */
+            updated_at: string;
+            username: string;
+        };
+        /** @description `PUT /sites/{id}/basic-auth` body. */
+        BasicAuthPutRequest: {
+            /** @description 8 to 72 bytes, no control characters. Never stored or returned. */
+            password: string;
+            /** @description Letters, digits and `._-`, 1 to 64. */
+            username: string;
+        };
+        /**
          * @description What a [`BinaryRef`] download is.
          * @enum {string}
          */
@@ -1127,6 +1179,7 @@ export interface components {
             kind: "health";
             site: components["schemas"]["SiteSpec"];
         } | {
+            basic_auth?: null | components["schemas"]["BasicAuth"];
             domain: string;
             /** @enum {string} */
             kind: "set_route";
@@ -3663,6 +3716,164 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BasicAuthGetOut"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BasicAuthPutRequest"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BasicAuthJobResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BasicAuthJobResponse"];
                 };
             };
             401: {

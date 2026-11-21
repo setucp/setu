@@ -13,6 +13,11 @@ matching the tag.
   site's route. Only a bcrypt hash is stored, and no response or log
   carries the password or the hash. A change runs as a `route_update` job
   and leaves the site's status alone.
+- **Access tab on the site page.** Shows whether the site asks for a
+  password and under which user name; operators set, replace or remove the
+  credentials there (checked in the browser by the same rules as the API:
+  user name of letters, digits and `._-`, password of 8 to 72 bytes without
+  control characters). Viewers see the state only.
 
 ## 0.1.6 — 2026-10-23
 

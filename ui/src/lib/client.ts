@@ -17,6 +17,9 @@ export type Job = components["schemas"]["JobOut"];
 export type AuditEntry = components["schemas"]["AuditEntryOut"];
 export type EnvEntry = components["schemas"]["EnvEntryOut"];
 export type EnvPutBody = components["schemas"]["EnvPutRequest"];
+export type BasicAuth = components["schemas"]["BasicAuthOut"];
+export type BasicAuthPutBody = components["schemas"]["BasicAuthPutRequest"];
+export type BasicAuthJobResponse = components["schemas"]["BasicAuthJobResponse"];
 export type ResetGetOut = components["schemas"]["ResetGetOut"];
 export type Backup = components["schemas"]["BackupOut"];
 export type ManifestError = components["schemas"]["ManifestErrorOut"];
@@ -280,6 +283,29 @@ export const api = {
       `/api/v1/sites/${encodeURIComponent(siteId)}/env/${encodeURIComponent(name)}/reveal`,
       { method: "POST", body: JSON.stringify({ password }) },
     );
+  },
+
+  /** The site's basic-auth user name, or `null` when the site is open. */
+  async getBasicAuth(siteId: string): Promise<BasicAuth | null> {
+    const body = await request<{ basic_auth?: BasicAuth | null }>(
+      `/api/v1/sites/${encodeURIComponent(siteId)}/basic-auth`,
+    );
+    return body.basic_auth ?? null;
+  },
+
+  /** Set or replace the site's basic auth; a route job starts. */
+  putBasicAuth(siteId: string, body: BasicAuthPutBody): Promise<BasicAuthJobResponse> {
+    return request(`/api/v1/sites/${encodeURIComponent(siteId)}/basic-auth`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+  },
+
+  /** Remove the site's basic auth; a route job starts. */
+  deleteBasicAuth(siteId: string): Promise<BasicAuthJobResponse> {
+    return request(`/api/v1/sites/${encodeURIComponent(siteId)}/basic-auth`, {
+      method: "DELETE",
+    });
   },
 
   async listBackups(siteId: string): Promise<Backup[]> {
