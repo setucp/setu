@@ -2,7 +2,7 @@
 //!
 //! Each public `run` function drives one job kind to completion:
 //! [`provision`], [`update`], [`backup`], [`restore`], [`delete`],
-//! [`delete_backup`], [`env_update`], [`lifecycle`], with [`runner`]
+//! [`delete_backup`], [`env_update`], [`lifecycle`], [`route_update`], with [`runner`]
 //! claiming jobs from the Postgres queue. Every step runs through
 //! [`JobCtx::step`]: it stores the step as the job's cursor, then logs
 //! `step <name>: ok` / `step <name>: error <msg>` (into `jobs.log` when
@@ -36,6 +36,7 @@ pub mod env_update;
 pub mod lifecycle;
 pub mod provision;
 pub mod restore;
+pub mod route_update;
 pub mod runner;
 pub mod scheduler;
 pub mod update;

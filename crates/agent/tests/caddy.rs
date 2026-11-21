@@ -8,8 +8,9 @@
 use std::path::PathBuf;
 
 use setu_agent::caddy::{
-    route_json, site_route_id, site_upstream, site_www_route_id, valid_route_id, www_name,
-    www_route_json, CaddyAdmin, CaddySocket, FakeAdmin, FakeCaddy, PANEL_ROUTE_ID, ROUTES_PATH,
+    route_json, route_json_with_auth, site_route_id, site_upstream, site_www_route_id,
+    valid_route_id, www_name, www_route_json, CaddyAdmin, CaddySocket, FakeAdmin, FakeCaddy,
+    PANEL_ROUTE_ID, ROUTES_PATH,
 };
 
 const SHORT: &str = "abcd1234";
@@ -368,4 +369,54 @@ async fn the_www_route_is_upserted_beside_the_site_route() {
     assert_eq!(routes.len(), 2, "no duplicate: {routes:?}");
     caddy.remove_route(&www).await.expect("remove");
     assert_eq!(caddy.admin().routes().len(), 1);
+}
+
+#[test]
+fn caddy_route_with_basic_auth_is_golden_and_validated() {
+    let hash = "$2a$14$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234";
+    let route = route_json_with_auth(
+        &site_route_id(SHORT).expect("id"),
+        "a.example.test",
+        &site_upstream(20001),
+        Some(("alice", hash)),
+    )
+    .expect("auth route");
+    assert_eq!(
+        serde_json::to_string_pretty(&route).expect("json") + "\n",
+        include_str!("golden/route-setu-site-abcd1234-auth.json")
+    );
+    // No credential: identical to the plain route.
+    assert_eq!(
+        route_json_with_auth("setu-site-abcd1234", "a.test", "127.0.0.1:1", None).expect("plain"),
+        route_json("setu-site-abcd1234", "a.test", "127.0.0.1:1").expect("plain")
+    );
+    // Hostile names and non-bcrypt hashes never reach the config.
+    let short = &hash[..59];
+    let long = format!("{hash}a");
+    let wrong_prefix = format!("$2x${}", &hash[4..]);
+    let bad_cost = format!("$2a$1x{}", &hash[6..]);
+    let bad_char = format!("{}!", &hash[..59]);
+    for (u, h) in [
+        ("", hash),
+        ("a\"b", hash),
+        ("a b", hash),
+        ("alice", ""),
+        ("alice", "plaintext"),
+        ("alice", "$2a$14$x\"y"),
+        ("alice", short),
+        ("alice", long.as_str()),
+        ("alice", wrong_prefix.as_str()),
+        ("alice", bad_cost.as_str()),
+        ("alice", bad_char.as_str()),
+    ] {
+        assert!(
+            route_json_with_auth("setu-site-abcd1234", "a.test", "127.0.0.1:1", Some((u, h)))
+                .is_err(),
+            "{u:?} {h:?}"
+        );
+    }
+    // The panel route never takes a credential.
+    assert!(
+        route_json_with_auth("setu-panel", "a.test", "127.0.0.1:1", Some(("alice", hash))).is_err()
+    );
 }

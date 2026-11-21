@@ -17,6 +17,10 @@ use super::auth::{LoginRequest, OperatorOut};
 use super::backups::{
     BackupJobResponse, BackupListOut, BackupOut, ResetGetOut, ResetOut, ResetPutRequest,
 };
+use super::basic_auth::{
+    BasicAuthGetOut, BasicAuthJobResponse, BasicAuthOut, BasicAuthPutRequest, BasicAuthRoute,
+    RouteStatus,
+};
 use super::jobs::{AuditEntryOut, AuditListOut, AuditQuery, JobListOut, JobsQuery};
 use super::operators::{CreateOperatorRequest, OperatorListOut, SetPasswordRequest};
 use super::panel::SelfBackupOut;
@@ -31,6 +35,7 @@ use super::sites::{
     JobResponse, RevealOut, RevealRequest, SiteDetailOut, SiteJobResponse, SiteListItemOut,
     SiteListOut, SiteMetricOut, SiteOut, UpdateSiteRequest,
 };
+use super::www_redirect::{WwwRedirectRequest, WwwRedirectResponse};
 use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
 
 #[derive(OpenApi)]
@@ -87,6 +92,10 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::backups::list,
         super::backups::create,
         super::backups::restore,
+        super::basic_auth::get,
+        super::basic_auth::put,
+        super::basic_auth::delete,
+        super::www_redirect::put,
         super::backups::reset_get,
         super::backups::reset_put,
         super::backups::reset_delete,
@@ -159,6 +168,14 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         EnvGetOut,
         EnvPutRequest,
         BackupOut,
+        BasicAuthGetOut,
+        BasicAuthJobResponse,
+        WwwRedirectRequest,
+        WwwRedirectResponse,
+        BasicAuthOut,
+        BasicAuthRoute,
+        RouteStatus,
+        BasicAuthPutRequest,
         ResetGetOut,
         ResetOut,
         ResetPutRequest,

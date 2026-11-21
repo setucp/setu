@@ -104,8 +104,9 @@ async fn site(db: &Db) -> setu_db::Site {
 
 const PW: &str = "pw-SECRET-1";
 const ENV_SECRET: &str = "env-SECRET-2";
+const ROUTE_HASH: &str = "$2b$12$route-SECRET-3";
 
-fn secret_commands() -> [Command; 2] {
+fn secret_commands() -> [Command; 3] {
     [
         Command::CreateDatabase {
             db: "site_abcd1234".to_string(),
@@ -121,6 +122,15 @@ fn secret_commands() -> [Command; 2] {
                 once: false,
             }],
         },
+        Command::SetRoute {
+            site_short_id: "abcd1234".to_string(),
+            domain: "example.com".to_string(),
+            port: 20001,
+            basic_auth: Some(setu_proto::BasicAuth {
+                username: "alice".to_string(),
+                password_hash: ROUTE_HASH.to_string(),
+            }),
+        },
     ]
 }
 
@@ -130,13 +140,17 @@ async fn assert_redacted(db: &Db, id: &str) {
     let row = db.commands().get(id).await.expect("row");
     let text = row.command.to_string();
     assert!(
-        !text.contains(PW) && !text.contains(ENV_SECRET),
+        !text.contains(PW) && !text.contains(ENV_SECRET) && !text.contains(ROUTE_HASH),
         "secret survived: {}",
         row.status
     );
     match row.command["kind"].as_str() {
         Some("create_database") => assert!(row.command["password"].is_null()),
         Some("write_env") => assert!(row.command["env"][0]["value"].is_null()),
+        Some("set_route") => {
+            assert!(row.command["basic_auth"]["password_hash"].is_null());
+            assert_eq!(row.command["basic_auth"]["username"], "alice");
+        }
         other => panic!("unexpected kind {other:?}"),
     }
     // The SQL function and proto's agent-side `redact()` agree exactly.
@@ -840,7 +854,7 @@ async fn expired_command_nulls_secret_fields() {
         assert_redacted(&db, &env.id).await;
     }
     // The prune safety net redacts a stale non-terminal row too.
-    let [cmd, _] = secret_commands();
+    let [cmd, ..] = secret_commands();
     let env = db
         .commands()
         .enqueue(&server.id, None, &cmd, TTL)

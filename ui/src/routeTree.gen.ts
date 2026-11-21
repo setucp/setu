@@ -28,6 +28,7 @@ import { Route as SitesIndexRouteImport } from './routes/sites.index'
 import { Route as SitesIdRouteImport } from './routes/sites.$id'
 import { Route as SitesNewRouteImport } from './routes/sites.new'
 import { Route as SitesIdIndexRouteImport } from './routes/sites.$id.index'
+import { Route as SitesIdAccessRouteImport } from './routes/sites.$id.access'
 import { Route as SitesIdBackupsRouteImport } from './routes/sites.$id.backups'
 import { Route as SitesIdDangerRouteImport } from './routes/sites.$id.danger'
 import { Route as SitesIdEnvRouteImport } from './routes/sites.$id.env'
@@ -130,6 +131,11 @@ const SitesIdIndexRoute = SitesIdIndexRouteImport.update({
   path: '/',
   getParentRoute: () => SitesIdRoute,
 } as any)
+const SitesIdAccessRoute = SitesIdAccessRouteImport.update({
+  id: '/access',
+  path: '/access',
+  getParentRoute: () => SitesIdRoute,
+} as any)
 const SitesIdBackupsRoute = SitesIdBackupsRouteImport.update({
   id: '/backups',
   path: '/backups',
@@ -180,6 +186,7 @@ export interface FileRoutesByFullPath {
   '/plans/': typeof PlansIndexRoute
   '/servers/': typeof ServersIndexRoute
   '/sites/': typeof SitesIndexRoute
+  '/sites/$id/access': typeof SitesIdAccessRoute
   '/sites/$id/backups': typeof SitesIdBackupsRoute
   '/sites/$id/danger': typeof SitesIdDangerRoute
   '/sites/$id/env': typeof SitesIdEnvRoute
@@ -201,6 +208,7 @@ export interface FileRoutesByTo {
   '/plans': typeof PlansIndexRoute
   '/servers': typeof ServersIndexRoute
   '/sites': typeof SitesIndexRoute
+  '/sites/$id/access': typeof SitesIdAccessRoute
   '/sites/$id/backups': typeof SitesIdBackupsRoute
   '/sites/$id/danger': typeof SitesIdDangerRoute
   '/sites/$id/env': typeof SitesIdEnvRoute
@@ -229,6 +237,7 @@ export interface FileRoutesById {
   '/plans/': typeof PlansIndexRoute
   '/servers/': typeof ServersIndexRoute
   '/sites/': typeof SitesIndexRoute
+  '/sites/$id/access': typeof SitesIdAccessRoute
   '/sites/$id/backups': typeof SitesIdBackupsRoute
   '/sites/$id/danger': typeof SitesIdDangerRoute
   '/sites/$id/env': typeof SitesIdEnvRoute
@@ -258,6 +267,7 @@ export interface FileRouteTypes {
     | '/plans/'
     | '/servers/'
     | '/sites/'
+    | '/sites/$id/access'
     | '/sites/$id/backups'
     | '/sites/$id/danger'
     | '/sites/$id/env'
@@ -279,6 +289,7 @@ export interface FileRouteTypes {
     | '/plans'
     | '/servers'
     | '/sites'
+    | '/sites/$id/access'
     | '/sites/$id/backups'
     | '/sites/$id/danger'
     | '/sites/$id/env'
@@ -306,6 +317,7 @@ export interface FileRouteTypes {
     | '/plans/'
     | '/servers/'
     | '/sites/'
+    | '/sites/$id/access'
     | '/sites/$id/backups'
     | '/sites/$id/danger'
     | '/sites/$id/env'
@@ -462,6 +474,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SitesIdIndexRouteImport
       parentRoute: typeof SitesIdRoute
     }
+    '/sites/$id/access': {
+      id: '/sites/$id/access'
+      path: '/access'
+      fullPath: '/sites/$id/access'
+      preLoaderRoute: typeof SitesIdAccessRouteImport
+      parentRoute: typeof SitesIdRoute
+    }
     '/sites/$id/backups': {
       id: '/sites/$id/backups'
       path: '/backups'
@@ -553,6 +572,7 @@ const ServersRouteWithChildren =
   ServersRoute._addFileChildren(ServersRouteChildren)
 
 interface SitesIdRouteChildren {
+  SitesIdAccessRoute: typeof SitesIdAccessRoute
   SitesIdBackupsRoute: typeof SitesIdBackupsRoute
   SitesIdDangerRoute: typeof SitesIdDangerRoute
   SitesIdEnvRoute: typeof SitesIdEnvRoute
@@ -563,6 +583,7 @@ interface SitesIdRouteChildren {
 }
 
 const SitesIdRouteChildren: SitesIdRouteChildren = {
+  SitesIdAccessRoute: SitesIdAccessRoute,
   SitesIdBackupsRoute: SitesIdBackupsRoute,
   SitesIdDangerRoute: SitesIdDangerRoute,
   SitesIdEnvRoute: SitesIdEnvRoute,

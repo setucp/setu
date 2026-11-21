@@ -4,6 +4,7 @@ pub mod agent;
 pub mod apps;
 pub mod auth;
 pub mod backups;
+pub mod basic_auth;
 pub mod docs;
 pub mod jobs;
 pub mod operators;
@@ -12,6 +13,7 @@ pub mod plans;
 pub mod servers;
 pub mod setup;
 pub mod sites;
+pub mod www_redirect;
 
 use axum::{
     extract::{FromRequest, Request, State},
@@ -108,6 +110,13 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/sites/{id}/backups/{bid}", delete(backups::delete))
         .route("/sites/{id}/backups/{bid}/restore", post(backups::restore))
+        .route("/sites/{id}/www-redirect", put(www_redirect::put))
+        .route(
+            "/sites/{id}/basic-auth",
+            get(basic_auth::get)
+                .put(basic_auth::put)
+                .delete(basic_auth::delete),
+        )
         .route(
             "/sites/{id}/reset",
             get(backups::reset_get)

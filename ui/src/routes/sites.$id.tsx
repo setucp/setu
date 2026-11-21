@@ -35,6 +35,7 @@ const TABS = [
   { to: "/sites/$id" as const, label: "Overview", exact: true },
   { to: "/sites/$id/logs" as const, label: "Logs", exact: false },
   { to: "/sites/$id/env" as const, label: "Env", exact: false },
+  { to: "/sites/$id/access" as const, label: "Access", exact: false },
   { to: "/sites/$id/backups" as const, label: "Backups", exact: false },
   { to: "/sites/$id/updates" as const, label: "Updates", exact: false },
   { to: "/sites/$id/limits" as const, label: "Limits", exact: false },

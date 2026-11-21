@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
+  type BasicAuthPutBody,
   type CreateSitePayload,
   type EnvPutBody,
   type Operator,
@@ -226,6 +227,31 @@ export function usePutSiteEnv(siteId: string) {
     mutationFn: (body: EnvPutBody) => api.putSiteEnv(siteId, body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["sites", siteId, "env"] });
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+export function useBasicAuth(siteId: string) {
+  return useQuery({
+    queryKey: ["sites", siteId, "basic-auth"],
+    queryFn: () => api.getBasicAuth(siteId),
+    // Poll while the route job runs, so the tab turns to applied or failed.
+    refetchInterval: (query) => (query.state.data?.route.status === "applying" ? 1000 : false),
+  });
+}
+
+/** `PUT` with a body sets or replaces the credentials; `null` removes them. */
+export function useSetBasicAuth(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BasicAuthPutBody | null) =>
+      body === null ? api.deleteBasicAuth(siteId) : api.putBasicAuth(siteId, body),
+    onSuccess: (res) => {
+      queryClient.setQueryData(["sites", siteId, "basic-auth"], {
+        basic_auth: res.basic_auth ?? null,
+        route: res.route,
+      });
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
     },
   });

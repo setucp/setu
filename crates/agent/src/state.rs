@@ -22,8 +22,8 @@ use crate::config::atomic_write;
 /// How many results `recent` keeps (spec §5: "last 1000").
 pub const RECENT_CAP: usize = 1000;
 
-/// One site the agent knows about.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// One site the agent knows about. `Debug` redacts the bcrypt hash.
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SiteRecord {
     /// Recorded by `SetRoute`, cleared by `RemoveRoute`: reconcile
     /// rebuilds `setu-site-<short>` from it.
@@ -31,6 +31,9 @@ pub struct SiteRecord {
     pub domain: Option<String>,
     #[serde(default)]
     pub port: u16,
+    /// `(user, bcrypt hash)` recorded by `SetRoute`; reconcile puts it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basic_auth: Option<(String, String)>,
     /// The operator opted out of the `www.` → apex redirect.
     #[serde(default)]
     pub no_www: bool,
@@ -38,6 +41,24 @@ pub struct SiteRecord {
     pub version: String,
     #[serde(default)]
     pub db: Option<String>,
+}
+
+impl std::fmt::Debug for SiteRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SiteRecord")
+            .field("domain", &self.domain)
+            .field("port", &self.port)
+            .field(
+                "basic_auth",
+                &self
+                    .basic_auth
+                    .as_ref()
+                    .map(|(user, _)| (user, "[redacted]")),
+            )
+            .field("version", &self.version)
+            .field("db", &self.db)
+            .finish()
+    }
 }
 
 /// One persisted command result; `posted` once the control plane
@@ -75,6 +96,39 @@ pub enum StateError {
 }
 
 impl State {
+    /// The `www.` name `short`'s route redirects to its apex domain: none
+    /// when the site opted out, its domain is not an apex, or another site
+    /// on this server serves that very name (first-match routing would let
+    /// the redirect shadow the other site).
+    pub fn www_host(&self, short: &str) -> Option<String> {
+        let site = self.sites.get(short)?;
+        if site.no_www {
+            return None;
+        }
+        let www = crate::caddy::www_name(site.domain.as_deref()?)?;
+        let taken = self
+            .sites
+            .iter()
+            .any(|(other, r)| other != short && r.domain.as_deref() == Some(www.as_str()));
+        (!taken).then_some(www)
+    }
+
+    /// The other sites whose `www.` name is `domain`: their redirect
+    /// appears or disappears when a site starts or stops serving `domain`.
+    pub fn www_neighbours(&self, short: &str, domain: &str) -> Vec<String> {
+        self.sites
+            .iter()
+            .filter(|(other, r)| {
+                other.as_str() != short
+                    && r.domain
+                        .as_deref()
+                        .and_then(crate::caddy::www_name)
+                        .is_some_and(|w| w == domain)
+            })
+            .map(|(other, _)| other.clone())
+            .collect()
+    }
+
     /// Load from `path`; a missing file is empty state (fresh agent).
     pub fn load(path: &Path) -> Result<Self, StateError> {
         match std::fs::read_to_string(path) {
@@ -218,6 +272,25 @@ impl StateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_never_prints_the_basic_auth_hash() {
+        let hash = format!("$2b$12${}", "a".repeat(53));
+        let mut state = State::default();
+        state.sites.insert(
+            "abc".into(),
+            SiteRecord {
+                basic_auth: Some(("alice".into(), hash.clone())),
+                ..SiteRecord::default()
+            },
+        );
+        let shown = format!("{state:?}");
+        assert!(
+            shown.contains("alice") && shown.contains("[redacted]"),
+            "{shown}"
+        );
+        assert!(!shown.contains(&hash) && !shown.contains("$2b$"), "{shown}");
+    }
 
     #[test]
     fn missing_file_is_empty_state() {

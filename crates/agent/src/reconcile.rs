@@ -17,9 +17,7 @@ use std::collections::BTreeSet;
 
 use setu_proto::{InventoryReport, UnitState};
 
-use crate::caddy::{
-    site_route_id, site_upstream, site_www_route_id, www_name, CaddyAdmin, PANEL_ROUTE_ID,
-};
+use crate::caddy::{site_route_id, site_upstream, site_www_route_id, CaddyAdmin, PANEL_ROUTE_ID};
 use crate::config::AgentConfig;
 use crate::helper::Verb;
 use crate::helper_client::Helper;
@@ -62,14 +60,19 @@ where
         }
         wanted.insert(id.clone());
         if let Err(e) = caddy
-            .upsert_route(&id, domain, &site_upstream(site.port))
+            .upsert_route_auth(
+                &id,
+                domain,
+                &site_upstream(site.port),
+                site.basic_auth
+                    .as_ref()
+                    .map(|(u, h)| (u.as_str(), h.as_str())),
+            )
             .await
         {
             tracing::warn!(route = %id, error = %e, "reconcile: cannot upsert route");
         }
-        if let (false, Some(_), Ok(www_id)) =
-            (site.no_www, www_name(domain), site_www_route_id(short))
-        {
+        if let (Some(_), Ok(www_id)) = (state.www_host(short), site_www_route_id(short)) {
             wanted.insert(www_id.clone());
             if let Err(e) = caddy.upsert_www_route(&www_id, domain).await {
                 tracing::warn!(route = %www_id, error = %e, "reconcile: cannot upsert www route");

@@ -3,18 +3,40 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
-## Unreleased
+## 0.1.7 — Unreleased
 
 ### Added
 
+- **Per-site HTTP basic auth.** `PUT /api/v1/sites/{id}/basic-auth` with a
+  user name and password puts a login in front of one site; `DELETE`
+  removes it and `GET` shows the user name. Caddy enforces it on the
+  site's route. Only a bcrypt hash is stored, and no response or log
+  carries the password or the hash. A change is stored together with a
+  `route_update` job (a change refused with 409 stores nothing) and leaves
+  the site's status alone. Every response carries `route.status`:
+  `applying` while the job runs, `applied` once Caddy has the setting, and
+  `failed` when the last change did not reach Caddy (the route may still
+  have its previous setting, whatever `basic_auth` says). Setting the
+  credentials again retries a failed change; `DELETE` retries a failed
+  removal. Finished `set_route` agent commands keep the user name but not
+  the hash.
+- **Access tab on the site page.** Shows whether the site asks for a
+  password and under which user name, and whether that is in force yet
+  (a failed change is shown with its error and how to retry); operators
+  set, replace or remove the credentials there (checked in the browser by
+  the same rules as the API: user name of letters, digits and `._-`,
+  password of 8 to 72 bytes without control characters). Viewers see the
+  state only.
 - **`www.` redirect for apex domains.** A site on `example.com` also serves
-  `www.example.com`: the agent's Caddy config adds the `www` host (Caddy
-  fetches its certificate) with a `301` to `https://example.com{uri}`. The
-  agent understands an opt-out (`www_redirect: false` in `set_route`); the
-  control plane sends it on for every site for now, and the per-site setting
-  and the panel line are not wired yet. A subdomain or a `www.` name gets no
-  redirect (the apex check is a two-label rule plus `co.uk`-style second
-  levels, not the public suffix list).
+  `www.example.com`: Caddy fetches its certificate and answers `301` to
+  `https://example.com{uri}`. It is a per-site setting: on for sites
+  created from 0.1.7, off for existing sites (nothing changes on upgrade);
+  `PUT /api/v1/sites/{id}/www-redirect` with `{"enabled": bool}` turns it on
+  or off through a `route_update` job, and `SiteOut` shows `www_redirect`.
+  A subdomain or a `www.` name gets no redirect (the apex check is a
+  two-label rule plus `co.uk`-style second levels, not the public suffix
+  list), and neither does an apex whose `www.` name is itself a site on the
+  same server.
 
 ## 0.1.6 — 2026-10-23
 

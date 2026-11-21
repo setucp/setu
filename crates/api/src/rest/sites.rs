@@ -43,6 +43,8 @@ pub struct SiteOut {
     pub port: i32,
     pub db_name: String,
     pub owner_email: String,
+    /// `www.<domain>` redirects to the domain (apex domains only).
+    pub www_redirect: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -62,6 +64,7 @@ impl SiteOut {
             port: s.port,
             db_name: s.db_name.clone(),
             owner_email: s.owner_email.clone(),
+            www_redirect: s.www_redirect,
             created_at: s.created_at,
             updated_at: s.updated_at,
         }
