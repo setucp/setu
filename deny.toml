@@ -10,7 +10,13 @@ version = 2
 unmaintained = "workspace"
 # Keep in step with .cargo/audit.toml: every ignore there needs one here,
 # with the same reason.
-ignore = []
+ignore = [
+    # chrono is flagged unmaintained (RUSTSEC-2026-0543) with no replacement
+    # released; it is a direct dependency (timestamps in the API, sqlx and
+    # utoipa). Not a vulnerability. Revisit when upstream or a drop-in
+    # successor is available.
+    "RUSTSEC-2026-0543",
+]
 
 [licenses]
 version = 2
