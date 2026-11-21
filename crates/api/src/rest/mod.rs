@@ -16,6 +16,7 @@ pub mod sites;
 
 use axum::{
     extract::{FromRequest, Request, State},
+    http::StatusCode,
     middleware,
     response::IntoResponse,
     routing::{delete, get, post, put},
@@ -180,22 +181,40 @@ pub async fn healthz() -> impl IntoResponse {
 pub struct ReadyOut {
     pub status: String,
     pub database: String,
+    /// Why the database is `down`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
-/// Readiness: 200 when `SELECT 1` succeeds, 503 otherwise.
-#[utoipa::path(get, path = "/readyz", responses((status = 200, body = ReadyOut)))]
-pub async fn readyz(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
-    sqlx::query("SELECT 1::int")
-        .fetch_one(state.db.pool())
-        .await
-        .map_err(|e| {
+/// Readiness: 200 when `SELECT 1` succeeds, 503 with `database: down` and
+/// the cause otherwise (a pool that stopped recovering shows here, #16).
+#[utoipa::path(
+    get,
+    path = "/readyz",
+    responses((status = 200, body = ReadyOut), (status = 503, body = ReadyOut))
+)]
+pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
+    match state.db.probe().await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(ReadyOut {
+                status: "ok".to_string(),
+                database: "up".to_string(),
+                last_error: None,
+            }),
+        ),
+        Err(e) => {
             tracing::error!(error = %e, "readyz database check failed");
-            AppError::internal()
-        })?;
-    Ok(Json(ReadyOut {
-        status: "ok".to_string(),
-        database: "up".to_string(),
-    }))
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ReadyOut {
+                    status: "unavailable".to_string(),
+                    database: "down".to_string(),
+                    last_error: Some(e),
+                }),
+            )
+        }
+    }
 }
 
 /// Server-sent-event framing shared by the site logs and job log tails.

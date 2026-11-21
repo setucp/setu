@@ -3651,10 +3651,20 @@
         "tags": [
           "super"
         ],
-        "summary": "Readiness: 200 when `SELECT 1` succeeds, 503 otherwise.",
+        "summary": "Readiness: 200 when `SELECT 1` succeeds, 503 with `database: down` and\nthe cause otherwise (a pool that stopped recovering shows here, #16).",
         "operationId": "readyz",
         "responses": {
           "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyOut"
+                }
+              }
+            }
+          },
+          "503": {
             "description": "",
             "content": {
               "application/json": {
@@ -5426,6 +5436,13 @@
         "properties": {
           "database": {
             "type": "string"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the database is `down`."
           },
           "status": {
             "type": "string"

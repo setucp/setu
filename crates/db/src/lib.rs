@@ -23,30 +23,119 @@ pub use setu_common::{AppError, ErrorCode};
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Advisory-lock key for migrations (plan Task 5: `0x5e7a`); the lock
 /// serialises `migrate()` across concurrently booting control planes.
 const MIGRATE_LOCK_KEY: i64 = 0x5e7a;
 
+/// How long one acquire waits for a connection before it fails (the
+/// sqlx default of 30 s hid a wedged pool for four days, #16).
+const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(10);
+/// A health probe that takes longer than this counts as a failure.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// What the last probes saw (`/readyz` reports it).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DbHealth {
+    /// Probes failed in a row; 0 when the last one passed.
+    pub consecutive_failures: u32,
+    /// The last probe's error, while `consecutive_failures > 0`.
+    pub last_error: Option<String>,
+}
+
 /// Control-plane database handle.
 #[derive(Debug, Clone)]
 pub struct Db {
     pool: PgPool,
+    health: Arc<Mutex<DbHealth>>,
 }
 
 impl Db {
     /// Wrap an existing pool (tests build the pool via `setu-testkit`).
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            health: Arc::default(),
+        }
     }
 
     /// Connect with a modest pool (control plane + job runner share it).
+    /// Idle connections are recycled and every acquire checks its
+    /// connection and gives up after [`ACQUIRE_TIMEOUT`], so a Postgres
+    /// restart cannot leave dead connections in the pool.
     pub async fn connect(url: &str) -> Result<Self, AppError> {
         let pool = PgPoolOptions::new()
             .max_connections(10)
+            .acquire_timeout(ACQUIRE_TIMEOUT)
+            .idle_timeout(Duration::from_mins(5))
+            .max_lifetime(Duration::from_mins(30))
+            .test_before_acquire(true)
             .connect(url)
             .await?;
-        Ok(Self { pool })
+        Ok(Self::new(pool))
+    }
+
+    /// The last probe result.
+    pub fn health(&self) -> DbHealth {
+        self.health
+            .lock()
+            .map_or_else(|e| e.into_inner().clone(), |h| h.clone())
+    }
+
+    /// `SELECT 1` through the pool, at most [`PROBE_TIMEOUT`]; the result
+    /// is kept for [`health`](Self::health). The error names the cause.
+    pub async fn probe(&self) -> Result<(), String> {
+        let result = match tokio::time::timeout(
+            PROBE_TIMEOUT,
+            sqlx::query("SELECT 1::int").fetch_one(&self.pool),
+        )
+        .await
+        {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(_) => Err(format!("no answer within {} s", PROBE_TIMEOUT.as_secs())),
+        };
+        let mut h = self
+            .health
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match &result {
+            Ok(()) => *h = DbHealth::default(),
+            Err(e) => {
+                h.consecutive_failures = h.consecutive_failures.saturating_add(1);
+                h.last_error = Some(e.clone());
+            }
+        }
+        result
+    }
+
+    /// Probe every `every`. After `limit` failures in a row, check with
+    /// a fresh connection (outside the pool): if Postgres answers there
+    /// while the pool does not, the pool is wedged and this returns so
+    /// the caller can restart the process, which is the only repair the
+    /// 0.1.1 test bed ever got (#16). While Postgres itself is down it
+    /// keeps probing, so the pool recovers by itself when it comes back.
+    pub async fn watch(&self, url: &str, every: Duration, limit: u32) {
+        loop {
+            tokio::time::sleep(every).await;
+            if self.probe().await.is_ok() {
+                continue;
+            }
+            let h = self.health();
+            tracing::error!(
+                failures = h.consecutive_failures,
+                error = h.last_error.as_deref().unwrap_or(""),
+                "control-plane database unreachable"
+            );
+            if h.consecutive_failures >= limit && fresh_connection_works(url).await {
+                tracing::error!(
+                    "postgres answers on a new connection but the pool does not: the pool is wedged"
+                );
+                return;
+            }
+        }
     }
 
     /// Run pending migrations under a session advisory lock so two
@@ -133,6 +222,20 @@ impl Db {
     pub fn metrics(&self) -> Metrics<'_> {
         Metrics::new(&self.pool)
     }
+}
+
+/// One `SELECT 1` on a connection opened outside the pool.
+async fn fresh_connection_works(url: &str) -> bool {
+    use sqlx::{Connection as _, PgConnection};
+    let attempt = async {
+        let mut conn = PgConnection::connect(url).await?;
+        sqlx::query("SELECT 1::int").fetch_one(&mut conn).await?;
+        Ok::<_, sqlx::Error>(())
+    };
+    matches!(
+        tokio::time::timeout(PROBE_TIMEOUT, attempt).await,
+        Ok(Ok(()))
+    )
 }
 
 /// Map a sqlx error to the API envelope: unique violations become

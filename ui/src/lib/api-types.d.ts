@@ -1528,6 +1528,8 @@ export interface components {
         };
         ReadyOut: {
             database: string;
+            /** @description Why the database is `down`. */
+            last_error?: string | null;
             status: string;
         };
         /** @description `GET /sites/{id}/reset`: the schedule, or `null`. */
@@ -4589,6 +4591,14 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadyOut"];
+                };
+            };
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

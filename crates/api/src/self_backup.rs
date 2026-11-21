@@ -67,12 +67,64 @@ pub fn is_due(now: DateTime<Utc>, rec: &SelfBackupRecord, cfg: &SchedulerConfig)
 
 /// The stored record; missing or unreadable is the default.
 pub async fn load(db: &Db) -> Result<SelfBackupRecord, AppError> {
+    load_raw(db).await.map_err(|e| {
+        tracing::error!(error = %e, "self-backup state unreadable");
+        AppError::internal()
+    })
+}
+
+/// [`load`] with the database error itself, so the loop can name the
+/// cause instead of logging a bare "internal error" (#14).
+async fn load_raw(db: &Db) -> Result<SelfBackupRecord, sqlx::Error> {
     Ok(db
         .settings()
-        .get(setu_db::SELF_BACKUP)
+        .try_get(setu_db::SELF_BACKUP)
         .await?
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default())
+}
+
+/// Holds the exclusive backup lock (`<data_dir>/backups/setu/.lock`) until
+/// dropped. It is an `flock` on a file, so it serialises the scheduler's
+/// dump, `setu backup` and the upgrade's pre-dump whether they run in
+/// one process or in two (#15).
+#[derive(Debug)]
+pub struct BackupLock {
+    _file: std::fs::File,
+}
+
+impl BackupLock {
+    /// The lock, or `conflict` ("another backup is running") when
+    /// another dump holds it.
+    pub fn try_acquire(data_dir: &Path) -> Result<Self, AppError> {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        let dir = backup_dir(data_dir);
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            tracing::error!(error = %e, dir = %dir.display(), "cannot create the backup directory");
+            AppError::internal()
+        })?;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .mode(0o600)
+            .open(dir.join(".lock"))
+            .map_err(|e| {
+                tracing::error!(error = %e, "cannot open the backup lock");
+                AppError::internal()
+            })?;
+        match file.try_lock() {
+            Ok(()) => Ok(Self { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                Err(AppError::conflict("another backup is running"))
+            }
+            Err(std::fs::TryLockError::Error(e)) => {
+                tracing::error!(error = %e, "cannot take the backup lock");
+                Err(AppError::internal())
+            }
+        }
+    }
 }
 
 async fn store(db: &Db, rec: &SelfBackupRecord) -> Result<(), AppError> {
@@ -81,7 +133,8 @@ async fn store(db: &Db, rec: &SelfBackupRecord) -> Result<(), AppError> {
 }
 
 /// One backup at `now`; returns (and stores) the updated record. A dump
-/// failure is recorded, not returned: only database errors are `Err`.
+/// failure is recorded, not returned: only database errors and a held
+/// [`BackupLock`] (`conflict`) are `Err`.
 pub async fn run_once(
     db: &Db,
     runner: Arc<dyn Runner + Send + Sync>,
@@ -89,6 +142,9 @@ pub async fn run_once(
     data_dir: &Path,
     now: DateTime<Utc>,
 ) -> Result<SelfBackupRecord, AppError> {
+    // Before the load: a busy lock changes nothing (no attempt is
+    // recorded), the caller retries on its next tick.
+    let _lock = BackupLock::try_acquire(data_dir)?;
     let mut rec = load(db).await?;
     rec.last_attempt_at = Some(now);
     let dir = backup_dir(data_dir);
@@ -193,7 +249,56 @@ fn prune(dir: &Path) {
     }
 }
 
-/// Tick every `cfg.tick`; run a backup when [`is_due`].
+/// Consecutive unreadable-state ticks before the single warning (#14).
+pub const WARN_AFTER: u32 = 5;
+
+/// Failures of the state read, across ticks.
+#[derive(Debug, Default)]
+struct Outage {
+    failures: u32,
+    since: Option<DateTime<Utc>>,
+    cause: String,
+}
+
+impl Outage {
+    /// Count a failure; true exactly once, at [`WARN_AFTER`].
+    fn fail(&mut self, now: DateTime<Utc>, cause: String) -> bool {
+        self.failures += 1;
+        self.since.get_or_insert(now);
+        self.cause = cause;
+        self.failures == WARN_AFTER
+    }
+
+    /// The read works again: the note for `last_error` when the outage
+    /// was long enough to have cost a backup, and the counters reset.
+    fn recover(&mut self, now: DateTime<Utc>) -> Option<String> {
+        let note = (self.failures >= WARN_AFTER).then(|| {
+            format!(
+                "the database was unreadable from {} to {} ({} attempts, no backup ran): {}",
+                self.since.unwrap_or(now).format("%Y-%m-%d %H:%M UTC"),
+                now.format("%Y-%m-%d %H:%M UTC"),
+                self.failures,
+                self.cause
+            )
+        });
+        *self = Self::default();
+        note
+    }
+
+    /// Ticks to skip after this many failures: 0, 1, 3, 7, capped at 9
+    /// (about ten minutes at the scheduler's tick), so a dead database
+    /// is not asked every minute.
+    fn skip(&self) -> u32 {
+        match self.failures {
+            0 | 1 => 0,
+            n => ((1u32 << (n - 1).min(4)) - 1).min(9),
+        }
+    }
+}
+
+/// Tick every `cfg.tick`; run a backup when [`is_due`]. A failing state
+/// read is logged with its cause, retried with backoff, warned about
+/// once, and recorded in `last_error` when it clears.
 pub fn spawn(
     db: Db,
     clock: Arc<dyn Clock>,
@@ -204,32 +309,111 @@ pub fn spawn(
     tokio::spawn(async move {
         let mut every = tokio::time::interval(cfg.tick);
         every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut outage = Outage::default();
+        let mut skipping = 0u32;
         loop {
             every.tick().await;
+            if skipping > 0 {
+                skipping -= 1;
+                continue;
+            }
             let now = clock.now();
-            match load(&db).await {
-                Ok(rec) if is_due(now, &rec, &cfg) => {
-                    match run_once(
-                        &db,
-                        Arc::new(TimedProcessRunner {
-                            timeout: DUMP_TIMEOUT,
-                        }),
-                        &database_url,
-                        &data_dir,
-                        now,
-                    )
-                    .await
-                    {
-                        Ok(r) if r.last_error.is_none() => {
-                            tracing::info!(file = ?r.file, "control-plane self-backup written");
-                        }
-                        Ok(_) => {}
-                        Err(e) => tracing::error!(error = %e, "self-backup record failed"),
+            let mut rec = match load_raw(&db).await {
+                Ok(rec) => rec,
+                Err(e) => {
+                    tracing::error!(error = %e, failures = outage.failures + 1, "self-backup state unreadable");
+                    if outage.fail(now, e.to_string()) {
+                        tracing::warn!(
+                            error = %e,
+                            "self-backup: the database has been unreadable for {WARN_AFTER} attempts; no backup is running"
+                        );
                     }
+                    skipping = outage.skip();
+                    continue;
+                }
+            };
+            if let Some(note) = outage.recover(now) {
+                tracing::warn!("self-backup: {note}");
+                rec.last_error = Some(note);
+                if let Err(e) = store(&db, &rec).await {
+                    tracing::error!(error = %e, "self-backup outage note not stored");
+                }
+            }
+            if !is_due(now, &rec, &cfg) {
+                continue;
+            }
+            match run_once(
+                &db,
+                Arc::new(TimedProcessRunner {
+                    timeout: DUMP_TIMEOUT,
+                }),
+                &database_url,
+                &data_dir,
+                now,
+            )
+            .await
+            {
+                Ok(r) if r.last_error.is_none() => {
+                    tracing::info!(file = ?r.file, "control-plane self-backup written");
                 }
                 Ok(_) => {}
-                Err(e) => tracing::error!(error = %e, "self-backup state unreadable"),
+                Err(e) if e.code == setu_db::ErrorCode::Conflict => {
+                    tracing::info!("self-backup waits: {}", e.message);
+                }
+                Err(e) => tracing::error!(error = %e, "self-backup record failed"),
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn t(m: u32) -> DateTime<Utc> {
+        DateTime::from_timestamp(1_700_000_000 + i64::from(m) * 60, 0).unwrap()
+    }
+
+    #[test]
+    fn warns_once_and_notes_a_long_outage_on_recovery() {
+        let mut o = Outage::default();
+        let warned: Vec<bool> = (0..7).map(|i| o.fail(t(i), format!("boom {i}"))).collect();
+        assert_eq!(warned, [false, false, false, false, true, false, false]);
+        let note = o.recover(t(30)).expect("long outage is noted");
+        assert!(
+            note.contains("7 attempts") && note.contains("boom 6"),
+            "{note}"
+        );
+        assert_eq!(o.failures, 0);
+        assert!(o.recover(t(31)).is_none());
+    }
+
+    #[test]
+    fn a_short_blip_leaves_no_note() {
+        let mut o = Outage::default();
+        o.fail(t(0), "blip".into());
+        o.fail(t(1), "blip".into());
+        assert!(o.recover(t(2)).is_none());
+    }
+
+    #[test]
+    fn backoff_grows_then_caps() {
+        let mut o = Outage::default();
+        let mut skips = Vec::new();
+        for i in 0..8 {
+            o.fail(t(i), String::new());
+            skips.push(o.skip());
+        }
+        assert_eq!(skips, [0, 1, 3, 7, 9, 9, 9, 9]);
+    }
+
+    #[test]
+    fn the_lock_is_exclusive_and_released_on_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = BackupLock::try_acquire(dir.path()).unwrap();
+        let err = BackupLock::try_acquire(dir.path()).unwrap_err();
+        assert_eq!(err.message, "another backup is running");
+        drop(first);
+        BackupLock::try_acquire(dir.path()).expect("free again");
+    }
 }

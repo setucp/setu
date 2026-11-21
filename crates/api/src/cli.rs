@@ -86,20 +86,34 @@ pub trait Runner {
     fn run(&self, inv: &Invocation) -> Result<(), String>;
 }
 
+/// "`pg_dump` failed: exit status: 1: <its stderr, trimmed>" (#15).
+fn failure(program: &str, status: std::process::ExitStatus, stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let text = text.trim();
+    if text.is_empty() {
+        format!("{program} failed: {status}")
+    } else {
+        let tail: String = text.chars().take(1000).collect();
+        format!("{program} failed: {status}: {tail}")
+    }
+}
+
 /// Spawns the program and waits; a non-zero exit is an error.
 pub struct ProcessRunner;
 
 impl Runner for ProcessRunner {
     fn run(&self, inv: &Invocation) -> Result<(), String> {
-        let status = std::process::Command::new(&inv.program)
+        let out = std::process::Command::new(&inv.program)
             .args(&inv.args)
             .envs(inv.env.iter().map(|(k, v)| (k, v)))
-            .status()
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
             .map_err(|e| format!("cannot run {}: {e}", inv.program))?;
-        if status.success() {
+        if out.status.success() {
             Ok(())
         } else {
-            Err(format!("{} failed: {status}", inv.program))
+            Err(failure(&inv.program, out.status, &out.stderr))
         }
     }
 }
@@ -116,13 +130,24 @@ impl Runner for TimedProcessRunner {
         let mut child = std::process::Command::new(&inv.program)
             .args(&inv.args)
             .envs(inv.env.iter().map(|(k, v)| (k, v)))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| format!("cannot run {}: {e}", inv.program))?;
+        // Drained on a thread so a chatty child cannot fill the pipe.
+        let stderr = child.stderr.take().map(|mut pipe| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut pipe, &mut buf);
+                buf
+            })
+        });
+        let collect = move || stderr.and_then(|h| h.join().ok()).unwrap_or_default();
         let started = std::time::Instant::now();
         loop {
             match child.try_wait() {
                 Ok(Some(status)) if status.success() => return Ok(()),
-                Ok(Some(status)) => return Err(format!("{} failed: {status}", inv.program)),
+                Ok(Some(status)) => return Err(failure(&inv.program, status, &collect())),
                 Ok(None) if started.elapsed() >= self.timeout => {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -215,9 +240,22 @@ pub fn pg_dump_invocation(database_url: &str, out: &Path) -> Result<Invocation, 
     })
 }
 
-/// `setu backup --out <file>`.
-pub fn backup(runner: &dyn Runner, database_url: &str, out: &Path) -> Result<(), String> {
-    runner.run(&pg_dump_invocation(database_url, out)?)
+/// `setu backup --out <file>`. Holds the self-backup lock (a scheduled
+/// dump in flight makes this fail with "another backup is running", not
+/// a 0-byte file) and removes a partial output when the dump fails (#15).
+pub fn backup(
+    runner: &dyn Runner,
+    database_url: &str,
+    out: &Path,
+    data_dir: &Path,
+) -> Result<(), String> {
+    let inv = pg_dump_invocation(database_url, out)?;
+    let _lock = crate::self_backup::BackupLock::try_acquire(data_dir).map_err(|e| e.message)?;
+    let result = runner.run(&inv);
+    if result.is_err() {
+        let _ = std::fs::remove_file(out);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -238,10 +276,12 @@ mod tests {
     #[test]
     fn backup_passes_the_password_in_the_environment_never_argv() {
         let rec = Recorder::default();
+        let dir = tempfile::tempdir().unwrap();
         backup(
             &rec,
             "postgres://setu:s%40cret-pw@db.internal:5433/setu?sslmode=require",
             Path::new("/tmp/setu.dump"),
+            dir.path(),
         )
         .unwrap();
         let calls = rec.0.lock().unwrap();
@@ -268,6 +308,58 @@ mod tests {
         assert_eq!(env("PGDATABASE"), Some("setu"));
         assert_eq!(env("PGSSLMODE"), Some("require"));
         assert!(!format!("{inv:?}").contains("cret-pw"), "Debug leaks");
+    }
+
+    struct Failing;
+
+    impl Runner for Failing {
+        fn run(&self, inv: &Invocation) -> Result<(), String> {
+            // pg_dump creates its output before it fails.
+            std::fs::write(inv.args.last().unwrap(), b"").unwrap();
+            Err("pg_dump failed: exit status: 1: boom".into())
+        }
+    }
+
+    #[test]
+    fn a_failed_backup_leaves_no_output_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("x.dump");
+        let err = backup(&Failing, "postgres://u:p@h/db", &out, dir.path()).unwrap_err();
+        assert!(err.contains("boom"), "{err}");
+        assert!(!out.exists());
+    }
+
+    #[test]
+    fn a_backup_while_another_runs_is_refused_without_touching_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("x.dump");
+        let _held = crate::self_backup::BackupLock::try_acquire(dir.path()).unwrap();
+        let err = backup(
+            &Recorder::default(),
+            "postgres://u:p@h/db",
+            &out,
+            dir.path(),
+        )
+        .unwrap_err();
+        assert_eq!(err, "another backup is running");
+        assert!(!out.exists());
+    }
+
+    #[test]
+    fn the_process_runner_reports_the_childs_stderr() {
+        let inv = Invocation {
+            program: "sh".into(),
+            args: vec!["-c".into(), "echo 'no such table' >&2; exit 1".into()],
+            env: vec![],
+        };
+        let e = ProcessRunner.run(&inv).unwrap_err();
+        assert!(e.contains("no such table"), "{e}");
+        let e = TimedProcessRunner {
+            timeout: std::time::Duration::from_secs(5),
+        }
+        .run(&inv)
+        .unwrap_err();
+        assert!(e.contains("no such table"), "{e}");
     }
 
     #[test]

@@ -1362,3 +1362,34 @@ async fn rejoining_server_that_stopped_heartbeating_is_offline() {
         "stale heartbeat wins over the rejoin state"
     );
 }
+
+#[tokio::test]
+async fn a_dead_pool_reports_its_cause_and_a_healthy_one_clears_it() {
+    let (_t, db) = test_db().await;
+    db.probe().await.expect("healthy pool");
+    assert_eq!(db.health(), setu_db::DbHealth::default());
+
+    let broken = Db::new(db.pool().clone());
+    broken.pool().close().await;
+    let err = broken.probe().await.expect_err("closed pool");
+    assert_ne!(err, "");
+    let h = broken.health();
+    assert_eq!(h.consecutive_failures, 1);
+    assert_eq!(h.last_error.as_deref(), Some(err.as_str()));
+    broken.probe().await.expect_err("still closed");
+    assert_eq!(broken.health().consecutive_failures, 2);
+}
+
+#[tokio::test]
+async fn the_watchdog_returns_when_the_pool_is_dead_but_postgres_answers() {
+    let test_db = TestDb::new().await;
+    let broken = Db::new(test_db.pool.clone());
+    broken.pool().close().await;
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        broken.watch(&test_db.url, Duration::from_millis(10), 3),
+    )
+    .await
+    .expect("wedged pool detected");
+    assert!(broken.health().consecutive_failures >= 3);
+}
