@@ -55,6 +55,7 @@ impl std::fmt::Debug for SiteRecord {
                     .as_ref()
                     .map(|(user, _)| (user, "[redacted]")),
             )
+            .field("no_www", &self.no_www)
             .field("version", &self.version)
             .field("db", &self.db)
             .finish()

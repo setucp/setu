@@ -3625,6 +3625,98 @@
         }
       }
     },
+    "/api/v1/sites/{id}/www-redirect": {
+      "put": {
+        "tags": [
+          "super::www_redirect"
+        ],
+        "summary": "Turn the `www.` redirect on or off (operator and above); queues a route\nupdate. 409 (and nothing stored) when the site has an active job or is\nnot running or stopped.",
+        "operationId": "set",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WwwRedirectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WwwRedirectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -5945,6 +6037,7 @@
           "port",
           "db_name",
           "owner_email",
+          "www_redirect",
           "created_at",
           "updated_at"
         ],
@@ -5996,6 +6089,10 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "www_redirect": {
+            "type": "boolean",
+            "description": "`www.<domain>` redirects to the domain (apex domains only)."
           }
         }
       },
@@ -6181,6 +6278,34 @@
           "bin",
           "data"
         ]
+      },
+      "WwwRedirectRequest": {
+        "type": "object",
+        "description": "`PUT /sites/{id}/www-redirect` body.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "WwwRedirectResponse": {
+        "type": "object",
+        "description": "The setting after the change and the route job that applies it.",
+        "required": [
+          "www_redirect",
+          "job"
+        ],
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/JobOut"
+          },
+          "www_redirect": {
+            "type": "boolean"
+          }
+        }
       }
     }
   }

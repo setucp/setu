@@ -871,6 +871,7 @@ mod tests {
             domain: "example.com".to_string(),
             port: 20001,
             basic_auth: None,
+            www_redirect: true,
         };
         assert!(!open.has_secrets());
         assert_eq!(open.redact(), serde_json::to_value(&open).unwrap());

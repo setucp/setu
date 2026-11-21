@@ -48,7 +48,7 @@ pub struct WwwRedirectResponse {
         (status = 409, body = super::ErrorBody),
     )
 )]
-pub async fn put(
+pub async fn set(
     State(state): State<AppState>,
     session: Session,
     ip: ClientIp,

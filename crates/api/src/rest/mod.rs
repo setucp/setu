@@ -110,7 +110,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/sites/{id}/backups/{bid}", delete(backups::delete))
         .route("/sites/{id}/backups/{bid}/restore", post(backups::restore))
-        .route("/sites/{id}/www-redirect", put(www_redirect::put))
+        .route("/sites/{id}/www-redirect", put(www_redirect::set))
         .route(
             "/sites/{id}/basic-auth",
             get(basic_auth::get)

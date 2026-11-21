@@ -25,31 +25,9 @@ use crate::postgres::PostgresAdmin;
 use crate::runtime::{NativeRuntime, RuntimeStatus};
 use crate::state::State;
 
-/// One pass over `state`. Route failures are logged per route and do
-/// not stop the pass; listing routes failing is an error (nothing can be
-/// judged stale without the list).
-pub async fn run<H, C, P>(
-    state: &State,
-    config: &AgentConfig,
-    helper: &H,
-    caddy: &C,
-    postgres: &P,
-) -> anyhow::Result<InventoryReport>
-where
-    H: Helper + ?Sized,
-    C: CaddyAdmin + ?Sized,
-    P: PostgresAdmin + ?Sized,
-{
-    // The panel first, and kept first: Caddy routes are first-match, so
-    // no site route may precede it (R130).
-    if let Some(panel) = &config.panel {
-        if let Err(e) = caddy
-            .upsert_route(PANEL_ROUTE_ID, &panel.host, &panel.upstream)
-            .await
-        {
-            tracing::warn!(error = %e, "reconcile: cannot upsert the panel route");
-        }
-    }
+/// Upsert every site route (and `www.` redirect) the state wants; the ids
+/// of those routes, so the caller can remove the rest.
+async fn sync_site_routes<C: CaddyAdmin + ?Sized>(state: &State, caddy: &C) -> BTreeSet<String> {
     let mut wanted = BTreeSet::new();
     for (short, site) in &state.sites {
         let (Some(domain), Ok(id)) = (&site.domain, site_route_id(short)) else {
@@ -79,6 +57,35 @@ where
             }
         }
     }
+    wanted
+}
+
+/// One pass over `state`. Route failures are logged per route and do
+/// not stop the pass; listing routes failing is an error (nothing can be
+/// judged stale without the list).
+pub async fn run<H, C, P>(
+    state: &State,
+    config: &AgentConfig,
+    helper: &H,
+    caddy: &C,
+    postgres: &P,
+) -> anyhow::Result<InventoryReport>
+where
+    H: Helper + ?Sized,
+    C: CaddyAdmin + ?Sized,
+    P: PostgresAdmin + ?Sized,
+{
+    // The panel first, and kept first: Caddy routes are first-match, so
+    // no site route may precede it (R130).
+    if let Some(panel) = &config.panel {
+        if let Err(e) = caddy
+            .upsert_route(PANEL_ROUTE_ID, &panel.host, &panel.upstream)
+            .await
+        {
+            tracing::warn!(error = %e, "reconcile: cannot upsert the panel route");
+        }
+    }
+    let wanted = sync_site_routes(state, caddy).await;
     if let Err(e) = caddy.move_route_first(PANEL_ROUTE_ID).await {
         tracing::warn!(error = %e, "reconcile: cannot move the panel route first");
     }

@@ -95,7 +95,7 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::basic_auth::get,
         super::basic_auth::put,
         super::basic_auth::delete,
-        super::www_redirect::put,
+        super::www_redirect::set,
         super::backups::reset_get,
         super::backups::reset_put,
         super::backups::reset_delete,

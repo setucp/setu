@@ -140,3 +140,35 @@ fn agent_toml_is_created_0600() {
         "https://old.example"
     );
 }
+
+#[test]
+fn www_host_follows_the_opt_out_the_apex_rule_and_other_sites() {
+    use setu_agent::state::{SiteRecord, State};
+    let site = |domain: &str| SiteRecord {
+        domain: Some(domain.to_string()),
+        port: 20001,
+        ..SiteRecord::default()
+    };
+    let mut st = State::default();
+    st.sites.insert("aaaaaaaa".into(), site("example.test"));
+    st.sites
+        .insert("bbbbbbbb".into(), site("blog.example.test"));
+    assert_eq!(st.www_host("aaaaaaaa").as_deref(), Some("www.example.test"));
+    assert_eq!(st.www_host("bbbbbbbb"), None, "subdomain");
+    assert_eq!(st.www_host("zzzzzzzz"), None, "unknown site");
+
+    // Another site serves www.example.test itself: no redirect over it.
+    st.sites.insert("cccccccc".into(), site("www.example.test"));
+    assert_eq!(st.www_host("aaaaaaaa"), None);
+    assert_eq!(
+        st.www_neighbours("cccccccc", "www.example.test"),
+        ["aaaaaaaa"]
+    );
+
+    // That site goes away (its domain is cleared): the redirect is back.
+    st.sites.get_mut("cccccccc").unwrap().domain = None;
+    assert_eq!(st.www_host("aaaaaaaa").as_deref(), Some("www.example.test"));
+
+    st.sites.get_mut("aaaaaaaa").unwrap().no_www = true;
+    assert_eq!(st.www_host("aaaaaaaa"), None, "opted out");
+}

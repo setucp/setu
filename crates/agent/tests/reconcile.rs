@@ -272,3 +272,39 @@ async fn reconcile_restores_basic_auth_and_drops_it_when_cleared() {
     assert_eq!(r["handle"].as_array().unwrap().len(), 1);
     assert_eq!(r["handle"][0]["handler"], "reverse_proxy");
 }
+
+/// A site that serves `www.<apex>` itself keeps that host: the apex site's
+/// redirect is not built over it (Caddy routes are first-match).
+#[tokio::test]
+async fn reconcile_never_shadows_a_site_that_serves_the_www_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = Paths::new(Some(dir.path().to_path_buf()));
+    let config = AgentConfig {
+        sites_root: p.sites(),
+        state_path: p.state(),
+        ..AgentConfig::default()
+    };
+    let mut state = State::default();
+    state
+        .sites
+        .insert("aaaaaaaa".into(), record(Some("example.test"), 20001));
+    state
+        .sites
+        .insert("bbbbbbbb".into(), record(Some("www.example.test"), 20002));
+    let caddy = FakeCaddy::new();
+    // A redirect built before the second site existed.
+    caddy
+        .upsert_www_route("setu-site-aaaaaaaa-www", "example.test")
+        .await
+        .expect("seed");
+    let (postgres, helper) = (FakePostgres::new(), FakeHelper::new());
+    setu_agent::reconcile::run(&state, &config, &helper, &caddy, &postgres)
+        .await
+        .expect("reconcile");
+    let routes = caddy.admin().routes();
+    assert!(
+        route(&routes, "setu-site-aaaaaaaa-www").is_none(),
+        "{routes:?}"
+    );
+    assert_eq!(routes.len(), 2, "the two site routes only: {routes:?}");
+}

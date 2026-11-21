@@ -130,6 +130,7 @@ fn secret_commands() -> [Command; 3] {
                 username: "alice".to_string(),
                 password_hash: ROUTE_HASH.to_string(),
             }),
+            www_redirect: true,
         },
     ]
 }

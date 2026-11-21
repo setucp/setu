@@ -362,6 +362,7 @@ mod tests {
                 username: "ops".into(),
                 password_hash: "$2b$12$hashvalue".into(),
             }),
+            www_redirect: true,
         };
         let r = redact_result(
             CommandResult {
