@@ -15,6 +15,10 @@ ALTER TABLE jobs ADD CONSTRAINT jobs_kind_check CHECK (kind IN
      'delete_site', 'delete_backup', 'env_update', 'restart_site',
      'stop_site', 'start_site', 'route_update'));
 
+-- The newest job of one kind for a site (`Jobs::latest_for_site`), read on
+-- every basic-auth GET, including the Access tab's poll while a job runs.
+CREATE INDEX jobs_site_kind_created_idx ON jobs (site_id, kind, created_at DESC, id DESC);
+
 -- A `set_route` command carries the site's bcrypt hash: null
 -- `basic_auth.password_hash` whenever the row leaves queued/delivered, like
 -- the other secrets (the value stays in site_basic_auth, where it is

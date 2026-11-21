@@ -46,8 +46,9 @@ pub enum RouteStatus {
     Applied,
     /// The route job is queued or running.
     Applying,
-    /// The last route change failed: the route still has the setting from
-    /// before it, whatever `basic_auth` says.
+    /// The last route change failed: the route may still have the setting
+    /// from before it, whatever `basic_auth` says (an agent restart or a lost
+    /// ack can apply the new one anyway).
     Failed,
 }
 

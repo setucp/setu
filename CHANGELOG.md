@@ -15,8 +15,8 @@ matching the tag.
   `route_update` job (a change refused with 409 stores nothing) and leaves
   the site's status alone. Every response carries `route.status`:
   `applying` while the job runs, `applied` once Caddy has the setting, and
-  `failed` when the last change did not reach Caddy (the route then keeps
-  its previous setting, whatever `basic_auth` says). Setting the
+  `failed` when the last change did not reach Caddy (the route may still
+  have its previous setting, whatever `basic_auth` says). Setting the
   credentials again retries a failed change; `DELETE` retries a failed
   removal. Finished `set_route` agent commands keep the user name but not
   the hash.
