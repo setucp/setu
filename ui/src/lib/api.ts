@@ -236,6 +236,8 @@ export function useBasicAuth(siteId: string) {
   return useQuery({
     queryKey: ["sites", siteId, "basic-auth"],
     queryFn: () => api.getBasicAuth(siteId),
+    // Poll while the route job runs, so the tab turns to applied or failed.
+    refetchInterval: (query) => (query.state.data?.route.status === "applying" ? 1000 : false),
   });
 }
 
@@ -246,7 +248,10 @@ export function useSetBasicAuth(siteId: string) {
     mutationFn: (body: BasicAuthPutBody | null) =>
       body === null ? api.deleteBasicAuth(siteId) : api.putBasicAuth(siteId, body),
     onSuccess: (res) => {
-      queryClient.setQueryData(["sites", siteId, "basic-auth"], res.basic_auth ?? null);
+      queryClient.setQueryData(["sites", siteId, "basic-auth"], {
+        basic_auth: res.basic_auth ?? null,
+        route: res.route,
+      });
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
     },
   });

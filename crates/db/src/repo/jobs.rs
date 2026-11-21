@@ -83,23 +83,25 @@ impl<'a> Jobs<'a> {
         server_id: Option<&str>,
         payload: Option<&Value>,
     ) -> Result<Job, AppError> {
-        if !JOB_KINDS.contains(&kind) {
-            return Err(AppError::validation(format!("unknown job kind {kind}")));
-        }
-        let payload = payload.cloned().unwrap_or_else(|| serde_json::json!({}));
+        insert(self.pool, kind, site_id, server_id, payload).await
+    }
+
+    /// The site's newest job of `kind` (any status), if it has one.
+    pub async fn latest_for_site(
+        &self,
+        site_id: &str,
+        kind: &str,
+    ) -> Result<Option<Job>, AppError> {
         sqlx::query_as!(
             Job,
-            "INSERT INTO jobs (id, kind, site_id, server_id, payload)
-             VALUES ($1, $2, $3, $4, $5)
-             RETURNING id, kind, site_id, server_id, status, payload, attempts, locked_by,
-                       locked_until, log, error, created_at, started_at, finished_at",
-            setu_common::new_id(),
-            kind,
+            "SELECT id, kind, site_id, server_id, status, payload, attempts, locked_by,
+                       locked_until, log, error, created_at, started_at, finished_at FROM jobs
+             WHERE site_id = $1 AND kind = $2
+             ORDER BY created_at DESC, id DESC LIMIT 1",
             site_id,
-            server_id,
-            payload,
+            kind,
         )
-        .fetch_one(self.pool)
+        .fetch_optional(self.pool)
         .await
         .map_err(map_db_error)
     }
@@ -344,4 +346,35 @@ impl<'a> Jobs<'a> {
         .await
         .map_err(map_db_error)
     }
+}
+
+/// Insert a job through `exec` (the pool, or a transaction when the job
+/// must commit together with another write). `conflict` when the site
+/// already has an active job.
+pub(crate) async fn insert<'e, E: sqlx::PgExecutor<'e>>(
+    exec: E,
+    kind: &str,
+    site_id: Option<&str>,
+    server_id: Option<&str>,
+    payload: Option<&Value>,
+) -> Result<Job, AppError> {
+    if !JOB_KINDS.contains(&kind) {
+        return Err(AppError::validation(format!("unknown job kind {kind}")));
+    }
+    let payload = payload.cloned().unwrap_or_else(|| serde_json::json!({}));
+    sqlx::query_as!(
+        Job,
+        "INSERT INTO jobs (id, kind, site_id, server_id, payload)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING id, kind, site_id, server_id, status, payload, attempts, locked_by,
+                       locked_until, log, error, created_at, started_at, finished_at",
+        setu_common::new_id(),
+        kind,
+        site_id,
+        server_id,
+        payload,
+    )
+    .fetch_one(exec)
+    .await
+    .map_err(map_db_error)
 }

@@ -238,7 +238,9 @@ hour); the current server token keeps working until the agent re-joins.
 | Site env values | `sites.env` | each value sealed: `v1:` = ChaCha20-Poly1305 with a random nonce under SHA-256(`"setu-seal-v1"` ‖ secret key), `plain:` for values not marked secret; an unprefixed value is refused (R51) |
 | Old env and spec during an update, prompt answers, env edits | `jobs.payload` | always `v1:` sealed, whatever the `secret` flag; prompt answers nulled once stored (R93, R110) |
 | Join retry token | `servers.join_token_sealed` | sealed, nulled 60 s after the join |
-| Commands with secrets (`create_database` password, `write_env` values) | `agent_commands.command` | nulled by `setu_redact_command` when the row is completed, cancelled, expired or pruned (R75) |
+| Commands with secrets (`create_database` password, `write_env` values, the `set_route` basic-auth hash) | `agent_commands.command` | nulled by `setu_redact_command` when the row is completed, cancelled, expired or pruned (R75); `set_route` keeps the user name |
+| Site basic-auth password | `site_basic_auth.password_hash` | bcrypt (cost 12), never the password; no API response carries it |
+| Site basic-auth hash on the server | `/var/lib/setu/state.json` (`sites.<short>.basic_auth`), Caddy's live config and its `--resume` file `/var/lib/caddy/.config/caddy/autosave.json` | `setu` 0600 state file (reconcile restores the route from it); the autosave file belongs to `caddy` (Caddy writes it 0600); Caddy needs the hash to check logins |
 | Command results and job logs | `agent_commands.result`, `jobs.log` | the agent replaces every password and env value it carried with `***` in `log` and `error` before persisting; job log lines replace every registered secret with `***` (R93, R96) |
 | Operator passwords, session ids, server/join/setup tokens | DB | argon2id, SHA-256 hashes |
 | Site env file | `/srv/setu/sites/<short>/env` | root:root 0600, read by PID 1 |

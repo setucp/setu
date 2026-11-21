@@ -1,8 +1,9 @@
 import * as React from "react";
-import { LockKeyhole, LockKeyholeOpen, Trash2 } from "lucide-react";
+import { LockKeyhole, LockKeyholeOpen, RotateCw, Trash2, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { useBasicAuth, useMe, useSetBasicAuth } from "@/lib/api";
 import { ApiError, type SiteDetail } from "@/lib/client";
+import { AppLink } from "./AppLink";
 import { ErrorText } from "./ErrorText";
 import { RelativeTime } from "./RelativeTime";
 import { Alert } from "./ui/alert";
@@ -47,8 +48,11 @@ function settled(status: string) {
  * asks every visitor for the user name and password; the panel stores
  * only a bcrypt hash, so the password is never shown again — replacing
  * it means entering a new one. Setting, replacing or removing it starts
- * a route update job (reported through `onSubmitted`). Viewers see the
- * state only; the server enforces the operator role either way.
+ * a route update job (reported through `onSubmitted`). The stored setting
+ * is in force only once that job is done: while it runs the tab says so,
+ * and a failed job is shown as not applied (the route keeps its previous
+ * setting), never as protected. Viewers see the state only; the server
+ * enforces the operator role either way.
  */
 export function SiteAccess({
   site,
@@ -66,7 +70,7 @@ export function SiteAccess({
   const [again, setAgain] = React.useState("");
   const [touched, setTouched] = React.useState(false);
 
-  const current = auth.data ?? null;
+  const current = auth.data?.basic_auth ?? null;
   React.useEffect(() => {
     if (current !== null) setUsername((u) => (u === "" ? current.username : u));
   }, [current]);
@@ -77,6 +81,7 @@ export function SiteAccess({
   if (auth.isError) return <ErrorText error={auth.error} />;
   if (auth.data === undefined) return <SkeletonRows rows={3} label="Loading access…" />;
 
+  const route = auth.data.route;
   const canEdit = me.data !== undefined && me.data.role !== "viewer";
   const busy = !settled(site.status);
   const nameErr = usernameError(username);
@@ -124,12 +129,24 @@ export function SiteAccess({
     if (ok) set.mutate(null, done(`${site.name} is open to everyone`));
   }
 
+  const jobLink =
+    route.job_id === null || route.job_id === undefined ? null : (
+      <AppLink href={`/jobs/${encodeURIComponent(route.job_id)}`} className="text-link underline">
+        route update job
+      </AppLink>
+    );
+
   return (
     <div className="flex flex-col gap-4">
       <Card>
         <CardHeader className="pb-5 sm:pb-6">
           <CardTitle className="flex items-center gap-2">
-            {current === null ? (
+            {route.status === "failed" ? (
+              <>
+                <TriangleAlert className="size-4 text-destructive" aria-hidden="true" />
+                {current === null ? "Removing the password failed" : "Password not applied"}
+              </>
+            ) : current === null ? (
               <>
                 <LockKeyholeOpen className="size-4 text-muted-foreground" aria-hidden="true" />
                 Open to everyone
@@ -140,9 +157,23 @@ export function SiteAccess({
                 Password protected
               </>
             )}
+            {route.status === "applying" ? (
+              <span className="text-sm font-normal text-muted-foreground">(applying…)</span>
+            ) : null}
           </CardTitle>
           <CardDescription>
-            {current === null ? (
+            {route.status === "failed" ? (
+              <>
+                The last change did not reach the site&apos;s route, so {site.domain} still has its
+                previous access setting
+                {current === null ? " and may still ask for a password" : " and may be open to everyone"}
+                .{" "}
+                {current === null
+                  ? "Retry the removal below."
+                  : `Set the credentials for ${current.username} again to retry.`}{" "}
+                {jobLink !== null ? <>See the {jobLink}.</> : null}
+              </>
+            ) : current === null ? (
               <>Anyone who knows {site.domain} can open it.</>
             ) : (
               <>
@@ -151,6 +182,23 @@ export function SiteAccess({
               </>
             )}
           </CardDescription>
+          {route.status === "failed" && route.error ? (
+            <p className="mt-2 text-sm text-destructive">{route.error}</p>
+          ) : null}
+          {route.status === "failed" && current === null && canEdit ? (
+            <div className="mt-3">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy || set.isPending}
+                loading={set.isPending}
+                onClick={() => set.mutate(null, done("Retrying the removal"))}
+              >
+                <RotateCw aria-hidden="true" />
+                Retry removal
+              </Button>
+            </div>
+          ) : null}
         </CardHeader>
       </Card>
 

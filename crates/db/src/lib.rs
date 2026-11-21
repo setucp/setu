@@ -16,7 +16,8 @@ pub use repo::{
     Backup, Backups, BasicAuths, Commands, CreateError, HeartbeatInput, HeartbeatOutcome, Job,
     Jobs, JoinError, JoinInput, LatestMetric, Metrics, NewPlan, NewSite, Operator, Operators, Plan,
     Plans, Resets, Server, ServerStatus, Servers, Session, Sessions, Settings, Site, SiteBasicAuth,
-    SiteReset, Sites, WaitError, NOTIFY_CHANNEL, SELF_BACKUP, SETUP_TOKEN_HASH, TLS_INTERNAL,
+    SiteReset, Sites, WaitError, NOTIFY_CHANNEL, ROUTE_JOB, SELF_BACKUP, SETUP_TOKEN_HASH,
+    TLS_INTERNAL,
 };
 pub use setu_common::{AppError, ErrorCode};
 

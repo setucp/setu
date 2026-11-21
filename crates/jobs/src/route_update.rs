@@ -3,7 +3,9 @@
 //! `PUT`/`DELETE /sites/{id}/basic-auth`). One agent step, `set_route`,
 //! carrying the stored user name and bcrypt hash (never a password). The
 //! site keeps its status: a failed route change leaves the old route in
-//! place and fails only the job.
+//! place and fails only the job, and `GET /sites/{id}/basic-auth` reports
+//! it (`route.status = failed`, read from this job) until a later change
+//! applies.
 
 use setu_common::AppError;
 use setu_proto::{BasicAuth, Command};

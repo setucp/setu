@@ -1,8 +1,11 @@
 //! `GET/PUT/DELETE /api/v1/sites/{id}/basic-auth` (0.1.7): HTTP basic
 //! auth in front of one site, enforced by Caddy. The password is hashed
 //! with bcrypt (the format Caddy reads) and only the hash is stored; no
-//! response ever carries a password or a hash. A change enqueues a
-//! `route_update` job that rewrites the site's Caddy route.
+//! response ever carries a password or a hash. A change stores the
+//! credentials and queues a `route_update` job that rewrites the site's
+//! Caddy route, in one transaction. Every response says whether the
+//! stored setting is in force (`route`), from that job: a failed route
+//! change shows as `failed`, never as protected.
 
 use axum::{
     extract::{Path, State},
@@ -34,10 +37,53 @@ pub struct BasicAuthOut {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// `GET /sites/{id}/basic-auth`: the setting, or `null` when the site is open.
+/// Whether the stored setting is what Caddy enforces, from the site's
+/// newest `route_update` job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteStatus {
+    /// The route has the stored setting (or no route change was ever made).
+    Applied,
+    /// The route job is queued or running.
+    Applying,
+    /// The last route change failed: the route still has the setting from
+    /// before it, whatever `basic_auth` says.
+    Failed,
+}
+
+/// The route state behind a basic-auth setting.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BasicAuthRoute {
+    pub status: RouteStatus,
+    /// The newest `route_update` job, if there is one.
+    pub job_id: Option<String>,
+    /// Its error when `status` is `failed`.
+    pub error: Option<String>,
+}
+
+impl BasicAuthRoute {
+    fn from_job(job: Option<&setu_db::Job>) -> Self {
+        let status = match job.map(|j| j.status.as_str()) {
+            None | Some("done") => RouteStatus::Applied,
+            Some("failed") => RouteStatus::Failed,
+            Some(_) => RouteStatus::Applying,
+        };
+        Self {
+            status,
+            job_id: job.map(|j| j.id.clone()),
+            error: job
+                .filter(|_| status == RouteStatus::Failed)
+                .and_then(|j| j.error.clone()),
+        }
+    }
+}
+
+/// `GET /sites/{id}/basic-auth`: the stored setting (`null` when the site
+/// is set to be open) and whether the route has it.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct BasicAuthGetOut {
     pub basic_auth: Option<BasicAuthOut>,
+    pub route: BasicAuthRoute,
 }
 
 /// `PUT /sites/{id}/basic-auth` body.
@@ -59,11 +105,32 @@ impl std::fmt::Debug for BasicAuthPutRequest {
     }
 }
 
-/// `PUT`/`DELETE` result: the setting after the change and the route job.
+/// `PUT`/`DELETE` result: the setting after the change, the route state
+/// (`applying`) and the route job.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct BasicAuthJobResponse {
     pub basic_auth: Option<BasicAuthOut>,
+    pub route: BasicAuthRoute,
     pub job: JobOut,
+}
+
+fn job_response(basic_auth: Option<BasicAuthOut>, job: &setu_db::Job) -> BasicAuthJobResponse {
+    BasicAuthJobResponse {
+        basic_auth,
+        route: BasicAuthRoute::from_job(Some(job)),
+        job: JobOut::from_row(job),
+    }
+}
+
+async fn latest_route_job(
+    state: &AppState,
+    site_id: &str,
+) -> Result<Option<setu_db::Job>, AppError> {
+    state
+        .db
+        .jobs()
+        .latest_for_site(site_id, setu_db::ROUTE_JOB)
+        .await
 }
 
 fn out(row: &setu_db::SiteBasicAuth) -> BasicAuthOut {
@@ -111,15 +178,6 @@ async fn hash_blocking(password: &str) -> Result<String, AppError> {
         })
 }
 
-async fn enqueue_route(state: &AppState, site: &setu_db::Site) -> Result<JobOut, AppError> {
-    let job = state
-        .db
-        .jobs()
-        .enqueue("route_update", Some(&site.id), Some(&site.server_id), None)
-        .await?;
-    Ok(JobOut::from_row(&job))
-}
-
 fn require_settled(site: &setu_db::Site) -> Result<(), AppError> {
     if site.status == "running" || site.status == "stopped" {
         Ok(())
@@ -150,13 +208,15 @@ pub async fn get(
     require_role(&session, Role::Viewer).await?;
     let site = state.db.sites().get(&id).await?;
     let row = state.db.basic_auths().get(&site.id).await?;
+    let job = latest_route_job(&state, &site.id).await?;
     Ok(Json(BasicAuthGetOut {
         basic_auth: row.as_ref().map(out),
+        route: BasicAuthRoute::from_job(job.as_ref()),
     }))
 }
 
-/// Set or replace the site's basic auth (operator and above); enqueues a
-/// route update.
+/// Set or replace the site's basic auth (operator and above); queues a
+/// route update. 409 (and nothing stored) when the site has an active job.
 #[utoipa::path(
     put,
     path = "/api/v1/sites/{id}/basic-auth",
@@ -184,12 +244,17 @@ pub async fn put(
     require_settled(&site)?;
     require_no_running_job(&state.db, &site.id).await?;
     let hash = hash_blocking(&body.password).await?;
-    let row = state
+    let (row, job) = state
         .db
         .basic_auths()
-        .set(&site.id, &body.username, &hash, state.clock.now())
+        .set_with_route_job(
+            &site.id,
+            &site.server_id,
+            &body.username,
+            &hash,
+            state.clock.now(),
+        )
         .await?;
-    let job = enqueue_route(&state, &site).await?;
     audit(
         &state.db,
         Some(&caller.id),
@@ -200,14 +265,14 @@ pub async fn put(
     .await;
     Ok((
         StatusCode::ACCEPTED,
-        Json(BasicAuthJobResponse {
-            basic_auth: Some(out(&row)),
-            job,
-        }),
+        Json(job_response(Some(out(&row)), &job)),
     ))
 }
 
-/// Remove the site's basic auth (operator and above); 404 when none.
+/// Remove the site's basic auth (operator and above); queues a route
+/// update. When the site has no credentials stored but its last route
+/// change failed, the route update is queued again (the route may still
+/// ask for a password); otherwise 404.
 #[utoipa::path(
     delete,
     path = "/api/v1/sites/{id}/basic-auth",
@@ -230,10 +295,31 @@ pub async fn delete(
     let site = state.db.sites().get(&id).await?;
     require_settled(&site)?;
     require_no_running_job(&state.db, &site.id).await?;
-    if !state.db.basic_auths().clear(&site.id).await? {
-        return Err(AppError::not_found("this site has no basic auth"));
-    }
-    let job = enqueue_route(&state, &site).await?;
+    let cleared = state
+        .db
+        .basic_auths()
+        .clear_with_route_job(&site.id, &site.server_id)
+        .await?;
+    let job = if let Some(job) = cleared {
+        job
+    } else {
+        let last_failed = latest_route_job(&state, &site.id)
+            .await?
+            .is_some_and(|j| j.status == "failed");
+        if !last_failed {
+            return Err(AppError::not_found("this site has no basic auth"));
+        }
+        state
+            .db
+            .jobs()
+            .enqueue(
+                setu_db::ROUTE_JOB,
+                Some(&site.id),
+                Some(&site.server_id),
+                None,
+            )
+            .await?
+    };
     audit(
         &state.db,
         Some(&caller.id),
@@ -242,11 +328,5 @@ pub async fn delete(
         ip.as_deref(),
     )
     .await;
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(BasicAuthJobResponse {
-            basic_auth: None,
-            job,
-        }),
-    ))
+    Ok((StatusCode::ACCEPTED, Json(job_response(None, &job))))
 }

@@ -2146,6 +2146,8 @@ async fn basic_auth_is_set_hashed_sent_to_the_agent_guarded_and_removed() {
         .await
         .expect("json");
     assert_eq!(none["basic_auth"], Value::Null);
+    assert_eq!(none["route"]["status"], "applied", "{none}");
+    assert_eq!(none["route"]["job_id"], Value::Null, "{none}");
     let denied = viewer
         .put(&url)
         .json(&json!({"username": "alice", "password": "correct-horse"}))
@@ -2189,7 +2191,9 @@ async fn basic_auth_is_set_hashed_sent_to_the_agent_guarded_and_removed() {
     );
     let body: Value = serde_json::from_str(&text).expect("json");
     assert_eq!(body["basic_auth"]["username"], "alice");
+    assert_eq!(body["route"]["status"], "applying", "{body}");
     let job = body["job"]["id"].as_str().expect("job id").to_string();
+    assert_eq!(body["route"]["job_id"], json!(job));
     let done = poll_job(&srv, &owner, &job).await.expect("job");
     assert_eq!(done["status"], "done", "{done}");
 
@@ -2210,6 +2214,8 @@ async fn basic_auth_is_set_hashed_sent_to_the_agent_guarded_and_removed() {
         .await
         .expect("json");
     assert_eq!(got["basic_auth"]["username"], "alice");
+    assert_eq!(got["route"]["status"], "applied", "{got}");
+    assert_eq!(got["route"]["job_id"], json!(job));
     assert!(!got.to_string().contains("$2"), "{got}");
 
     let del = owner.delete(&url).send().await.expect("delete");
@@ -2220,6 +2226,174 @@ async fn basic_auth_is_set_hashed_sent_to_the_agent_guarded_and_removed() {
     assert_eq!(done["status"], "done", "{done}");
     let routes = srv.agent.commands_of("set_route");
     assert!(routes.last().expect("route")["basic_auth"].is_null());
+    let again = owner.delete(&url).send().await.expect("delete");
+    assert_eq!(again.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+async fn get_json(client: &reqwest::Client, url: &str) -> Value {
+    client
+        .get(url)
+        .send()
+        .await
+        .expect("get")
+        .json()
+        .await
+        .expect("json")
+}
+
+#[tokio::test]
+async fn basic_auth_changes_nothing_while_the_site_is_busy_or_unsettled() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_id, server_id) = running_site(&srv, &owner, "bbusy").await;
+    let url = srv.url(&format!("/api/v1/sites/{site_id}/basic-auth"));
+    let set = owner
+        .put(&url)
+        .json(&json!({"username": "alice", "password": "correct-horse"}))
+        .send()
+        .await
+        .expect("put");
+    assert_eq!(set.status(), reqwest::StatusCode::ACCEPTED);
+    let body: Value = set.json().await.expect("json");
+    let job = body["job"]["id"].as_str().expect("job id").to_string();
+    poll_job(&srv, &owner, &job).await.expect("job");
+    let before = get_json(&owner, &url).await;
+
+    // Another runner holds an active job on the site: a PUT or DELETE that
+    // slips past the pre-check loses on the unique index, and stores nothing.
+    let busy = setu_common::new_id();
+    sqlx::query(
+        "INSERT INTO jobs (id, kind, site_id, server_id, status, locked_by, locked_until)
+         VALUES ($1, 'restart_site', $2, $3, 'running', 'elsewhere', now() + interval '1 hour')",
+    )
+    .bind(&busy)
+    .bind(&site_id)
+    .bind(&server_id)
+    .execute(srv.db.pool())
+    .await
+    .expect("hold a job");
+    let put = owner
+        .put(&url)
+        .json(&json!({"username": "bob", "password": "battery-staple"}))
+        .send()
+        .await
+        .expect("put");
+    assert_eq!(put.status(), reqwest::StatusCode::CONFLICT);
+    let del = owner.delete(&url).send().await.expect("delete");
+    assert_eq!(del.status(), reqwest::StatusCode::CONFLICT);
+    assert_eq!(get_json(&owner, &url).await, before);
+    // The same through the transaction alone (no pre-check): the unique
+    // index refuses the job and the credentials roll back.
+    let hash = format!("$2b$04${}", "c".repeat(53));
+    let err = srv
+        .db
+        .basic_auths()
+        .set_with_route_job(&site_id, &server_id, "carol", &hash, chrono::Utc::now())
+        .await
+        .expect_err("active job");
+    assert_eq!(err.code, setu_common::ErrorCode::Conflict, "{err}");
+    srv.db
+        .basic_auths()
+        .clear_with_route_job(&site_id, &server_id)
+        .await
+        .expect_err("active job");
+    assert_eq!(get_json(&owner, &url).await, before);
+    sqlx::query("DELETE FROM jobs WHERE id = $1")
+        .bind(&busy)
+        .execute(srv.db.pool())
+        .await
+        .expect("release");
+
+    // A site that is not running or stopped cannot change its route.
+    sqlx::query("UPDATE sites SET status = 'updating' WHERE id = $1")
+        .bind(&site_id)
+        .execute(srv.db.pool())
+        .await
+        .expect("status");
+    let put = owner
+        .put(&url)
+        .json(&json!({"username": "bob", "password": "battery-staple"}))
+        .send()
+        .await
+        .expect("put");
+    assert_eq!(put.status(), reqwest::StatusCode::CONFLICT);
+    let del = owner.delete(&url).send().await.expect("delete");
+    assert_eq!(del.status(), reqwest::StatusCode::CONFLICT);
+    assert_eq!(get_json(&owner, &url).await, before);
+}
+
+#[tokio::test]
+async fn a_failed_route_change_shows_as_failed_until_it_is_applied() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let viewer = srv.login_as("viewer").await;
+    let (site_id, _server_id) = running_site(&srv, &owner, "bfail").await;
+    let url = srv.url(&format!("/api/v1/sites/{site_id}/basic-auth"));
+    let put = |user: &'static str| {
+        owner
+            .put(&url)
+            .json(&json!({"username": user, "password": "correct-horse"}))
+            .send()
+    };
+
+    // The agent refuses the route: the stored setting is not in force.
+    srv.agent.fail_next_with("set_route", "caddy is down");
+    let body: Value = put("alice").await.expect("put").json().await.expect("json");
+    let job = body["job"]["id"].as_str().expect("job id").to_string();
+    let done = poll_job(&srv, &owner, &job).await.expect("job");
+    assert_eq!(done["status"], "failed", "{done}");
+    let got = get_json(&viewer, &url).await;
+    assert_eq!(got["basic_auth"]["username"], "alice");
+    assert_eq!(got["route"]["status"], "failed", "{got}");
+    assert_eq!(got["route"]["job_id"], json!(job));
+    assert!(
+        got["route"]["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("caddy is down"),
+        "{got}"
+    );
+    let site: Value = get_json(&owner, &srv.url(&format!("/api/v1/sites/{site_id}"))).await;
+    assert_eq!(site["status"], "running", "the site keeps its status");
+
+    // Setting it again applies it.
+    let body: Value = put("alice").await.expect("put").json().await.expect("json");
+    let job = body["job"]["id"].as_str().expect("job id").to_string();
+    assert_eq!(
+        poll_job(&srv, &owner, &job).await.expect("job")["status"],
+        "done"
+    );
+    assert_eq!(get_json(&viewer, &url).await["route"]["status"], "applied");
+
+    // A failed removal: nothing stored, but the route may still ask for a
+    // password. DELETE queues the route update again instead of 404.
+    srv.agent.fail_next("set_route");
+    let del = owner.delete(&url).send().await.expect("delete");
+    assert_eq!(del.status(), reqwest::StatusCode::ACCEPTED);
+    let body: Value = del.json().await.expect("json");
+    let job = body["job"]["id"].as_str().expect("job id").to_string();
+    assert_eq!(
+        poll_job(&srv, &owner, &job).await.expect("job")["status"],
+        "failed"
+    );
+    let got = get_json(&viewer, &url).await;
+    assert_eq!(got["basic_auth"], Value::Null);
+    assert_eq!(got["route"]["status"], "failed", "{got}");
+    let retry = owner.delete(&url).send().await.expect("delete");
+    assert_eq!(retry.status(), reqwest::StatusCode::ACCEPTED);
+    let body: Value = retry.json().await.expect("json");
+    assert_eq!(body["basic_auth"], Value::Null);
+    assert_eq!(body["route"]["status"], "applying");
+    let job = body["job"]["id"].as_str().expect("job id").to_string();
+    assert_eq!(
+        poll_job(&srv, &owner, &job).await.expect("job")["status"],
+        "done"
+    );
+    let routes = srv.agent.commands_of("set_route");
+    assert!(routes.last().expect("route")["basic_auth"].is_null());
+    assert_eq!(get_json(&viewer, &url).await["route"]["status"], "applied");
     let again = owner.delete(&url).send().await.expect("delete");
     assert_eq!(again.status(), reqwest::StatusCode::NOT_FOUND);
 }

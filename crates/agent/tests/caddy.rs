@@ -334,6 +334,11 @@ fn caddy_route_with_basic_auth_is_golden_and_validated() {
         route_json("setu-site-abcd1234", "a.test", "127.0.0.1:1").expect("plain")
     );
     // Hostile names and non-bcrypt hashes never reach the config.
+    let short = &hash[..59];
+    let long = format!("{hash}a");
+    let wrong_prefix = format!("$2x${}", &hash[4..]);
+    let bad_cost = format!("$2a$1x{}", &hash[6..]);
+    let bad_char = format!("{}!", &hash[..59]);
     for (u, h) in [
         ("", hash),
         ("a\"b", hash),
@@ -341,6 +346,11 @@ fn caddy_route_with_basic_auth_is_golden_and_validated() {
         ("alice", ""),
         ("alice", "plaintext"),
         ("alice", "$2a$14$x\"y"),
+        ("alice", short),
+        ("alice", long.as_str()),
+        ("alice", wrong_prefix.as_str()),
+        ("alice", bad_cost.as_str()),
+        ("alice", bad_char.as_str()),
     ] {
         assert!(
             route_json_with_auth("setu-site-abcd1234", "a.test", "127.0.0.1:1", Some((u, h)))

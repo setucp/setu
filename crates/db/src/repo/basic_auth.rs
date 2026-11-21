@@ -4,7 +4,11 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
+use crate::repo::jobs::{self, Job};
 use crate::{map_db_error, AppError};
+
+/// The job that pushes a site's credentials to its Caddy route.
+pub const ROUTE_JOB: &str = "route_update";
 
 /// A site's basic-auth credentials (the hash, not the password).
 #[derive(Clone, PartialEq, Eq)]
@@ -49,15 +53,20 @@ impl<'a> BasicAuths<'a> {
         .map_err(map_db_error)
     }
 
-    /// Sets (or replaces) the site's credentials.
-    pub async fn set(
+    /// Sets (or replaces) the site's credentials and queues the
+    /// [`ROUTE_JOB`] that applies them, in one transaction: when the job
+    /// cannot be queued (`conflict`: the site has an active job) the
+    /// credentials stay as they were.
+    pub async fn set_with_route_job(
         &self,
         site_id: &str,
+        server_id: &str,
         username: &str,
         password_hash: &str,
         now: DateTime<Utc>,
-    ) -> Result<SiteBasicAuth, AppError> {
-        sqlx::query_as!(
+    ) -> Result<(SiteBasicAuth, Job), AppError> {
+        let mut tx = self.pool.begin().await.map_err(map_db_error)?;
+        let row = sqlx::query_as!(
             SiteBasicAuth,
             "INSERT INTO site_basic_auth (site_id, username, password_hash, updated_at)
              VALUES ($1, $2, $3, $4)
@@ -71,17 +80,33 @@ impl<'a> BasicAuths<'a> {
             password_hash,
             now,
         )
-        .fetch_one(self.pool)
+        .fetch_one(&mut *tx)
         .await
-        .map_err(map_db_error)
+        .map_err(map_db_error)?;
+        let job = jobs::insert(&mut *tx, ROUTE_JOB, Some(site_id), Some(server_id), None).await?;
+        tx.commit().await.map_err(map_db_error)?;
+        Ok((row, job))
     }
 
-    /// Removes the site's credentials; `false` when it had none.
-    pub async fn clear(&self, site_id: &str) -> Result<bool, AppError> {
+    /// Removes the site's credentials and queues the [`ROUTE_JOB`] that
+    /// opens the route, in one transaction (as in
+    /// [`set_with_route_job`](Self::set_with_route_job)). `None` when the
+    /// site had no credentials: nothing is removed or queued.
+    pub async fn clear_with_route_job(
+        &self,
+        site_id: &str,
+        server_id: &str,
+    ) -> Result<Option<Job>, AppError> {
+        let mut tx = self.pool.begin().await.map_err(map_db_error)?;
         let done = sqlx::query!("DELETE FROM site_basic_auth WHERE site_id = $1", site_id)
-            .execute(self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(map_db_error)?;
-        Ok(done.rows_affected() > 0)
+        if done.rows_affected() == 0 {
+            return Ok(None);
+        }
+        let job = jobs::insert(&mut *tx, ROUTE_JOB, Some(site_id), Some(server_id), None).await?;
+        tx.commit().await.map_err(map_db_error)?;
+        Ok(Some(job))
     }
 }

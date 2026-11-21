@@ -17,7 +17,10 @@ use super::auth::{LoginRequest, OperatorOut};
 use super::backups::{
     BackupJobResponse, BackupListOut, BackupOut, ResetGetOut, ResetOut, ResetPutRequest,
 };
-use super::basic_auth::{BasicAuthGetOut, BasicAuthJobResponse, BasicAuthOut, BasicAuthPutRequest};
+use super::basic_auth::{
+    BasicAuthGetOut, BasicAuthJobResponse, BasicAuthOut, BasicAuthPutRequest, BasicAuthRoute,
+    RouteStatus,
+};
 use super::jobs::{AuditEntryOut, AuditListOut, AuditQuery, JobListOut, JobsQuery};
 use super::operators::{CreateOperatorRequest, OperatorListOut, SetPasswordRequest};
 use super::panel::SelfBackupOut;
@@ -166,6 +169,8 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         BasicAuthGetOut,
         BasicAuthJobResponse,
         BasicAuthOut,
+        BasicAuthRoute,
+        RouteStatus,
         BasicAuthPutRequest,
         ResetGetOut,
         ResetOut,

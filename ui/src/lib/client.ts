@@ -20,6 +20,8 @@ export type EnvPutBody = components["schemas"]["EnvPutRequest"];
 export type BasicAuth = components["schemas"]["BasicAuthOut"];
 export type BasicAuthPutBody = components["schemas"]["BasicAuthPutRequest"];
 export type BasicAuthJobResponse = components["schemas"]["BasicAuthJobResponse"];
+export type BasicAuthState = components["schemas"]["BasicAuthGetOut"];
+export type BasicAuthRoute = components["schemas"]["BasicAuthRoute"];
 export type ResetGetOut = components["schemas"]["ResetGetOut"];
 export type Backup = components["schemas"]["BackupOut"];
 export type ManifestError = components["schemas"]["ManifestErrorOut"];
@@ -285,12 +287,15 @@ export const api = {
     );
   },
 
-  /** The site's basic-auth user name, or `null` when the site is open. */
-  async getBasicAuth(siteId: string): Promise<BasicAuth | null> {
-    const body = await request<{ basic_auth?: BasicAuth | null }>(
+  /**
+   * The site's stored basic-auth setting (`basic_auth: null` when it is set
+   * to be open) and whether its route has it yet (`route.status`).
+   */
+  async getBasicAuth(siteId: string): Promise<BasicAuthState> {
+    const body = await request<BasicAuthState>(
       `/api/v1/sites/${encodeURIComponent(siteId)}/basic-auth`,
     );
-    return body.basic_auth ?? null;
+    return { basic_auth: body.basic_auth ?? null, route: body.route };
   },
 
   /** Set or replace the site's basic auth; a route job starts. */

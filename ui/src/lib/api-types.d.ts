@@ -761,12 +761,17 @@ export interface paths {
         /** The site's basic-auth user name (viewer and above). */
         get: operations["get"];
         /**
-         * Set or replace the site's basic auth (operator and above); enqueues a
-         *     route update.
+         * Set or replace the site's basic auth (operator and above); queues a
+         *     route update. 409 (and nothing stored) when the site has an active job.
          */
         put: operations["put"];
         post?: never;
-        /** Remove the site's basic auth (operator and above); 404 when none. */
+        /**
+         * Remove the site's basic auth (operator and above); queues a route
+         *     update. When the site has no credentials stored but its last route
+         *     change failed, the route update is queued again (the route may still
+         *     ask for a password); otherwise 404.
+         */
         delete: operations["delete"];
         options?: never;
         head?: never;
@@ -1075,14 +1080,22 @@ export interface components {
             password_hash: string;
             username: string;
         };
-        /** @description `GET /sites/{id}/basic-auth`: the setting, or `null` when the site is open. */
+        /**
+         * @description `GET /sites/{id}/basic-auth`: the stored setting (`null` when the site
+         *     is set to be open) and whether the route has it.
+         */
         BasicAuthGetOut: {
             basic_auth?: null | components["schemas"]["BasicAuthOut"];
+            route: components["schemas"]["BasicAuthRoute"];
         };
-        /** @description `PUT`/`DELETE` result: the setting after the change and the route job. */
+        /**
+         * @description `PUT`/`DELETE` result: the setting after the change, the route state
+         *     (`applying`) and the route job.
+         */
         BasicAuthJobResponse: {
             basic_auth?: null | components["schemas"]["BasicAuthOut"];
             job: components["schemas"]["JobOut"];
+            route: components["schemas"]["BasicAuthRoute"];
         };
         /** @description A site's basic-auth setting: the user name only. */
         BasicAuthOut: {
@@ -1096,6 +1109,14 @@ export interface components {
             password: string;
             /** @description Letters, digits and `._-`, 1 to 64. */
             username: string;
+        };
+        /** @description The route state behind a basic-auth setting. */
+        BasicAuthRoute: {
+            /** @description Its error when `status` is `failed`. */
+            error?: string | null;
+            /** @description The newest `route_update` job, if there is one. */
+            job_id?: string | null;
+            status: components["schemas"]["RouteStatus"];
         };
         /**
          * @description What a [`BinaryRef`] download is.
@@ -1557,6 +1578,12 @@ export interface components {
             join_token: string;
             server: components["schemas"]["ServerOut"];
         };
+        /**
+         * @description Whether the stored setting is what Caddy enforces, from the site's
+         *     newest `route_update` job.
+         * @enum {string}
+         */
+        RouteStatus: "applied" | "applying" | "failed";
         SelfBackupOut: {
             /** @description Where dumps are written (`<data_dir>/backups/setu`). */
             dir: string;

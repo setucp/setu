@@ -14,3 +14,26 @@ ALTER TABLE jobs ADD CONSTRAINT jobs_kind_check CHECK (kind IN
     ('provision_site', 'update_site', 'backup_site', 'restore_site',
      'delete_site', 'delete_backup', 'env_update', 'restart_site',
      'stop_site', 'start_site', 'route_update'));
+
+-- A `set_route` command carries the site's bcrypt hash: null
+-- `basic_auth.password_hash` whenever the row leaves queued/delivered, like
+-- the other secrets (the value stays in site_basic_auth, where it is
+-- needed). The user name stays; a redacted command does not deserialize.
+CREATE OR REPLACE FUNCTION setu_redact_command(cmd JSONB) RETURNS JSONB
+LANGUAGE SQL IMMUTABLE AS $$
+    SELECT CASE
+        WHEN cmd->>'kind' = 'create_database' AND cmd ? 'password'
+            THEN jsonb_set(cmd, '{password}', 'null'::jsonb)
+        WHEN cmd->>'kind' = 'write_env' AND jsonb_typeof(cmd->'env') = 'array'
+            THEN jsonb_set(cmd, '{env}', COALESCE(
+                (SELECT jsonb_agg(CASE WHEN jsonb_typeof(e) = 'object'
+                                       THEN jsonb_set(e, '{value}', 'null'::jsonb)
+                                       ELSE e END
+                                  ORDER BY ord)
+                 FROM jsonb_array_elements(cmd->'env') WITH ORDINALITY AS t(e, ord)),
+                '[]'::jsonb))
+        WHEN cmd->>'kind' = 'set_route' AND jsonb_typeof(cmd->'basic_auth') = 'object'
+            THEN jsonb_set(cmd, '{basic_auth,password_hash}', 'null'::jsonb)
+        ELSE cmd
+    END
+$$;

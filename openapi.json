@@ -2625,7 +2625,7 @@
         "tags": [
           "super::basic_auth"
         ],
-        "summary": "Set or replace the site's basic auth (operator and above); enqueues a\nroute update.",
+        "summary": "Set or replace the site's basic auth (operator and above); queues a\nroute update. 409 (and nothing stored) when the site has an active job.",
         "operationId": "put",
         "parameters": [
           {
@@ -2715,7 +2715,7 @@
         "tags": [
           "super::basic_auth"
         ],
-        "summary": "Remove the site's basic auth (operator and above); 404 when none.",
+        "summary": "Remove the site's basic auth (operator and above); queues a route\nupdate. When the site has no credentials stored but its last route\nchange failed, the route update is queued again (the route may still\nask for a password); otherwise 404.",
         "operationId": "delete",
         "parameters": [
           {
@@ -3936,7 +3936,10 @@
       },
       "BasicAuthGetOut": {
         "type": "object",
-        "description": "`GET /sites/{id}/basic-auth`: the setting, or `null` when the site is open.",
+        "description": "`GET /sites/{id}/basic-auth`: the stored setting (`null` when the site\nis set to be open) and whether the route has it.",
+        "required": [
+          "route"
+        ],
         "properties": {
           "basic_auth": {
             "oneOf": [
@@ -3947,13 +3950,17 @@
                 "$ref": "#/components/schemas/BasicAuthOut"
               }
             ]
+          },
+          "route": {
+            "$ref": "#/components/schemas/BasicAuthRoute"
           }
         }
       },
       "BasicAuthJobResponse": {
         "type": "object",
-        "description": "`PUT`/`DELETE` result: the setting after the change and the route job.",
+        "description": "`PUT`/`DELETE` result: the setting after the change, the route state\n(`applying`) and the route job.",
         "required": [
+          "route",
           "job"
         ],
         "properties": {
@@ -3969,6 +3976,9 @@
           },
           "job": {
             "$ref": "#/components/schemas/JobOut"
+          },
+          "route": {
+            "$ref": "#/components/schemas/BasicAuthRoute"
           }
         }
       },
@@ -4004,6 +4014,32 @@
           "username": {
             "type": "string",
             "description": "Letters, digits and `._-`, 1 to 64."
+          }
+        }
+      },
+      "BasicAuthRoute": {
+        "type": "object",
+        "description": "The route state behind a basic-auth setting.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its error when `status` is `failed`."
+          },
+          "job_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The newest `route_update` job, if there is one."
+          },
+          "status": {
+            "$ref": "#/components/schemas/RouteStatus"
           }
         }
       },
@@ -5506,6 +5542,15 @@
             "$ref": "#/components/schemas/ServerOut"
           }
         }
+      },
+      "RouteStatus": {
+        "type": "string",
+        "description": "Whether the stored setting is what Caddy enforces, from the site's\nnewest `route_update` job.",
+        "enum": [
+          "applied",
+          "applying",
+          "failed"
+        ]
       },
       "SelfBackupOut": {
         "type": "object",

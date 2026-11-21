@@ -16,6 +16,9 @@ const me = (role: string) => ({
 const site = (partial: Record<string, unknown> = {}) =>
   siteFixture(partial) as unknown as SiteDetail;
 const job = (id: string) => ({ id, kind: "route_update", status: "queued" });
+const applied = { status: "applied", job_id: null, error: null };
+const applying = (id: string) => ({ status: "applying", job_id: id, error: null });
+const failed = (id: string, error: string) => ({ status: "failed", job_id: id, error });
 
 describe("site access (basic auth)", () => {
   it("validates like the server: user name shape, password bytes, control characters", () => {
@@ -40,13 +43,13 @@ describe("site access (basic auth)", () => {
       if (url.endsWith(URL) && method === "PUT") {
         const b = body as { username: string };
         current = { username: b.username, updated_at: "2026-11-21T10:00:00Z" };
-        return json({ basic_auth: current, job: job("job-put") }, 202);
+        return json({ basic_auth: current, route: applying("job-put"), job: job("job-put") }, 202);
       }
       if (url.endsWith(URL) && method === "DELETE") {
         current = null;
-        return json({ basic_auth: null, job: job("job-del") }, 202);
+        return json({ basic_auth: null, route: applying("job-del"), job: job("job-del") }, 202);
       }
-      if (url.endsWith(URL)) return json({ basic_auth: current });
+      if (url.endsWith(URL)) return json({ basic_auth: current, route: applied });
       return notFound();
     });
     const user = userEvent.setup();
@@ -94,7 +97,10 @@ describe("site access (basic auth)", () => {
     const calls = stubFetch((url) => {
       if (url.endsWith("/api/v1/auth/me")) return json(me("viewer"));
       if (url.endsWith(URL)) {
-        return json({ basic_auth: { username: "team", updated_at: "2026-11-20T10:00:00Z" } });
+        return json({
+          basic_auth: { username: "team", updated_at: "2026-11-20T10:00:00Z" },
+          route: applied,
+        });
       }
       return notFound();
     });
@@ -117,7 +123,7 @@ describe("site access (basic auth)", () => {
           409,
         );
       }
-      if (url.endsWith(URL)) return json({ basic_auth: null });
+      if (url.endsWith(URL)) return json({ basic_auth: null, route: applied });
       return notFound();
     });
     const user = userEvent.setup();
@@ -156,5 +162,51 @@ describe("site access (basic auth)", () => {
     expect(screen.queryByText("Open to everyone")).toBeNull();
     expect(screen.queryByText("Password protected")).toBeNull();
     expect(screen.queryByRole("button", { name: /protect site/i })).toBeNull();
+  });
+
+  it("a failed change reads as not applied, never as protected", async () => {
+    stubFetch((url) => {
+      if (url.endsWith("/api/v1/auth/me")) return json(me("viewer"));
+      if (url.endsWith(URL)) {
+        return json({
+          basic_auth: { username: "team", updated_at: "2026-11-20T10:00:00Z" },
+          route: failed("job-1", "set_route: caddy is down"),
+        });
+      }
+      return notFound();
+    });
+    renderWithClient(<SiteAccess site={site()} />);
+    expect(await screen.findByText("Password not applied")).toBeInTheDocument();
+    expect(screen.queryByText("Password protected")).toBeNull();
+    expect(screen.getByText(/may be open to everyone/)).toBeInTheDocument();
+    expect(screen.getByText("set_route: caddy is down")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "route update job" })).toHaveAttribute(
+      "href",
+      "/jobs/job-1",
+    );
+  });
+
+  it("a failed removal offers a retry that sends DELETE again", async () => {
+    let route: unknown = failed("job-1", "set_route: timed out");
+    const calls = stubFetch((url, method) => {
+      if (url.endsWith("/api/v1/auth/me")) return json(me("operator"));
+      if (url.endsWith(URL) && method === "DELETE") {
+        route = applying("job-2");
+        return json({ basic_auth: null, route, job: job("job-2") }, 202);
+      }
+      if (url.endsWith(URL)) return json({ basic_auth: null, route });
+      return notFound();
+    });
+    const user = userEvent.setup();
+    const onSubmitted = vi.fn();
+    renderWithClient(<SiteAccess site={site()} onSubmitted={onSubmitted} />);
+    expect(await screen.findByText("Removing the password failed")).toBeInTheDocument();
+    expect(screen.queryByText("Open to everyone")).toBeNull();
+    expect(screen.getByText(/may still ask for a password/)).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: /retry removal/i }));
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith("job-2"));
+    expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
+    expect(await screen.findByText("Open to everyone")).toBeInTheDocument();
+    expect(screen.getByText("(applying…)")).toBeInTheDocument();
   });
 });

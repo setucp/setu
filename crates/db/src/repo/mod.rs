@@ -18,7 +18,7 @@ pub use app_sources::{AppSource, AppSources};
 pub use apps::{App, AppVersion, Apps};
 pub use audit::{Audit, AuditEntry};
 pub use backups::{Backup, Backups};
-pub use basic_auth::{BasicAuths, SiteBasicAuth};
+pub use basic_auth::{BasicAuths, SiteBasicAuth, ROUTE_JOB};
 pub use commands::{AgentCommand, Commands, WaitError, NOTIFY_CHANNEL};
 pub use jobs::{Job, Jobs};
 pub use metrics::{LatestMetric, Metrics};

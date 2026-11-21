@@ -306,10 +306,17 @@ impl Command {
     /// Does this command carry secret values?
     pub fn has_secrets(&self) -> bool {
         matches!(self, Self::CreateDatabase { .. } | Self::WriteEnv { .. })
+            || matches!(
+                self,
+                Self::SetRoute {
+                    basic_auth: Some(_),
+                    ..
+                }
+            )
     }
 
     /// The JSON form with every secret nulled: the `create_database`
-    /// password and each `write_env` value. The agent-side twin of the
+    /// password, each `write_env` value and the `set_route` bcrypt hash. The agent-side twin of the
     /// SQL function `setu_redact_command` (ledger R75); a redacted
     /// command deliberately does not deserialize back into a `Command`.
     pub fn redact(&self) -> serde_json::Value {
@@ -327,6 +334,14 @@ impl Command {
                             *value = serde_json::Value::Null;
                         }
                     }
+                }
+            }
+            Self::SetRoute { .. } => {
+                if let Some(hash) = v
+                    .get_mut("basic_auth")
+                    .and_then(|a| a.get_mut("password_hash"))
+                {
+                    *hash = serde_json::Value::Null;
                 }
             }
             _ => {}
@@ -576,7 +591,10 @@ mod tests {
                     site_short_id: short(),
                     domain: "example.com".to_string(),
                     port: 20001,
-                    basic_auth: None,
+                    basic_auth: Some(BasicAuth {
+                        username: "alice".to_string(),
+                        password_hash: SECRET.to_string(),
+                    }),
                 },
                 "set_route",
             ),
@@ -764,10 +782,14 @@ mod tests {
                         assert!(var["name"].is_string(), "names survive");
                     }
                 }
+                "set_route" => {
+                    assert!(redacted["basic_auth"]["password_hash"].is_null());
+                    assert_eq!(redacted["basic_auth"]["username"], "alice");
+                }
                 _ => {}
             }
         }
-        assert_eq!(secret_bearing, 2);
+        assert_eq!(secret_bearing, 3);
     }
 
     #[test]
@@ -831,6 +853,18 @@ mod tests {
             Command::Health { site: slow }.default_timeout(),
             Duration::from_secs(330)
         );
+    }
+
+    #[test]
+    fn set_route_without_basic_auth_has_no_secret() {
+        let open = Command::SetRoute {
+            site_short_id: short(),
+            domain: "example.com".to_string(),
+            port: 20001,
+            basic_auth: None,
+        };
+        assert!(!open.has_secrets());
+        assert_eq!(open.redact(), serde_json::to_value(&open).unwrap());
     }
 
     #[test]
