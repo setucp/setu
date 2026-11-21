@@ -352,9 +352,6 @@ mod tests {
         assert_eq!(r.error.as_deref(), Some("bad value ***"));
     }
 
-    /// `create_database`/`drop_database` name `site_<short>`: they queue
-    /// in that site's FIFO, so a drop never runs beside the site's
-    /// restore or backup of the same database (M16).
     #[test]
     fn redaction_masks_the_set_route_hash() {
         let cmd = Command::SetRoute {
@@ -380,6 +377,9 @@ mod tests {
         assert_eq!(r.error.as_deref(), Some("refused ***"));
     }
 
+    /// `create_database`/`drop_database` name `site_<short>`: they queue
+    /// in that site's FIFO, so a drop never runs beside the site's
+    /// restore or backup of the same database (M16).
     #[test]
     fn create_database_takes_site_slot() {
         let create = Command::CreateDatabase {
