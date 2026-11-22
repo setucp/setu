@@ -329,6 +329,21 @@ where
             ),
             Err(e) => err(cmd_id, "fetch_logs failed", e),
         },
+        Command::CertStatus { domain, .. } => {
+            if !crate::caddy::valid_domain(domain) {
+                return err(
+                    cmd_id,
+                    "cert_status failed",
+                    anyhow::anyhow!("invalid domain {domain}"),
+                );
+            }
+            let out = crate::cert::probe(crate::cert::LOCAL_HTTPS, domain).await;
+            ok(
+                cmd_id,
+                serde_json::to_value(out).unwrap_or_default(),
+                "cert_status ok",
+            )
+        }
         Command::Inventory => match inventory(rt).await {
             Ok(report) => ok(
                 cmd_id,

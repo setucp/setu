@@ -220,6 +220,13 @@ pub enum Command {
         lines: u32,
     },
     Inventory,
+    /// Read the certificate Caddy serves for `domain` on this server
+    /// (a local TLS handshake with that server name; read-only). Absent
+    /// in older agents: they refuse it as an unknown command.
+    CertStatus {
+        site: String,
+        domain: String,
+    },
 }
 
 /// `install` may download a large archive.
@@ -255,6 +262,7 @@ impl Command {
             Self::SiteRemove { .. } => "site_remove",
             Self::FetchLogs { .. } => "fetch_logs",
             Self::Inventory => "inventory",
+            Self::CertStatus { .. } => "cert_status",
         }
     }
 
@@ -277,7 +285,8 @@ impl Command {
             | Self::Restore { site, .. }
             | Self::DeleteBackup { site, .. }
             | Self::SiteRemove { site }
-            | Self::FetchLogs { site, .. } => Some(site),
+            | Self::FetchLogs { site, .. }
+            | Self::CertStatus { site, .. } => Some(site),
             Self::SetRoute { site_short_id, .. } | Self::RemoveRoute { site_short_id, .. } => {
                 Some(site_short_id)
             }
@@ -289,7 +298,10 @@ impl Command {
     pub fn is_read_only(&self) -> bool {
         matches!(
             self,
-            Self::Status { .. } | Self::FetchLogs { .. } | Self::Inventory
+            Self::Status { .. }
+                | Self::FetchLogs { .. }
+                | Self::Inventory
+                | Self::CertStatus { .. }
         )
     }
 
@@ -480,6 +492,23 @@ pub struct InventoryReport {
     pub listening_ports: Vec<u16>,
 }
 
+/// `CertStatus` output: the certificate Caddy served for the name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CertOutput {
+    /// A certificate was served (false: handshake refused or no cert).
+    pub served: bool,
+    /// Issuer common name (`R11`, `E5`, …) or the organisation.
+    pub issuer: Option<String>,
+    /// Validity start and end, seconds since the Unix epoch.
+    pub not_before: Option<i64>,
+    pub not_after: Option<i64>,
+    /// The certificate was issued by a public CA (not self-signed and not
+    /// Caddy's local CA), so browsers will trust it.
+    pub public: bool,
+    /// Why no certificate was read (handshake error text), when none was.
+    pub error: Option<String>,
+}
+
 /// `FetchLogs` output: lines after the given cursor and the next one.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct LogsOutput {
@@ -646,6 +675,13 @@ mod tests {
                 "fetch_logs",
             ),
             (Command::Inventory, "inventory"),
+            (
+                Command::CertStatus {
+                    site: short(),
+                    domain: "example.com".to_string(),
+                },
+                "cert_status",
+            ),
         ]
     }
 
@@ -672,14 +708,15 @@ mod tests {
             | Command::DeleteBackup { .. }
             | Command::SiteRemove { .. }
             | Command::FetchLogs { .. }
-            | Command::Inventory => true,
+            | Command::Inventory
+            | Command::CertStatus { .. } => true,
         }
     }
 
     #[test]
     fn every_command_round_trips_json() {
         let all = all_commands();
-        assert_eq!(all.len(), 20, "spec §5 lists 20 commands");
+        assert_eq!(all.len(), 21, "spec §5 lists 20 commands, plus cert_status");
         for (cmd, kind) in all {
             assert!(listed(&cmd));
             assert_eq!(cmd.kind(), kind);
@@ -892,7 +929,10 @@ mod tests {
             .filter(|(c, _)| c.is_read_only())
             .map(|(_, k)| k)
             .collect();
-        assert_eq!(read_only, ["status", "fetch_logs", "inventory"]);
+        assert_eq!(
+            read_only,
+            ["status", "fetch_logs", "inventory", "cert_status"]
+        );
     }
 
     /// A command from a control plane that predates `format` still reads,

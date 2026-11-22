@@ -14,6 +14,7 @@
 
 pub mod backup;
 pub mod caddy;
+pub mod cert;
 pub mod cli;
 pub mod commands;
 pub mod config;

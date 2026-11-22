@@ -66,6 +66,10 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = { version = "0.1" }
 bytes = { version = "1" }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "cookies"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+x509-parser = { version = "0.18", default-features = false }
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
 config = { version = "0.15" }
 rust-embed = { version = "8" }
 async-trait = { version = "0.1" }
