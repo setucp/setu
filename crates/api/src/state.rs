@@ -42,6 +42,8 @@ pub struct AppState {
     pub notifier: Notifier,
     /// Fetches followed manifest URLs (tests swap in a fake).
     pub fetcher: Arc<dyn crate::follow::ManifestFetcher>,
+    /// Looks domains up for the pre-check (tests swap in a fake).
+    pub resolver: Arc<dyn crate::dns::DomainResolver>,
     login_failures: Arc<tokio::sync::Mutex<HashMap<IpAddr, Vec<Instant>>>>,
     agent_polls: Arc<tokio::sync::Mutex<HashMap<String, Vec<Instant>>>>,
     agent_poll_limit: usize,
@@ -79,6 +81,7 @@ impl AppState {
             agent,
             notifier,
             fetcher: Arc::new(crate::follow::HttpFetcher),
+            resolver: Arc::new(crate::dns::SystemResolver),
             login_failures: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             agent_polls: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             agent_poll_limit: MAX_AGENT_POLLS,
@@ -97,6 +100,13 @@ impl AppState {
     #[must_use]
     pub fn with_fetcher(mut self, fetcher: Arc<dyn crate::follow::ManifestFetcher>) -> Self {
         self.fetcher = fetcher;
+        self
+    }
+
+    /// Replace the DNS resolver (tests answer from memory).
+    #[must_use]
+    pub fn with_resolver(mut self, resolver: Arc<dyn crate::dns::DomainResolver>) -> Self {
+        self.resolver = resolver;
         self
     }
 

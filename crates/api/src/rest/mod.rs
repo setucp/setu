@@ -6,6 +6,7 @@ pub mod auth;
 pub mod backups;
 pub mod basic_auth;
 pub mod docs;
+pub mod domain_check;
 pub mod jobs;
 pub mod operators;
 pub mod panel;
@@ -94,6 +95,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/plans", get(plans::list).post(plans::create))
         .route("/plans/{id}", get(plans::get).put(plans::update))
+        .route("/domain-check", get(domain_check::check))
         .route("/sites", get(sites::list).post(sites::create))
         .route("/sites/{id}", get(sites::get).delete(sites::delete))
         .route("/sites/{id}/restart", post(sites::restart))
