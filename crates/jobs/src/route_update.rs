@@ -58,6 +58,11 @@ fn check_applied(
     sent_noindex: bool,
     output: &serde_json::Value,
 ) -> Result<(), AppError> {
+    if sent_aliases == 0 && !sent_noindex {
+        // Nothing the 0.1.7 agent added was sent (a www-redirect or basic-auth
+        // change): an older agent applies it in full and echoes nothing.
+        return Ok(());
+    }
     let live = output.get("aliases").and_then(serde_json::Value::as_u64);
     let noindex = output.get("noindex").and_then(serde_json::Value::as_bool);
     if noindex != Some(sent_noindex) {
@@ -116,6 +121,8 @@ mod tests {
         let old = json!({"domain": "a.example.com", "route_id": "x", "www": null});
         assert!(check_applied(1, false, &old).is_err());
         assert!(check_applied(0, true, &old).is_err());
+        // a www-redirect or basic-auth job sends neither: an old agent is fine
+        assert!(check_applied(0, false, &old).is_ok());
     }
 
     #[test]

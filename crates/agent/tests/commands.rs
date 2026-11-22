@@ -1120,3 +1120,55 @@ async fn a_site_on_the_www_name_displaces_and_restores_the_apex_redirect() {
     assert!(setu_agent::execute("c3", &remove, &rt).await.ok);
     assert!(has_www(), "the name is free again");
 }
+
+/// An alias moved from site A to site B: B's `SetRoute` arrives first and
+/// routes nothing (A still holds the host); A's `SetRoute` that drops it
+/// then hands the host to B, which routes it without another command.
+#[tokio::test]
+async fn a_moved_alias_goes_live_for_the_new_site_when_the_old_one_lets_go() {
+    use setu_proto::{Alias, AliasMode};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (rt, _units) = test_runtime(dir.path());
+    let set = |short: &str, domain: &str, port: u16, aliases: Vec<Alias>| Command::SetRoute {
+        site_short_id: short.to_string(),
+        domain: domain.to_string(),
+        port,
+        basic_auth: None,
+        www_redirect: false,
+        aliases,
+        noindex: false,
+    };
+    let moved = || {
+        vec![Alias {
+            host: "moved.example.test".to_string(),
+            mode: AliasMode::Redirect,
+        }]
+    };
+    let alias_routes = || {
+        rt.caddy()
+            .admin()
+            .routes()
+            .iter()
+            .filter(|r| r["@id"].as_str().is_some_and(|id| id.contains("-alias-")))
+            .count()
+    };
+    let r = setu_agent::execute(
+        "c1",
+        &set("aaaaaaaa", "a.example.test", 20001, moved()),
+        &rt,
+    )
+    .await;
+    assert!(r.ok);
+    assert_eq!(alias_routes(), 1, "A serves the host");
+    let r = setu_agent::execute(
+        "c2",
+        &set("bbbbbbbb", "b.example.test", 20002, moved()),
+        &rt,
+    )
+    .await;
+    assert!(r.ok);
+    assert_eq!(r.output["aliases"], 0, "B routes nothing while A holds it");
+    let r = setu_agent::execute("c3", &set("aaaaaaaa", "a.example.test", 20001, vec![]), &rt).await;
+    assert!(r.ok);
+    assert_eq!(alias_routes(), 1, "B routes the host once A lets go");
+}

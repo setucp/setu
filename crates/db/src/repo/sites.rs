@@ -237,6 +237,16 @@ impl<'a> Sites<'a> {
         if aliased.is_some() {
             return Err(CreateError::DomainTaken);
         }
+        // A new site redirects its `www.` name, so that name must be free too.
+        let www_aliased: Option<String> =
+            sqlx::query_scalar("SELECT site_id FROM site_aliases WHERE host = $1")
+                .bind(format!("www.{}", new.domain))
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(db_err)?;
+        if www_aliased.is_some() {
+            return Err(CreateError::DomainTaken);
+        }
 
         let server_id = match &new.server_id {
             Some(id) => id.clone(),

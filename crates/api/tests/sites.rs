@@ -2556,6 +2556,38 @@ async fn a_hostname_belongs_to_one_site_in_every_direction() {
         "create over alias"
     );
 
+    // 1b. site create whose www name is another site's alias
+    let www_base = unique("wwwbase");
+    let www_alias = format!("www.{www_base}.example.org");
+    let r = owner
+        .put(&a_url)
+        .json(&json!({"aliases": [{"host": www_alias, "mode": "serve"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::ACCEPTED);
+    let job = r.json::<Value>().await.unwrap()["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    poll_job(&srv, &owner, &job).await.expect("alias job");
+    let r = owner
+        .post(srv.url("/api/v1/sites"))
+        .json(&json!({
+            "name": unique("site"), "app_id": "hello", "version": "0.1.0",
+            "plan_id": plan_id, "domain": format!("{www_base}.example.org"),
+            "server_id": server_id, "owner_email": "owner@example.com",
+            "prompts": {"HELLO_NAME": "x"},
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        reqwest::StatusCode::CONFLICT,
+        "create over a www alias"
+    );
+
     // 2. an alias that is another site's www name (its www_redirect is on)
     let (site_b, _) = running_site(&srv, &owner, "own-b").await;
     let b = get_site(&srv, &owner, &site_b).await;
@@ -2589,6 +2621,20 @@ async fn a_hostname_belongs_to_one_site_in_every_direction() {
     let (site_c, _) = running_site(&srv, &owner, "own-c").await;
     let c = get_site(&srv, &owner, &site_c).await;
     let c_domain = c["domain"].as_str().unwrap().to_owned();
+    // a new site redirects its www name; turn that off so the name is free
+    let c_url = srv.url(&format!("/api/v1/sites/{site_c}/www-redirect"));
+    let r = owner
+        .put(&c_url)
+        .json(&json!({"enabled": false}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::ACCEPTED);
+    let job = r.json::<Value>().await.unwrap()["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    poll_job(&srv, &owner, &job).await.expect("www off job");
     let r = owner
         .put(&a_url)
         .json(&json!({"aliases": [{"host": format!("www.{c_domain}"), "mode": "serve"}]}))
