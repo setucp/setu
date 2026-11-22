@@ -41,6 +41,10 @@ pub struct SelfBackupRecord {
     pub size_bytes: Option<i64>,
     pub last_attempt_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+    /// A database outage that cost a backup. Kept apart from `last_error`
+    /// so the success of the dump that follows recovery does not erase it.
+    #[serde(default)]
+    pub last_outage: Option<String>,
 }
 
 /// `<data_dir>/backups/setu`.
@@ -84,46 +88,56 @@ async fn load_raw(db: &Db) -> Result<SelfBackupRecord, sqlx::Error> {
         .unwrap_or_default())
 }
 
-/// Holds the exclusive backup lock (`<data_dir>/backups/setu/.lock`) until
-/// dropped. It is an `flock` on a file, so it serialises the scheduler's
-/// dump, `setu backup` and the upgrade's pre-dump whether they run in
-/// one process or in two (#15).
+/// Why the lock was not taken.
+#[derive(Debug)]
+pub enum LockError {
+    /// Another dump holds it.
+    Busy,
+    /// The directory or the lock could not be used.
+    Failed(String),
+}
+
+/// Holds the exclusive backup lock until dropped. It is an `flock` on the
+/// backup directory itself (`<data_dir>/backups/setu`), opened read-only, so
+/// it needs no lock file whose owner could differ from the service user
+/// (`setu upgrade` and `sudo setu backup` run as root), and it serialises
+/// the scheduler's dump, `setu backup` and the upgrade's pre-dump whether
+/// they run in one process or in two (#15).
 #[derive(Debug)]
 pub struct BackupLock {
-    _file: std::fs::File,
+    _dir: std::fs::File,
 }
 
 impl BackupLock {
-    /// The lock, or `conflict` ("another backup is running") when
-    /// another dump holds it.
-    pub fn try_acquire(data_dir: &Path) -> Result<Self, AppError> {
-        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    /// The lock, or [`LockError::Busy`] when another dump holds it.
+    pub fn acquire(data_dir: &Path) -> Result<Self, LockError> {
+        use std::os::unix::fs::PermissionsExt as _;
         let dir = backup_dir(data_dir);
-        std::fs::create_dir_all(&dir).map_err(|e| {
-            tracing::error!(error = %e, dir = %dir.display(), "cannot create the backup directory");
-            AppError::internal()
-        })?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| LockError::Failed(format!("cannot create {}: {e}", dir.display())))?;
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .mode(0o600)
-            .open(dir.join(".lock"))
-            .map_err(|e| {
-                tracing::error!(error = %e, "cannot open the backup lock");
-                AppError::internal()
-            })?;
-        match file.try_lock() {
-            Ok(()) => Ok(Self { _file: file }),
-            Err(std::fs::TryLockError::WouldBlock) => {
-                Err(AppError::conflict("another backup is running"))
-            }
-            Err(std::fs::TryLockError::Error(e)) => {
-                tracing::error!(error = %e, "cannot take the backup lock");
-                Err(AppError::internal())
-            }
+        let handle = std::fs::File::open(&dir).map_err(|e| {
+            LockError::Failed(format!("cannot open {} to lock it: {e}", dir.display()))
+        })?;
+        match handle.try_lock() {
+            Ok(()) => Ok(Self { _dir: handle }),
+            Err(std::fs::TryLockError::WouldBlock) => Err(LockError::Busy),
+            Err(std::fs::TryLockError::Error(e)) => Err(LockError::Failed(format!(
+                "cannot take the backup lock: {e}"
+            ))),
         }
+    }
+
+    /// [`acquire`](Self::acquire) as an API error: `conflict` ("another
+    /// backup is running") when busy.
+    pub fn try_acquire(data_dir: &Path) -> Result<Self, AppError> {
+        Self::acquire(data_dir).map_err(|e| match e {
+            LockError::Busy => AppError::conflict("another backup is running"),
+            LockError::Failed(msg) => {
+                tracing::error!(error = %msg, "backup lock");
+                AppError::internal()
+            }
+        })
     }
 }
 
@@ -144,7 +158,21 @@ pub async fn run_once(
 ) -> Result<SelfBackupRecord, AppError> {
     // Before the load: a busy lock changes nothing (no attempt is
     // recorded), the caller retries on its next tick.
-    let _lock = BackupLock::try_acquire(data_dir)?;
+    let lock = match BackupLock::acquire(data_dir) {
+        Ok(lock) => lock,
+        Err(LockError::Busy) => return Err(AppError::conflict("another backup is running")),
+        Err(LockError::Failed(msg)) => {
+            // A failed attempt: it shows in `last_error` and backs off for
+            // an hour like any other failure.
+            tracing::error!(error = %msg, "control-plane self-backup failed");
+            let mut rec = load(db).await?;
+            rec.last_attempt_at = Some(now);
+            rec.last_error = Some(msg);
+            store(db, &rec).await?;
+            return Ok(rec);
+        }
+    };
+    let _lock = lock;
     let mut rec = load(db).await?;
     rec.last_attempt_at = Some(now);
     let dir = backup_dir(data_dir);
@@ -286,7 +314,7 @@ impl Outage {
     }
 
     /// Ticks to skip after this many failures: 0, 1, 3, 7, capped at 9
-    /// (about ten minutes at the scheduler's tick), so a dead database
+    /// (about ten minutes at the scheduler's default 60 s tick), so a dead database
     /// is not asked every minute.
     fn skip(&self) -> u32 {
         match self.failures {
@@ -334,7 +362,7 @@ pub fn spawn(
             };
             if let Some(note) = outage.recover(now) {
                 tracing::warn!("self-backup: {note}");
-                rec.last_error = Some(note);
+                rec.last_outage = Some(note);
                 if let Err(e) = store(&db, &rec).await {
                     tracing::error!(error = %e, "self-backup outage note not stored");
                 }

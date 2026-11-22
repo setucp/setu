@@ -242,18 +242,34 @@ pub fn pg_dump_invocation(database_url: &str, out: &Path) -> Result<Invocation, 
 
 /// `setu backup --out <file>`. Holds the self-backup lock (a scheduled
 /// dump in flight makes this fail with "another backup is running", not
-/// a 0-byte file) and removes a partial output when the dump fails (#15).
+/// a 0-byte file) and writes to `<out>.partial`, renamed on success, so a
+/// failed run never removes a file it did not write (#15).
 pub fn backup(
     runner: &dyn Runner,
     database_url: &str,
     out: &Path,
     data_dir: &Path,
 ) -> Result<(), String> {
-    let inv = pg_dump_invocation(database_url, out)?;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut partial_name = out.as_os_str().to_owned();
+    partial_name.push(".partial");
+    let partial = std::path::PathBuf::from(partial_name);
+    let inv = pg_dump_invocation(database_url, &partial)?;
     let _lock = crate::self_backup::BackupLock::try_acquire(data_dir).map_err(|e| e.message)?;
-    let result = runner.run(&inv);
+    // Written beside `out` and renamed on success, so a failed run leaves
+    // an existing `out` alone, and created 0600 like the nightly dump.
+    let _ = std::fs::remove_file(&partial);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&partial)
+        .map_err(|e| format!("cannot create {}: {e}", partial.display()))?;
+    let result = runner.run(&inv).and_then(|()| {
+        std::fs::rename(&partial, out).map_err(|e| format!("cannot move the dump into place: {e}"))
+    });
     if result.is_err() {
-        let _ = std::fs::remove_file(out);
+        let _ = std::fs::remove_file(&partial);
     }
     result
 }
@@ -287,7 +303,7 @@ mod tests {
         let calls = rec.0.lock().unwrap();
         let inv = &calls[0];
         assert_eq!(inv.program, "pg_dump");
-        assert_eq!(inv.args, ["-Fc", "-w", "-f", "/tmp/setu.dump"]);
+        assert_eq!(inv.args, ["-Fc", "-w", "-f", "/tmp/setu.dump.partial"]);
         assert!(
             inv.args
                 .iter()
@@ -327,6 +343,24 @@ mod tests {
         let err = backup(&Failing, "postgres://u:p@h/db", &out, dir.path()).unwrap_err();
         assert!(err.contains("boom"), "{err}");
         assert!(!out.exists());
+    }
+
+    struct Silent;
+
+    impl Runner for Silent {
+        fn run(&self, _inv: &Invocation) -> Result<(), String> {
+            Err("cannot run pg_dump".into())
+        }
+    }
+
+    #[test]
+    fn a_failed_backup_keeps_an_existing_output_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("x.dump");
+        std::fs::write(&out, b"yesterday").unwrap();
+        backup(&Silent, "postgres://u:p@h/db", &out, dir.path()).unwrap_err();
+        assert_eq!(std::fs::read(&out).unwrap(), b"yesterday");
+        assert!(!dir.path().join("x.dump.partial").exists());
     }
 
     #[test]

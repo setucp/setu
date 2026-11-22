@@ -183,7 +183,8 @@ pub async fn healthz() -> impl IntoResponse {
 pub struct ReadyOut {
     pub status: String,
     pub database: String,
-    /// Why the database is `down`.
+    /// Why the database is `down`: `timeout`, `connection refused`,
+    /// `authentication` or `other` (the detail is in the server log).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
 }
@@ -212,10 +213,26 @@ pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
                 Json(ReadyOut {
                     status: "unavailable".to_string(),
                     database: "down".to_string(),
-                    last_error: Some(e),
+                    last_error: Some(coarse_cause(&e).to_string()),
                 }),
             )
         }
+    }
+}
+
+/// What an anonymous caller of `/readyz` may learn about a database
+/// failure: a category, never the user, database, host or socket the raw
+/// error names (the full text stays in the log).
+fn coarse_cause(error: &str) -> &'static str {
+    let e = error.to_ascii_lowercase();
+    if e.contains("no answer within") || e.contains("timed out") || e.contains("timeout") {
+        "timeout"
+    } else if e.contains("authentication") || e.contains("password") {
+        "authentication"
+    } else if e.contains("refused") || e.contains("no such file") || e.contains("connect") {
+        "connection refused"
+    } else {
+        "other"
     }
 }
 
@@ -289,6 +306,22 @@ pub(crate) mod sse {
 
     #[cfg(test)]
     mod tests {
+        #[test]
+        fn readyz_names_a_category_never_the_raw_error() {
+            use super::super::coarse_cause;
+            let raw =
+                "error returned from database: password authentication failed for user \"setu\"";
+            assert_eq!(coarse_cause(raw), "authentication");
+            assert_eq!(coarse_cause("no answer within 5 s"), "timeout");
+            assert_eq!(
+                coarse_cause(
+                    "error communicating with database: Connection refused (os error 111)"
+                ),
+                "connection refused"
+            );
+            assert_eq!(coarse_cause("database \"setu\" does not exist"), "other");
+        }
+
         #[test]
         fn data_escapes_cr_and_lf() {
             assert_eq!(super::data("a\rb\nc"), "data: a\\rb\\nc\n\n");

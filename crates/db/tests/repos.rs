@@ -1394,3 +1394,20 @@ async fn the_watchdog_returns_when_the_pool_is_dead_but_postgres_answers() {
     .expect("wedged pool detected");
     assert!(broken.health().consecutive_failures >= 3);
 }
+#[tokio::test]
+async fn readiness_probes_do_not_count_towards_the_watchdog() {
+    let test_db = TestDb::new().await;
+    let broken = Db::new(test_db.pool.clone());
+    broken.pool().close().await;
+    for _ in 0..10 {
+        assert!(broken.probe().await.is_err());
+    }
+    // Ten failures are on record, but the watchdog has seen none: with a
+    // limit of 3 and a 200 ms period it cannot return inside 450 ms.
+    let early = tokio::time::timeout(
+        Duration::from_millis(450),
+        broken.watch(&test_db.url, Duration::from_millis(200), 3),
+    )
+    .await;
+    assert!(early.is_err(), "the watchdog used the shared counter");
+}

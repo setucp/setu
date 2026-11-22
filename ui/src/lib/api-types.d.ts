@@ -1595,6 +1595,8 @@ export interface components {
             last_attempt_at?: string | null;
             /** @description One line, no secrets (`pg_dump failed: exit status: 1`). */
             last_error?: string | null;
+            /** @description A database outage that cost a backup; a later successful dump keeps it. */
+            last_outage?: string | null;
             /** Format: date-time */
             last_success_at?: string | null;
             /** Format: int64 */

@@ -117,19 +117,24 @@ impl Db {
     /// the caller can restart the process, which is the only repair the
     /// 0.1.1 test bed ever got (#16). While Postgres itself is down it
     /// keeps probing, so the pool recovers by itself when it comes back.
+    ///
+    /// The count is the watchdog's own: `/readyz` probes too, and its calls
+    /// must not shorten the time before a restart. A probe is
+    /// [`PROBE_TIMEOUT`] (shorter than [`ACQUIRE_TIMEOUT`]), so a pool that
+    /// stays saturated for `limit` probes while Postgres answers is
+    /// restarted as well; that is intended, a leaked pool is repaired the
+    /// same way.
     pub async fn watch(&self, url: &str, every: Duration, limit: u32) {
+        let mut failures = 0u32;
         loop {
             tokio::time::sleep(every).await;
-            if self.probe().await.is_ok() {
+            let Err(error) = self.probe().await else {
+                failures = 0;
                 continue;
-            }
-            let h = self.health();
-            tracing::error!(
-                failures = h.consecutive_failures,
-                error = h.last_error.as_deref().unwrap_or(""),
-                "control-plane database unreachable"
-            );
-            if h.consecutive_failures >= limit && fresh_connection_works(url).await {
+            };
+            failures = failures.saturating_add(1);
+            tracing::error!(failures, error = %error, "control-plane database unreachable");
+            if failures >= limit && fresh_connection_works(url).await {
                 tracing::error!(
                     "postgres answers on a new connection but the pool does not: the pool is wedged"
                 );

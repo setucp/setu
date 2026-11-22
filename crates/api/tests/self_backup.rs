@@ -42,7 +42,6 @@ fn dumps(dir: &Path) -> Vec<String> {
     let mut v: Vec<String> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|n| n != ".lock")
         .collect();
     v.sort();
     v
@@ -254,4 +253,38 @@ async fn partial_files_are_pruned() {
     let left = dumps(&dir);
     assert!(!left.contains(&"setu-20261009T030000Z.dump.partial".to_string()));
     assert!(left.contains(&"setu-20261010T025900Z.dump.partial".to_string()));
+}
+
+#[tokio::test]
+async fn the_lock_leaves_no_file_and_a_later_dump_keeps_the_outage_note() {
+    let tdb = TestDb::new().await;
+    let db = setu_db::Db::new(tdb.pool.clone());
+    let data = tempfile::tempdir().unwrap();
+    let note = "the database was unreadable (no backup ran)";
+    let stored = SelfBackupRecord {
+        last_outage: Some(note.into()),
+        ..SelfBackupRecord::default()
+    };
+    db.settings()
+        .set(
+            setu_db::SELF_BACKUP,
+            &serde_json::to_value(&stored).unwrap(),
+        )
+        .await
+        .unwrap();
+    let runner = Arc::new(FakeDump {
+        fail: false,
+        seen: Mutex::new(vec![]),
+    });
+    let now = Utc.with_ymd_and_hms(2026, 10, 10, 3, 1, 0).unwrap();
+    let rec = self_backup::run_once(&db, runner, DB_URL, data.path(), now)
+        .await
+        .unwrap();
+    assert_eq!(rec.last_error, None);
+    assert_eq!(rec.last_outage.as_deref(), Some(note));
+    assert_eq!(
+        dumps(&self_backup::backup_dir(data.path())),
+        ["setu-20261010T030100Z.dump"],
+        "the lock is on the directory: no .lock file"
+    );
 }
