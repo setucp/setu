@@ -2455,3 +2455,59 @@ async fn the_www_redirect_is_off_for_old_sites_on_for_new_and_switchable() {
     let routes = srv.agent.commands_of("set_route");
     assert_eq!(routes.last().expect("set_route")["www_redirect"], true);
 }
+
+#[tokio::test]
+async fn aliases_put_get_validate_and_conflict() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_id, _) = running_site(&srv, &owner, "alias").await;
+    let url = srv.url(&format!("/api/v1/sites/{site_id}/aliases"));
+
+    let empty: Value = owner.get(&url).send().await.unwrap().json().await.unwrap();
+    assert_eq!(empty["aliases"], json!([]));
+
+    let host = format!("{}.example.org", unique("old"));
+    let resp = owner
+        .put(&url)
+        .json(&json!({"aliases": [{"host": host, "mode": "redirect"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::ACCEPTED);
+    let body: Value = resp.json().await.unwrap();
+    let job_id = body["job"]["id"].as_str().expect("job id").to_owned();
+    let done = poll_job(&srv, &owner, &job_id).await.expect("route job");
+    assert_eq!(done["status"], json!("done"), "route_update: {done}");
+
+    let got: Value = owner.get(&url).send().await.unwrap().json().await.unwrap();
+    assert_eq!(got["aliases"][0]["host"], json!(host));
+    assert_eq!(got["aliases"][0]["mode"], json!("redirect"));
+
+    // bad mode and bad host: 400
+    for bad in [
+        json!({"aliases": [{"host": "a.example.org", "mode": "proxy"}]}),
+        json!({"aliases": [{"host": "not a host", "mode": "serve"}]}),
+    ] {
+        let r = owner.put(&url).json(&bad).send().await.unwrap();
+        assert_eq!(r.status(), reqwest::StatusCode::BAD_REQUEST, "{bad}");
+    }
+
+    // another site's domain: 409, nothing stored
+    let (other_id, _) = running_site(&srv, &owner, "alias-b").await;
+    let other: Value = get_site(&srv, &owner, &other_id).await;
+    let other_domain = other["domain"].as_str().expect("domain").to_owned();
+    let r = owner
+        .put(&url)
+        .json(&json!({"aliases": [{"host": other_domain, "mode": "serve"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::CONFLICT);
+    let got: Value = owner.get(&url).send().await.unwrap().json().await.unwrap();
+    assert_eq!(
+        got["aliases"][0]["host"],
+        json!(host),
+        "unchanged after 409"
+    );
+}
