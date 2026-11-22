@@ -26,6 +26,14 @@ impl<'a> Settings<'a> {
         Self { pool }
     }
 
+    /// [`get`](Self::get) with the database error itself, for callers that
+    /// must name the cause (the self-backup loop).
+    pub async fn try_get(&self, key: &str) -> Result<Option<Value>, sqlx::Error> {
+        sqlx::query_scalar!("SELECT value FROM settings WHERE key = $1", key)
+            .fetch_optional(self.pool)
+            .await
+    }
+
     pub async fn get(&self, key: &str) -> Result<Option<Value>, AppError> {
         sqlx::query_scalar!("SELECT value FROM settings WHERE key = $1", key)
             .fetch_optional(self.pool)

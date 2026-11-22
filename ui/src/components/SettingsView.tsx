@@ -207,6 +207,7 @@ function SelfBackupStatus() {
         <p className="text-muted-foreground">No backup yet. One runs nightly at 03:00.</p>
       )}
       {failedLast ? <Alert variant="warning">The last attempt failed: {b.last_error}</Alert> : null}
+      {b.last_outage ? <Alert variant="warning">{b.last_outage}</Alert> : null}
       <p className="text-xs text-muted-foreground">
         Seven are kept in <code>{b.dir}</code>. Copy them, and <code>setu.toml</code>, off this
         box.

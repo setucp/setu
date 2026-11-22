@@ -1528,6 +1528,8 @@ export interface components {
         };
         ReadyOut: {
             database: string;
+            /** @description Why the database is `down`. */
+            last_error?: string | null;
             status: string;
         };
         /** @description `GET /sites/{id}/reset`: the schedule, or `null`. */
@@ -1593,6 +1595,8 @@ export interface components {
             last_attempt_at?: string | null;
             /** @description One line, no secrets (`pg_dump failed: exit status: 1`). */
             last_error?: string | null;
+            /** @description A database outage that cost a backup; a later successful dump keeps it. */
+            last_outage?: string | null;
             /** Format: date-time */
             last_success_at?: string | null;
             /** Format: int64 */
@@ -4600,6 +4604,14 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadyOut"];
+                };
+            };
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
