@@ -169,6 +169,7 @@ async fn machine(ctx: &JobCtx, site: &Site, steps: &Steps) -> Result<(), (&'stat
                     domain: site.domain.clone(),
                     port: prep.spec.port,
                     basic_auth,
+                    www_redirect: site.www_redirect,
                 },
             )
             .await

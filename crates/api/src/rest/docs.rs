@@ -35,6 +35,7 @@ use super::sites::{
     JobResponse, RevealOut, RevealRequest, SiteDetailOut, SiteJobResponse, SiteListItemOut,
     SiteListOut, SiteMetricOut, SiteOut, UpdateSiteRequest,
 };
+use super::www_redirect::{WwwRedirectRequest, WwwRedirectResponse};
 use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
 
 #[derive(OpenApi)]
@@ -94,6 +95,7 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::basic_auth::get,
         super::basic_auth::put,
         super::basic_auth::delete,
+        super::www_redirect::set,
         super::backups::reset_get,
         super::backups::reset_put,
         super::backups::reset_delete,
@@ -168,6 +170,8 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         BackupOut,
         BasicAuthGetOut,
         BasicAuthJobResponse,
+        WwwRedirectRequest,
+        WwwRedirectResponse,
         BasicAuthOut,
         BasicAuthRoute,
         RouteStatus,

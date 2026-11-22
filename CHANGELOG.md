@@ -27,6 +27,18 @@ matching the tag.
   the same rules as the API: user name of letters, digits and `._-`,
   password of 8 to 72 bytes without control characters). Viewers see the
   state only.
+- **`www.` redirect for apex domains.** A site on `example.com` also serves
+  `www.example.com`: Caddy fetches its certificate and answers `301` to
+  `https://example.com{uri}`. It is a per-site setting: on for sites
+  created from 0.1.7, off for existing sites (nothing changes on upgrade);
+  `PUT /api/v1/sites/{id}/www-redirect` with `{"enabled": bool}` turns it on
+  or off through a `route_update` job (API only for now; the panel has no
+  switch yet), and `SiteOut` shows `www_redirect`. The agent treats a site
+  without the setting as off, so upgrading changes no existing site.
+  A subdomain or a `www.` name gets no redirect (the apex check is a
+  two-label rule plus `co.uk`-style second levels, not the public suffix
+  list), and neither does an apex whose `www.` name is itself a site on the
+  same server.
 
 ### Fixed
 

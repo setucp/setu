@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE sites SET status = $2, failed_step = $3, updated_at = now()\n             WHERE id = $1 RETURNING id, short_id, name, app_id, app_version, server_id, plan_id, domain, status,\n                       failed_step, port, db_name, db_role, env, owner_email, created_at, updated_at",
+  "query": "UPDATE sites SET env = $2, updated_at = now()\n             WHERE id = $1 RETURNING id, short_id, name, app_id, app_version, server_id, plan_id, domain, status,\n                       failed_step, port, db_name, db_role, env, owner_email, www_redirect, created_at, updated_at",
   "describe": {
     "columns": [
       {
@@ -170,6 +170,17 @@
       },
       {
         "ordinal": 15,
+        "name": "www_redirect",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "www_redirect"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -180,7 +191,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -194,8 +205,7 @@
     "parameters": {
       "Left": [
         "Text",
-        "Text",
-        "Text"
+        "Jsonb"
       ]
     },
     "nullable": [
@@ -215,8 +225,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "803044563a6f563a344b74adbf828e18b66336fed54f940e1ea0b099db7c29b6"
+  "hash": "8095d9ea71dc727354cd6acfdfd089ab5aa8e735a541f76f41bd53e166977fd2"
 }

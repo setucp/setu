@@ -26,6 +26,7 @@ pub async fn route_command(ctx: &JobCtx, site_id: &str) -> Result<Command, AppEr
             username: a.username,
             password_hash: a.password_hash,
         }),
+        www_redirect: site.www_redirect,
     })
 }
 

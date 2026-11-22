@@ -228,6 +228,7 @@ async fn every_command_kind_is_handled() {
             domain: "example.com".to_string(),
             port: servers.health_port,
             basic_auth: None,
+            www_redirect: true,
         },
         Command::Backup {
             site: s(),
@@ -343,7 +344,14 @@ async fn every_command_kind_is_handled() {
                 let inv: InventoryReport =
                     serde_json::from_value(result.output.clone()).expect("inventory");
                 assert_eq!(inv.sites_on_disk, [short]);
-                assert_eq!(inv.routes, [format!("setu-site-{short}")]);
+                // example.com is an apex: its www redirect route is listed too.
+                assert_eq!(
+                    inv.routes,
+                    [
+                        format!("setu-site-{short}"),
+                        format!("setu-site-{short}-www")
+                    ]
+                );
                 assert_eq!(inv.databases, ["site_00000001"]);
                 assert_eq!(inv.units.len(), 1);
                 assert_eq!(inv.units[0].short_id, short);
@@ -488,6 +496,7 @@ async fn route_commands_key_off_the_site_short_id() {
         domain: "a.example.test".to_string(),
         port: 20001,
         basic_auth: None,
+        www_redirect: true,
     };
     let r = setu_agent::execute("c1", &set, &rt).await;
     assert!(r.ok, "{:?}", r.error);
@@ -509,6 +518,7 @@ async fn route_commands_key_off_the_site_short_id() {
         domain: "b.example.test".to_string(),
         port: 20002,
         basic_auth: None,
+        www_redirect: true,
     };
     assert!(!setu_agent::execute("c2", &empty_short, &rt).await.ok);
 
@@ -1061,4 +1071,44 @@ async fn heartbeat_measures_data_bytes_once_per_window() {
     .await;
     assert_eq!(measured(), 2, "measured again after the window");
     assert_eq!(third.metrics[0].disk_bytes, 8192);
+}
+
+/// A site claiming `www.<apex>` removes the apex site's redirect, and
+/// removing it brings the redirect back.
+#[tokio::test]
+async fn a_site_on_the_www_name_displaces_and_restores_the_apex_redirect() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (rt, _units) = test_runtime(dir.path());
+    let set = |short: &str, domain: &str, port: u16| Command::SetRoute {
+        site_short_id: short.to_string(),
+        domain: domain.to_string(),
+        port,
+        basic_auth: None,
+        www_redirect: true,
+    };
+    let has_www = || {
+        rt.caddy()
+            .admin()
+            .routes()
+            .iter()
+            .any(|r| r["@id"] == "setu-site-aaaaaaaa-www")
+    };
+    assert!(
+        setu_agent::execute("c1", &set("aaaaaaaa", "example.test", 20001), &rt)
+            .await
+            .ok
+    );
+    assert!(has_www(), "apex site gets its redirect");
+    assert!(
+        setu_agent::execute("c2", &set("bbbbbbbb", "www.example.test", 20002), &rt)
+            .await
+            .ok
+    );
+    assert!(!has_www(), "the www site is not shadowed");
+    let remove = Command::RemoveRoute {
+        site_short_id: "bbbbbbbb".to_string(),
+        domain: "www.example.test".to_string(),
+    };
+    assert!(setu_agent::execute("c3", &remove, &rt).await.ok);
+    assert!(has_www(), "the name is free again");
 }

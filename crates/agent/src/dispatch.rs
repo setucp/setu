@@ -13,6 +13,31 @@ use crate::helper_client::Helper;
 use crate::postgres::PostgresAdmin;
 use crate::runtime::{NativeRuntime, RuntimeStatus};
 
+/// Make `short`'s `www.` redirect route match the state: present when
+/// [`crate::state::State::www_host`] names one, removed otherwise. Returns
+/// the www name served, if any. Callers hold the route lock.
+async fn apply_www<H, P, C>(
+    rt: &NativeRuntime<H, P, C>,
+    short: &str,
+) -> anyhow::Result<Option<String>>
+where
+    H: Helper,
+    C: CaddyAdmin,
+{
+    let www_id = crate::caddy::site_www_route_id(short)?;
+    let (www, domain) = rt.state().read(|st| {
+        (
+            st.www_host(short),
+            st.sites.get(short).and_then(|r| r.domain.clone()),
+        )
+    });
+    match (&www, &domain) {
+        (Some(_), Some(domain)) => rt.caddy().upsert_www_route(&www_id, domain).await?,
+        _ => rt.caddy().remove_route(&www_id).await?,
+    }
+    Ok(www)
+}
+
 fn ok(id: &str, output: serde_json::Value, log: &str) -> CommandResult {
     CommandResult {
         id: id.to_string(),
@@ -139,6 +164,7 @@ where
             domain,
             port,
             basic_auth,
+            www_redirect,
         } => {
             let id = match crate::caddy::site_route_id(site_short_id) {
                 Ok(id) => id,
@@ -153,10 +179,11 @@ where
                 r.basic_auth = basic_auth
                     .as_ref()
                     .map(|a| (a.username.clone(), a.password_hash.clone()));
+                r.www_redirect = *www_redirect;
             }) {
                 return err(cmd_id, "set_route failed", e);
             }
-            match rt
+            if let Err(e) = rt
                 .caddy()
                 .upsert_route_auth(
                     &id,
@@ -168,13 +195,29 @@ where
                 )
                 .await
             {
-                Ok(()) => ok(
-                    cmd_id,
-                    serde_json::json!({"domain": domain, "route_id": id}),
-                    "set_route ok",
-                ),
-                Err(e) => err(cmd_id, "set_route failed", e),
+                return err(cmd_id, "set_route failed", e);
             }
+            // The `www.` name of an apex domain redirects to it; opting out,
+            // a domain that has none, or another site serving that name
+            // removes a redirect left from before.
+            let mut touched = vec![site_short_id.clone()];
+            touched.extend(
+                rt.state()
+                    .read(|st| st.www_neighbours(site_short_id, domain)),
+            );
+            let mut www = None;
+            for short in &touched {
+                match apply_www(rt, short).await {
+                    Ok(w) if short == site_short_id => www = w,
+                    Ok(_) => {}
+                    Err(e) => return err(cmd_id, "set_route failed", e),
+                }
+            }
+            ok(
+                cmd_id,
+                serde_json::json!({"domain": domain, "route_id": id, "www": www}),
+                "set_route ok",
+            )
         }
         Command::RemoveRoute {
             site_short_id,
@@ -191,7 +234,33 @@ where
                     return err(cmd_id, "remove_route failed", e);
                 }
             }
-            match rt.caddy().remove_route(&id).await {
+            // The name this site served is free again: a neighbour's
+            // `www.` redirect may take it.
+            let neighbours = rt
+                .state()
+                .read(|st| st.www_neighbours(site_short_id, domain));
+            let removed = match crate::caddy::site_www_route_id(site_short_id) {
+                Ok(www_id) => rt.caddy().remove_route(&www_id).await,
+                Err(e) => Err(e),
+            };
+            let removed = match removed {
+                Ok(()) => rt.caddy().remove_route(&id).await,
+                Err(e) => Err(e),
+            };
+            let removed = match removed {
+                Ok(()) => {
+                    let mut res = Ok(());
+                    for short in &neighbours {
+                        if let Err(e) = apply_www(rt, short).await {
+                            res = Err(e);
+                            break;
+                        }
+                    }
+                    res
+                }
+                Err(e) => Err(e),
+            };
+            match removed {
                 Ok(()) => ok(
                     cmd_id,
                     serde_json::json!({"domain": domain, "route_id": id}),

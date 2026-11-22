@@ -13,6 +13,7 @@ fn record(domain: Option<&str>, port: u16) -> SiteRecord {
         version: "1.0.0".into(),
         basic_auth: None,
         db: None,
+        www_redirect: true,
     }
 }
 
@@ -188,6 +189,55 @@ async fn reconcile_keeps_panel_route_first() {
     );
 }
 
+/// An apex domain gets its `www.` redirect rebuilt, an opted-out site and a
+/// subdomain get none, and the redirect of a vanished site is removed.
+#[tokio::test]
+async fn reconcile_serves_the_www_redirect_of_apex_domains_only() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = Paths::new(Some(dir.path().to_path_buf()));
+    let config = AgentConfig {
+        sites_root: p.sites(),
+        state_path: p.state(),
+        ..AgentConfig::default()
+    };
+    let mut state = State::default();
+    state
+        .sites
+        .insert("aaaaaaaa".into(), record(Some("example.test"), 20001));
+    let mut off = record(Some("other.test"), 20002);
+    off.www_redirect = false;
+    state.sites.insert("bbbbbbbb".into(), off);
+    state
+        .sites
+        .insert("cccccccc".into(), record(Some("blog.example.test"), 20003));
+    let caddy = FakeCaddy::new();
+    // A redirect left by a site the state no longer has.
+    caddy
+        .upsert_www_route("setu-site-zzzzzzzz-www", "gone.test")
+        .await
+        .expect("seed");
+    let (postgres, helper) = (FakePostgres::new(), FakeHelper::new());
+    for _ in 0..2 {
+        setu_agent::reconcile::run(&state, &config, &helper, &caddy, &postgres)
+            .await
+            .expect("reconcile");
+        let routes = caddy.admin().routes();
+        let www = route(&routes, "setu-site-aaaaaaaa-www").expect("www route");
+        assert_eq!(www["match"][0]["host"][0], "www.example.test");
+        assert_eq!(www["handle"][0]["status_code"], 301);
+        assert!(
+            route(&routes, "setu-site-bbbbbbbb-www").is_none(),
+            "opted out"
+        );
+        assert!(
+            route(&routes, "setu-site-cccccccc-www").is_none(),
+            "subdomain"
+        );
+        assert!(route(&routes, "setu-site-zzzzzzzz-www").is_none(), "stale");
+        assert_eq!(routes.len(), 4, "3 sites + 1 www: {routes:?}");
+    }
+}
+
 #[tokio::test]
 async fn reconcile_restores_basic_auth_and_drops_it_when_cleared() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -221,4 +271,66 @@ async fn reconcile_restores_basic_auth_and_drops_it_when_cleared() {
     let r = route(&routes, "setu-site-aaaaaaaa").expect("a");
     assert_eq!(r["handle"].as_array().unwrap().len(), 1);
     assert_eq!(r["handle"][0]["handler"], "reverse_proxy");
+}
+
+/// A site that serves `www.<apex>` itself keeps that host: the apex site's
+/// redirect is not built over it (Caddy routes are first-match).
+#[tokio::test]
+async fn reconcile_never_shadows_a_site_that_serves_the_www_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = Paths::new(Some(dir.path().to_path_buf()));
+    let config = AgentConfig {
+        sites_root: p.sites(),
+        state_path: p.state(),
+        ..AgentConfig::default()
+    };
+    let mut state = State::default();
+    state
+        .sites
+        .insert("aaaaaaaa".into(), record(Some("example.test"), 20001));
+    state
+        .sites
+        .insert("bbbbbbbb".into(), record(Some("www.example.test"), 20002));
+    let caddy = FakeCaddy::new();
+    // A redirect built before the second site existed.
+    caddy
+        .upsert_www_route("setu-site-aaaaaaaa-www", "example.test")
+        .await
+        .expect("seed");
+    let (postgres, helper) = (FakePostgres::new(), FakeHelper::new());
+    setu_agent::reconcile::run(&state, &config, &helper, &caddy, &postgres)
+        .await
+        .expect("reconcile");
+    let routes = caddy.admin().routes();
+    assert!(
+        route(&routes, "setu-site-aaaaaaaa-www").is_none(),
+        "{routes:?}"
+    );
+    assert_eq!(routes.len(), 2, "the two site routes only: {routes:?}");
+}
+
+/// An upgraded agent with a pre-0.1.7 state record builds no `www.` route.
+#[tokio::test]
+async fn reconcile_builds_no_www_route_for_a_record_without_the_setting() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = Paths::new(Some(dir.path().to_path_buf()));
+    let config = AgentConfig {
+        sites_root: p.sites(),
+        state_path: p.state(),
+        ..AgentConfig::default()
+    };
+    let state: State = serde_json::from_str(
+        r#"{"sites":{"aaaaaaaa":{"domain":"example.test","port":20001,"version":"1"}}}"#,
+    )
+    .expect("old state");
+    let caddy = FakeCaddy::new();
+    let (postgres, helper) = (FakePostgres::new(), FakeHelper::new());
+    setu_agent::reconcile::run(&state, &config, &helper, &caddy, &postgres)
+        .await
+        .expect("reconcile");
+    let routes = caddy.admin().routes();
+    assert!(
+        route(&routes, "setu-site-aaaaaaaa-www").is_none(),
+        "{routes:?}"
+    );
 }

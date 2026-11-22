@@ -17,13 +17,48 @@ use std::collections::BTreeSet;
 
 use setu_proto::{InventoryReport, UnitState};
 
-use crate::caddy::{site_route_id, site_upstream, CaddyAdmin, PANEL_ROUTE_ID};
+use crate::caddy::{site_route_id, site_upstream, site_www_route_id, CaddyAdmin, PANEL_ROUTE_ID};
 use crate::config::AgentConfig;
 use crate::helper::Verb;
 use crate::helper_client::Helper;
 use crate::postgres::PostgresAdmin;
 use crate::runtime::{NativeRuntime, RuntimeStatus};
 use crate::state::State;
+
+/// Upsert every site route (and `www.` redirect) the state wants; the ids
+/// of those routes, so the caller can remove the rest.
+async fn sync_site_routes<C: CaddyAdmin + ?Sized>(state: &State, caddy: &C) -> BTreeSet<String> {
+    let mut wanted = BTreeSet::new();
+    for (short, site) in &state.sites {
+        let (Some(domain), Ok(id)) = (&site.domain, site_route_id(short)) else {
+            continue;
+        };
+        if site.port == 0 {
+            continue;
+        }
+        wanted.insert(id.clone());
+        if let Err(e) = caddy
+            .upsert_route_auth(
+                &id,
+                domain,
+                &site_upstream(site.port),
+                site.basic_auth
+                    .as_ref()
+                    .map(|(u, h)| (u.as_str(), h.as_str())),
+            )
+            .await
+        {
+            tracing::warn!(route = %id, error = %e, "reconcile: cannot upsert route");
+        }
+        if let (Some(_), Ok(www_id)) = (state.www_host(short), site_www_route_id(short)) {
+            wanted.insert(www_id.clone());
+            if let Err(e) = caddy.upsert_www_route(&www_id, domain).await {
+                tracing::warn!(route = %www_id, error = %e, "reconcile: cannot upsert www route");
+            }
+        }
+    }
+    wanted
+}
 
 /// One pass over `state`. Route failures are logged per route and do
 /// not stop the pass; listing routes failing is an error (nothing can be
@@ -50,29 +85,7 @@ where
             tracing::warn!(error = %e, "reconcile: cannot upsert the panel route");
         }
     }
-    let mut wanted = BTreeSet::new();
-    for (short, site) in &state.sites {
-        let (Some(domain), Ok(id)) = (&site.domain, site_route_id(short)) else {
-            continue;
-        };
-        if site.port == 0 {
-            continue;
-        }
-        wanted.insert(id.clone());
-        if let Err(e) = caddy
-            .upsert_route_auth(
-                &id,
-                domain,
-                &site_upstream(site.port),
-                site.basic_auth
-                    .as_ref()
-                    .map(|(u, h)| (u.as_str(), h.as_str())),
-            )
-            .await
-        {
-            tracing::warn!(route = %id, error = %e, "reconcile: cannot upsert route");
-        }
-    }
+    let wanted = sync_site_routes(state, caddy).await;
     if let Err(e) = caddy.move_route_first(PANEL_ROUTE_ID).await {
         tracing::warn!(error = %e, "reconcile: cannot move the panel route first");
     }

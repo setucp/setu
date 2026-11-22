@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, short_id, name, app_id, app_version, server_id, plan_id, domain, status,\n                       failed_step, port, db_name, db_role, env, owner_email, created_at, updated_at FROM sites WHERE id = $1",
+  "query": "SELECT id, short_id, name, app_id, app_version, server_id, plan_id, domain, status,\n                       failed_step, port, db_name, db_role, env, owner_email, www_redirect, created_at, updated_at FROM sites WHERE server_id = $1 ORDER BY created_at, id",
   "describe": {
     "columns": [
       {
@@ -170,6 +170,17 @@
       },
       {
         "ordinal": 15,
+        "name": "www_redirect",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "sites",
+            "name": "www_redirect"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -180,7 +191,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -213,8 +224,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "ed769da50e1dfcec84999a687019084b081668af2215f4848b86ee5e317b343c"
+  "hash": "73aefba2773b4720dd36a7d30df35dcc200c92c40569f6ae244724d4f209a410"
 }

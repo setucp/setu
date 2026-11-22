@@ -5,6 +5,8 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 
+use super::basic_auth::ROUTE_JOB;
+use super::jobs::Job;
 use crate::{map_db_error, AppError};
 
 /// Lifecycle states; anything else is rejected with `validation`.
@@ -44,6 +46,8 @@ pub struct Site {
     pub db_role: String,
     pub env: Value,
     pub owner_email: String,
+    /// Serve `www.<domain>` with a 301 to the apex (apex domains only).
+    pub www_redirect: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -325,7 +329,7 @@ impl<'a> Sites<'a> {
                   status, port, db_name, db_role, env, owner_email)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'provisioning', $9, $10, $10, $11, $12)
              RETURNING id, short_id, name, app_id, app_version, server_id, plan_id, domain, status,
-                       failed_step, port, db_name, db_role, env, owner_email, created_at, updated_at",
+                       failed_step, port, db_name, db_role, env, owner_email, www_redirect, created_at, updated_at",
             setu_common::new_id(),
             short_id,
             new.name,
@@ -353,7 +357,7 @@ impl<'a> Sites<'a> {
 
     pub async fn get(&self, id: &str) -> Result<Site, AppError> {
         sqlx::query_as!(Site, "SELECT id, short_id, name, app_id, app_version, server_id, plan_id, domain, status,
-                       failed_step, port, db_name, db_role, env, owner_email, created_at, updated_at FROM sites WHERE id = $1", id)
+                       failed_step, port, db_name, db_role, env, owner_email, www_redirect, created_at, updated_at FROM sites WHERE id = $1", id)
             .fetch_optional(self.pool)
             .await
             .map_err(map_db_error)?
@@ -364,7 +368,7 @@ impl<'a> Sites<'a> {
         sqlx::query_as!(
             Site,
             "SELECT id, short_id, name, app_id, app_version, server_id, plan_id, domain, status,
-                       failed_step, port, db_name, db_role, env, owner_email, created_at, updated_at FROM sites ORDER BY created_at DESC, id DESC"
+                       failed_step, port, db_name, db_role, env, owner_email, www_redirect, created_at, updated_at FROM sites ORDER BY created_at DESC, id DESC"
         )
         .fetch_all(self.pool)
         .await
@@ -375,7 +379,7 @@ impl<'a> Sites<'a> {
         sqlx::query_as!(
             Site,
             "SELECT id, short_id, name, app_id, app_version, server_id, plan_id, domain, status,
-                       failed_step, port, db_name, db_role, env, owner_email, created_at, updated_at FROM sites WHERE server_id = $1 ORDER BY created_at, id",
+                       failed_step, port, db_name, db_role, env, owner_email, www_redirect, created_at, updated_at FROM sites WHERE server_id = $1 ORDER BY created_at, id",
             server_id,
         )
         .fetch_all(self.pool)
@@ -393,13 +397,36 @@ impl<'a> Sites<'a> {
         sqlx::query_as!(
             Site,
             "SELECT id, short_id, name, app_id, app_version, server_id, plan_id, domain, status,
-                       failed_step, port, db_name, db_role, env, owner_email, created_at, updated_at FROM sites WHERE domain = $1 AND id <> $2",
+                       failed_step, port, db_name, db_role, env, owner_email, www_redirect, created_at, updated_at FROM sites WHERE domain = $1 AND id <> $2",
             domain,
             site_id,
         )
         .fetch_optional(self.pool)
         .await
         .map_err(map_db_error)
+    }
+
+    /// Store the `www.` redirect setting and queue the [`ROUTE_JOB`] that
+    /// applies it, in one transaction (`conflict` when the site has an
+    /// active job: nothing changes then).
+    pub async fn set_www_redirect_with_route_job(
+        &self,
+        id: &str,
+        server_id: &str,
+        enabled: bool,
+    ) -> Result<Job, AppError> {
+        let mut tx = self.pool.begin().await.map_err(map_db_error)?;
+        sqlx::query!(
+            "UPDATE sites SET www_redirect = $2, updated_at = now() WHERE id = $1",
+            id,
+            enabled
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(map_db_error)?;
+        let job = super::jobs::insert(&mut *tx, ROUTE_JOB, Some(id), Some(server_id), None).await?;
+        tx.commit().await.map_err(map_db_error)?;
+        Ok(job)
     }
 
     pub async fn set_status(
@@ -417,7 +444,7 @@ impl<'a> Sites<'a> {
             Site,
             "UPDATE sites SET status = $2, failed_step = $3, updated_at = now()
              WHERE id = $1 RETURNING id, short_id, name, app_id, app_version, server_id, plan_id, domain, status,
-                       failed_step, port, db_name, db_role, env, owner_email, created_at, updated_at",
+                       failed_step, port, db_name, db_role, env, owner_email, www_redirect, created_at, updated_at",
             id,
             status,
             failed_step,
@@ -433,7 +460,7 @@ impl<'a> Sites<'a> {
             Site,
             "UPDATE sites SET app_version = $2, updated_at = now()
              WHERE id = $1 RETURNING id, short_id, name, app_id, app_version, server_id, plan_id, domain, status,
-                       failed_step, port, db_name, db_role, env, owner_email, created_at, updated_at",
+                       failed_step, port, db_name, db_role, env, owner_email, www_redirect, created_at, updated_at",
             id,
             version,
         )
@@ -449,7 +476,7 @@ impl<'a> Sites<'a> {
             Site,
             "UPDATE sites SET env = $2, updated_at = now()
              WHERE id = $1 RETURNING id, short_id, name, app_id, app_version, server_id, plan_id, domain, status,
-                       failed_step, port, db_name, db_role, env, owner_email, created_at, updated_at",
+                       failed_step, port, db_name, db_role, env, owner_email, www_redirect, created_at, updated_at",
             id,
             env,
         )
