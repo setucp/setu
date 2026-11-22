@@ -64,19 +64,20 @@ const LOOKUP_DEADLINE: Duration = Duration::from_secs(10);
 /// resolver is built once, on the first lookup, not on every request.
 #[derive(Debug, Default)]
 pub struct SystemResolver {
-    resolver: std::sync::OnceLock<Result<hickory_resolver::TokioResolver, String>>,
+    resolver: std::sync::OnceLock<hickory_resolver::TokioResolver>,
 }
 
 impl SystemResolver {
-    fn get(&self) -> Result<&hickory_resolver::TokioResolver, &str> {
-        self.resolver
-            .get_or_init(|| {
-                hickory_resolver::TokioResolver::builder_tokio()
-                    .map_err(|e| e.to_string())
-                    .and_then(|b| b.build().map_err(|e| e.to_string()))
-            })
-            .as_ref()
-            .map_err(String::as_str)
+    fn get(&self) -> Result<&hickory_resolver::TokioResolver, String> {
+        // Only a built resolver is kept: a failed build (an unreadable
+        // `/etc/resolv.conf`) is tried again by the next check.
+        if let Some(r) = self.resolver.get() {
+            return Ok(r);
+        }
+        let built = hickory_resolver::TokioResolver::builder_tokio()
+            .map_err(|e| e.to_string())
+            .and_then(|b| b.build().map_err(|e| e.to_string()))?;
+        Ok(self.resolver.get_or_init(|| built))
     }
 }
 
@@ -85,22 +86,31 @@ impl DomainResolver for SystemResolver {
     async fn lookup(&self, domain: &str) -> DnsAnswers {
         let resolver = match self.get() {
             Ok(r) => r,
-            Err(e) => return failed(e),
+            Err(e) => return failed(&e),
         };
         let mut out = DnsAnswers::default();
         let work = lookup_all(resolver, domain, &mut out);
         if tokio::time::timeout(LOOKUP_DEADLINE, work).await.is_err() {
-            let why = format!(
-                "the lookup took longer than {} s",
-                LOOKUP_DEADLINE.as_secs()
-            );
-            if out.addresses.is_empty() && out.error.is_none() {
-                out.error = Some(why);
-            } else if out.caa.is_empty() && out.caa_error.is_none() {
-                out.caa_error = Some(why);
-            }
+            note_deadline(&mut out);
         }
         out
+    }
+}
+
+/// The deadline fired: whatever part of the lookup had not finished is a
+/// failure, never "no record". The address lookup and the CAA climb are
+/// independent, so each is marked on its own (a deadline during the address
+/// lookup leaves both undone).
+fn note_deadline(out: &mut DnsAnswers) {
+    let why = format!(
+        "the lookup took longer than {} s",
+        LOOKUP_DEADLINE.as_secs()
+    );
+    if out.addresses.is_empty() && out.error.is_none() {
+        out.error = Some(why.clone());
+    }
+    if out.caa.is_empty() && out.caa_error.is_none() {
+        out.caa_error = Some(why);
     }
 }
 
@@ -382,6 +392,25 @@ mod tests {
 
     fn level(findings: &[Finding], id: &str) -> Option<Level> {
         findings.iter().find(|f| f.id == id).map(|f| f.level)
+    }
+
+    #[test]
+    fn a_deadline_before_the_addresses_fails_both_checks() {
+        let mut out = DnsAnswers::default();
+        note_deadline(&mut out);
+        assert!(out.error.is_some());
+        assert!(out.caa_error.is_some(), "the CAA climb never ran");
+    }
+
+    #[test]
+    fn a_deadline_during_the_climb_fails_only_the_caa_check() {
+        let mut out = DnsAnswers {
+            addresses: vec!["192.0.2.1".parse().unwrap()],
+            ..DnsAnswers::default()
+        };
+        note_deadline(&mut out);
+        assert!(out.error.is_none());
+        assert!(out.caa_error.is_some());
     }
 
     #[test]
