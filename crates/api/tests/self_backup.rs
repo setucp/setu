@@ -254,3 +254,91 @@ async fn partial_files_are_pruned() {
     assert!(!left.contains(&"setu-20261009T030000Z.dump.partial".to_string()));
     assert!(left.contains(&"setu-20261010T025900Z.dump.partial".to_string()));
 }
+
+#[tokio::test]
+async fn the_lock_leaves_no_file_and_a_later_dump_keeps_the_outage_note() {
+    let tdb = TestDb::new().await;
+    let db = setu_db::Db::new(tdb.pool.clone());
+    let data = tempfile::tempdir().unwrap();
+    let note = "the database was unreadable (no backup ran)";
+    let now = Utc.with_ymd_and_hms(2026, 10, 10, 3, 1, 0).unwrap();
+    let stored = SelfBackupRecord {
+        last_outage: Some(note.into()),
+        outage_ended_at: Some(now - chrono::Duration::minutes(1)),
+        ..SelfBackupRecord::default()
+    };
+    db.settings()
+        .set(
+            setu_db::SELF_BACKUP,
+            &serde_json::to_value(&stored).unwrap(),
+        )
+        .await
+        .unwrap();
+    let runner = Arc::new(FakeDump {
+        fail: false,
+        seen: Mutex::new(vec![]),
+    });
+    let rec = self_backup::run_once(&db, runner, DB_URL, data.path(), now)
+        .await
+        .unwrap();
+    assert_eq!(rec.last_error, None);
+    assert_eq!(rec.last_outage.as_deref(), Some(note));
+    assert_eq!(
+        dumps(&self_backup::backup_dir(data.path())),
+        ["setu-20261010T030100Z.dump"],
+        "the lock is on the directory: no .lock file"
+    );
+}
+
+/// The note has a life: a success a day or more after the outage ended drops it.
+#[tokio::test]
+async fn a_dump_a_day_after_the_outage_drops_its_note() {
+    let tdb = TestDb::new().await;
+    let db = setu_db::Db::new(tdb.pool.clone());
+    let data = tempfile::tempdir().unwrap();
+    let ended = Utc.with_ymd_and_hms(2026, 10, 10, 3, 1, 0).unwrap();
+    let stored = SelfBackupRecord {
+        last_outage: Some("the database was unreadable".into()),
+        outage_ended_at: Some(ended),
+        ..SelfBackupRecord::default()
+    };
+    db.settings()
+        .set(
+            setu_db::SELF_BACKUP,
+            &serde_json::to_value(&stored).unwrap(),
+        )
+        .await
+        .unwrap();
+    let runner = Arc::new(FakeDump {
+        fail: false,
+        seen: Mutex::new(vec![]),
+    });
+    let next_night = ended + chrono::Duration::days(1);
+    let rec = self_backup::run_once(&db, runner, DB_URL, data.path(), next_night)
+        .await
+        .unwrap();
+    assert_eq!(rec.last_error, None);
+    assert_eq!(rec.last_outage, None);
+    assert_eq!(rec.outage_ended_at, None);
+}
+
+/// A backup directory that cannot be made is a recorded failed attempt, not an error.
+#[tokio::test]
+async fn an_unusable_backup_directory_is_a_recorded_failed_attempt() {
+    let tdb = TestDb::new().await;
+    let db = setu_db::Db::new(tdb.pool.clone());
+    let data = tempfile::tempdir().unwrap();
+    let dir = self_backup::backup_dir(data.path());
+    std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+    std::fs::write(&dir, b"not a directory").unwrap();
+    let runner = Arc::new(FakeDump {
+        fail: false,
+        seen: Mutex::new(vec![]),
+    });
+    let now = Utc.with_ymd_and_hms(2026, 10, 10, 3, 1, 0).unwrap();
+    let rec = self_backup::run_once(&db, runner, DB_URL, data.path(), now)
+        .await
+        .unwrap();
+    assert_eq!(rec.last_attempt_at, Some(now));
+    assert!(rec.last_error.is_some());
+}
