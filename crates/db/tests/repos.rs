@@ -1409,7 +1409,8 @@ async fn aliases_are_unique_per_host_and_replaced_as_a_set() {
         .await
         .expect_err("alias clash");
     assert_eq!(err.code, ErrorCode::Conflict, "{err:?}");
-    assert!(db.aliases().list(&b.id).await.unwrap().is_empty());
+    let left = db.aliases().list(&b.id).await.unwrap();
+    assert_eq!(left, vec![]);
     let err = db
         .aliases()
         .replace_with_route_job(&b.id, &b.server_id, &[alias("a.example.com", "serve")])
@@ -1459,7 +1460,8 @@ async fn aliases_clash_with_a_www_name_in_both_directions_and_cascade() {
 
     // deleting the site removes its aliases
     db.sites().delete(&b.id).await.unwrap();
-    assert!(db.aliases().list(&b.id).await.unwrap().is_empty());
+    let left = db.aliases().list(&b.id).await.unwrap();
+    assert_eq!(left, vec![]);
 }
 
 #[tokio::test]
