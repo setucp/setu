@@ -399,7 +399,8 @@ pub mod testing {
                 }
                 Command::Backup { .. } => serde_json::json!({"size_bytes": 4096}),
                 // Cursor `fake-<n>`: the lines after the first n.
-                Command::FetchLogs { cursor, lines, .. } => {
+                Command::FetchLogs { cursor, lines, .. }
+                | Command::FetchSystemLogs { cursor, lines, .. } => {
                     let from = cursor
                         .as_deref()
                         .and_then(|c| c.strip_prefix("fake-"))

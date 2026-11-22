@@ -239,6 +239,16 @@ impl<H: Helper, P, C> NativeRuntime<H, P, C> {
         crate::journal::read(&self.journalctl, short, cursor, lines).await
     }
 
+    /// Journal of a host service (caddy, this agent), read as the agent user.
+    pub async fn system_logs_inner(
+        &self,
+        unit: setu_proto::SystemUnit,
+        cursor: Option<&str>,
+        lines: u32,
+    ) -> anyhow::Result<LogStream> {
+        crate::journal::read_system(&self.journalctl, unit, cursor, lines).await
+    }
+
     /// Helper `site-remove` (stop, drop-in, user, tree), then forget the
     /// site. The database goes with the separate `DropDatabase` command.
     pub async fn remove_inner(&self, short: &str) -> anyhow::Result<()> {
