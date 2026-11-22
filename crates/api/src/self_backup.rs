@@ -45,7 +45,14 @@ pub struct SelfBackupRecord {
     /// so the success of the dump that follows recovery does not erase it.
     #[serde(default)]
     pub last_outage: Option<String>,
+    /// When that outage ended. The note is dropped by the first successful
+    /// dump a day or more after this (the recovery tick's own dump keeps it).
+    #[serde(default)]
+    pub outage_ended_at: Option<DateTime<Utc>>,
 }
+
+/// How long a [`SelfBackupRecord::last_outage`] note outlives its outage.
+const OUTAGE_NOTE_LIFE: chrono::Duration = chrono::Duration::days(1);
 
 /// `<data_dir>/backups/setu`.
 pub fn backup_dir(data_dir: &Path) -> PathBuf {
@@ -97,6 +104,18 @@ pub enum LockError {
     Failed(String),
 }
 
+/// The (uid, gid) a missing `dir` should get: those of its nearest existing
+/// parent. `None` when `dir` exists already (nothing is created).
+fn inherited_owner(dir: &Path) -> Option<(u32, u32)> {
+    use std::os::unix::fs::MetadataExt as _;
+    if dir.exists() {
+        return None;
+    }
+    let parent = dir.ancestors().skip(1).find(|p| p.exists())?;
+    let meta = std::fs::metadata(parent).ok()?;
+    Some((meta.uid(), meta.gid()))
+}
+
 /// Holds the exclusive backup lock until dropped. It is an `flock` on the
 /// backup directory itself (`<data_dir>/backups/setu`), opened read-only, so
 /// it needs no lock file whose owner could differ from the service user
@@ -113,8 +132,20 @@ impl BackupLock {
     pub fn acquire(data_dir: &Path) -> Result<Self, LockError> {
         use std::os::unix::fs::PermissionsExt as _;
         let dir = backup_dir(data_dir);
+        let owner = inherited_owner(&dir);
         std::fs::create_dir_all(&dir)
             .map_err(|e| LockError::Failed(format!("cannot create {}: {e}", dir.display())))?;
+        if let Some((uid, gid)) = owner {
+            // Created by this call (maybe as root): hand every new level to
+            // the owner of the nearest existing parent, so the service user
+            // can still open and lock it. Fails quietly when not root.
+            for d in dir
+                .ancestors()
+                .take_while(|d| d.starts_with(data_dir) && *d != data_dir)
+            {
+                let _ = std::os::unix::fs::chown(d, Some(uid), Some(gid));
+            }
+        }
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
         let handle = std::fs::File::open(&dir).map_err(|e| {
             LockError::Failed(format!("cannot open {} to lock it: {e}", dir.display()))
@@ -186,6 +217,13 @@ pub async fn run_once(
             rec.file = Some(name);
             rec.size_bytes = Some(size);
             rec.last_error = None;
+            if rec
+                .outage_ended_at
+                .is_some_and(|ended| now - ended >= OUTAGE_NOTE_LIFE)
+            {
+                rec.last_outage = None;
+                rec.outage_ended_at = None;
+            }
             prune(&dir);
         }
         Err(e) => {
@@ -297,7 +335,7 @@ impl Outage {
         self.failures == WARN_AFTER
     }
 
-    /// The read works again: the note for `last_error` when the outage
+    /// The read works again: the note for `last_outage` when the outage
     /// was long enough to have cost a backup, and the counters reset.
     fn recover(&mut self, now: DateTime<Utc>) -> Option<String> {
         let note = (self.failures >= WARN_AFTER).then(|| {
@@ -326,7 +364,7 @@ impl Outage {
 
 /// Tick every `cfg.tick`; run a backup when [`is_due`]. A failing state
 /// read is logged with its cause, retried with backoff, warned about
-/// once, and recorded in `last_error` when it clears.
+/// once, and recorded in `last_outage` when it clears.
 pub fn spawn(
     db: Db,
     clock: Arc<dyn Clock>,
@@ -363,6 +401,7 @@ pub fn spawn(
             if let Some(note) = outage.recover(now) {
                 tracing::warn!("self-backup: {note}");
                 rec.last_outage = Some(note);
+                rec.outage_ended_at = Some(now);
                 if let Err(e) = store(&db, &rec).await {
                     tracing::error!(error = %e, "self-backup outage note not stored");
                 }
@@ -414,6 +453,17 @@ mod tests {
         );
         assert_eq!(o.failures, 0);
         assert!(o.recover(t(31)).is_none());
+    }
+
+    #[test]
+    fn a_missing_directory_inherits_its_nearest_parents_owner() {
+        use std::os::unix::fs::MetadataExt as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let meta = std::fs::metadata(tmp.path()).unwrap();
+        let missing = tmp.path().join("backups").join("setu");
+        assert_eq!(inherited_owner(&missing), Some((meta.uid(), meta.gid())));
+        std::fs::create_dir_all(&missing).unwrap();
+        assert_eq!(inherited_owner(&missing), None, "nothing is created");
     }
 
     #[test]

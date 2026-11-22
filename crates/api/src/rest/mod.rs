@@ -229,7 +229,7 @@ fn coarse_cause(error: &str) -> &'static str {
         "timeout"
     } else if e.contains("authentication") || e.contains("password") {
         "authentication"
-    } else if e.contains("refused") || e.contains("no such file") || e.contains("connect") {
+    } else if e.contains("refused") || e.contains("no such file") {
         "connection refused"
     } else {
         "other"

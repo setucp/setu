@@ -293,17 +293,26 @@ mod tests {
     fn backup_passes_the_password_in_the_environment_never_argv() {
         let rec = Recorder::default();
         let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("setu.dump");
         backup(
             &rec,
             "postgres://setu:s%40cret-pw@db.internal:5433/setu?sslmode=require",
-            Path::new("/tmp/setu.dump"),
+            &out,
             dir.path(),
         )
         .unwrap();
         let calls = rec.0.lock().unwrap();
         let inv = &calls[0];
         assert_eq!(inv.program, "pg_dump");
-        assert_eq!(inv.args, ["-Fc", "-w", "-f", "/tmp/setu.dump.partial"]);
+        assert_eq!(
+            inv.args,
+            [
+                "-Fc".to_string(),
+                "-w".into(),
+                "-f".into(),
+                format!("{}.partial", out.display())
+            ]
+        );
         assert!(
             inv.args
                 .iter()
