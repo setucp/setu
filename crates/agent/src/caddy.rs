@@ -282,9 +282,7 @@ pub trait AdminTransport: Send + Sync {
         method: &str,
         path: &str,
         body: Option<Vec<u8>>,
-    ) -> anyhow::Result<(u16, Vec<u8>)> {
-        self.request(method, path, body).await
-    }
+    ) -> anyhow::Result<(u16, Vec<u8>)>;
 }
 
 /// The admin-API logic over any transport.

@@ -2346,7 +2346,7 @@ dependencies = [
 
 [[package]]
 name = "setu-agent"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2384,7 +2384,7 @@ dependencies = [
 
 [[package]]
 name = "setu-api"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "argon2",
  "async-trait",
@@ -2429,7 +2429,7 @@ dependencies = [
 
 [[package]]
 name = "setu-common"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "axum",
@@ -2455,7 +2455,7 @@ dependencies = [
 
 [[package]]
 name = "setu-db"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2477,7 +2477,7 @@ dependencies = [
 
 [[package]]
 name = "setu-jobs"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2498,7 +2498,7 @@ dependencies = [
 
 [[package]]
 name = "setu-manifest"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "hex",
  "rand 0.9.5",
@@ -2512,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "setu-proto"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "chrono",
  "serde",
@@ -2522,7 +2522,7 @@ dependencies = [
 
 [[package]]
 name = "setu-testkit"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "sqlx",
  "tokio",

@@ -335,6 +335,13 @@ pub(crate) mod sse {
 
     #[cfg(test)]
     mod tests {
+        /// The agent built from this workspace passes its own gate.
+        #[test]
+        fn the_shipped_agent_version_passes_the_0_1_7_gate() {
+            use super::super::{agent_at_least, AGENT_0_1_7};
+            assert!(agent_at_least(Some(env!("CARGO_PKG_VERSION")), AGENT_0_1_7));
+        }
+
         #[test]
         fn readyz_names_a_category_never_the_raw_error() {
             use super::super::coarse_cause;
