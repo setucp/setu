@@ -2517,6 +2517,7 @@ async fn aliases_put_get_validate_and_conflict() {
 /// cannot be another site's automatic `www.` name, and `www_redirect` cannot
 /// be turned on over another site's alias of that name.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // reviewed: one scenario, three directions (R150)
 async fn a_hostname_belongs_to_one_site_in_every_direction() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
