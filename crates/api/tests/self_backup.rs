@@ -42,6 +42,7 @@ fn dumps(dir: &Path) -> Vec<String> {
     let mut v: Vec<String> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n != ".lock")
         .collect();
     v.sort();
     v
