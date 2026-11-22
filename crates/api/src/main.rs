@@ -209,6 +209,17 @@ async fn serve() -> Result<(), String> {
         config.data_dir.clone(),
         setu_jobs::SchedulerConfig::default(),
     );
+    // A pool that stays dead while Postgres answers (the 0.1.1 test-bed
+    // outage, #16) ends the process; systemd restarts it (Restart=always).
+    let watched = db.clone();
+    let watched_url = config.database_url.clone();
+    tokio::spawn(async move {
+        watched
+            .watch(&watched_url, std::time::Duration::from_secs(15), 8)
+            .await;
+        tracing::error!("exiting so the service manager restarts the control plane");
+        std::process::exit(70);
+    });
     let app = setu_api::rest::router(state);
     let bound = setu_api::listen::bind(&config.listen)
         .await
@@ -264,7 +275,12 @@ async fn setting_set(key: &str, value: &str) -> Result<(), String> {
 
 fn backup(out: &std::path::Path) -> Result<(), String> {
     let config = load_config()?;
-    setu_api::cli::backup(&setu_api::cli::ProcessRunner, &config.database_url, out)?;
+    setu_api::cli::backup(
+        &setu_api::cli::ProcessRunner,
+        &config.database_url,
+        out,
+        &config.data_dir,
+    )?;
     println!("wrote {}", out.display());
     Ok(())
 }

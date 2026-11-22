@@ -48,6 +48,31 @@ matching the tag.
   list), and neither does an apex whose `www.` name is itself a site on the
   same server.
 
+### Fixed
+
+- **The database pool recovers after a Postgres crash (#16).** Connections
+  are checked on every use, idle ones are recycled, and an acquire gives up
+  after 10 s. `/readyz` answers 503 with `database: down` and the cause
+  (it used to be a bare 500). If the pool stays dead for two minutes while
+  Postgres answers on a new connection, `setu serve` exits and the service
+  manager restarts it; while Postgres itself is down it keeps trying. The
+  watchdog counts its own probes, so `/readyz` polling cannot shorten it, and
+  `/readyz` names a category (`timeout`, `connection refused`,
+  `authentication`, `other`), not the raw database error.
+- **The nightly self-backup survives a database error and says so (#14).**
+  The log names the database error, the loop backs off (up to about ten
+  minutes), warns once after five failures, and writes a note into
+  `last_outage` (Settings → Panel, apart from `last_error`, so the dump that
+  follows recovery does not erase it) when the database is readable again.
+  A lock that cannot be taken is a failed attempt in `last_error`.
+- **A manual and a scheduled backup no longer collide (#15).** `setu backup`,
+  the nightly dump and the upgrade's dump share one lock
+  (an `flock` on `<data_dir>/backups/setu` itself, so no lock file can be
+  owned by root): the second one fails with "another backup is running"
+  (the nightly one waits for its next tick). `setu backup` writes
+  `<out>.partial` (0600) and renames it on success; a failed run leaves an
+  existing `<out>` alone and prints `pg_dump`'s own message.
+
 ## 0.1.6 — 2026-10-23
 
 ### Fixed
