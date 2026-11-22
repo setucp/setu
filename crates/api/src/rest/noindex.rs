@@ -93,6 +93,7 @@ pub async fn put(
         )));
     }
     require_no_running_job(&state.db, &site.id).await?;
+    super::sites::require_agent_with_route_options(&state.db, &site.server_id).await?;
     let job = state
         .db
         .options()

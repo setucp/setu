@@ -372,6 +372,41 @@ fn load_manifest(version: &setu_db::AppVersion) -> Result<setu_manifest::Manifes
     })
 }
 
+/// The first agent that applies `aliases` and `noindex` in `SetRoute`; an
+/// older one parses the command, drops both fields and answers ok.
+const AGENT_WITH_ROUTE_OPTIONS: (u64, u64, u64) = (0, 1, 7);
+
+/// `(major, minor, patch)` of a plain `x.y.z` version (a `-suffix` or
+/// `+build` is ignored); `None` when it does not parse.
+fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
+    let core = v.split(['-', '+']).next()?;
+    let mut it = core.split('.').map(|p| p.parse::<u64>().ok());
+    Some((it.next()??, it.next()??, it.next()??))
+}
+
+/// 409 when the agent on `server_id` is older than 0.1.7 (or reports no
+/// version): it would accept an alias or noindex change and ignore it, the
+/// job would end `done` and the panel would show a state the server does
+/// not have. Upgrade the servers' agents first.
+pub(crate) async fn require_agent_with_route_options(
+    db: &setu_db::Db,
+    server_id: &str,
+) -> Result<(), AppError> {
+    let server = db.servers().get(server_id).await?;
+    let new_enough = server
+        .agent_version
+        .as_deref()
+        .and_then(parse_version)
+        .is_some_and(|v| v >= AGENT_WITH_ROUTE_OPTIONS);
+    if new_enough {
+        Ok(())
+    } else {
+        Err(AppError::conflict(
+            "the agent on this server is older than 0.1.7; upgrade it first",
+        ))
+    }
+}
+
 /// Reject overlapping work: any `queued`/`running` job for the site is a
 /// 409 so two state machines never interleave on one site.
 pub(crate) async fn require_no_running_job(
@@ -1334,5 +1369,19 @@ mod tests {
         for bad in ["", "admin", "//evil.example", "/a b", "/a\nb"] {
             assert_eq!(admin_url("blog.example.com", bad), None, "{bad:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::{parse_version, AGENT_WITH_ROUTE_OPTIONS};
+
+    #[test]
+    fn versions_compare_by_number_not_text() {
+        assert!(parse_version("0.1.10").unwrap() >= AGENT_WITH_ROUTE_OPTIONS);
+        assert!(parse_version("0.1.7-rc1").unwrap() >= AGENT_WITH_ROUTE_OPTIONS);
+        assert!(parse_version("0.1.6").unwrap() < AGENT_WITH_ROUTE_OPTIONS);
+        assert!(parse_version("0.2.0").unwrap() >= AGENT_WITH_ROUTE_OPTIONS);
+        assert_eq!(parse_version("junk"), None);
     }
 }

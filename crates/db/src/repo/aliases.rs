@@ -11,6 +11,21 @@ use crate::{map_db_error, AppError};
 /// Most aliases one site may have.
 pub const MAX_ALIASES: usize = 10;
 
+/// Transaction-scoped advisory lock taken by every write that claims a
+/// hostname (alias `PUT`, site create, turning `www_redirect` on), so two
+/// sites cannot claim one name through checks that each pass alone.
+const HOSTS_LOCK: i64 = 0x5E70_0A11_A5E5;
+
+/// Takes [`HOSTS_LOCK`] for the rest of `tx`.
+pub(crate) async fn lock_hosts(tx: &mut sqlx::PgConnection) -> Result<(), AppError> {
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(HOSTS_LOCK)
+        .execute(tx)
+        .await
+        .map_err(map_db_error)?;
+    Ok(())
+}
+
 /// One alias row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SiteAlias {
@@ -47,7 +62,11 @@ impl<'a> Aliases<'a> {
 
     /// Replaces the site's aliases and queues the [`ROUTE_JOB`] that applies
     /// them, in one transaction. `conflict` when a host is another site's
-    /// domain or alias, or the site has an active job: nothing changes then.
+    /// domain, alias or automatic `www.` name (`www_redirect` on), or the
+    /// site has an active job: nothing changes then. The active-job check
+    /// is the insert of the job itself: `jobs_one_active_per_site_idx`
+    /// makes a second concurrent writer fail with `conflict`, and its
+    /// transaction (the delete and inserts above) rolls back.
     pub async fn replace_with_route_job(
         &self,
         site_id: &str,
@@ -60,6 +79,7 @@ impl<'a> Aliases<'a> {
             )));
         }
         let mut tx = self.pool.begin().await.map_err(map_db_error)?;
+        lock_hosts(&mut tx).await?;
         sqlx::query("DELETE FROM site_aliases WHERE site_id = $1")
             .bind(site_id)
             .execute(&mut *tx)
@@ -75,6 +95,22 @@ impl<'a> Aliases<'a> {
             if taken.is_some() {
                 return Err(AppError::conflict(format!(
                     "{} is already the domain of a site",
+                    a.host
+                )));
+            }
+            // `www.<domain>` of a site that redirects its www name is taken.
+            let www_of = a.host.strip_prefix("www.").unwrap_or("");
+            let www_taken: Option<String> = sqlx::query_scalar(
+                "SELECT id FROM sites WHERE domain = $1 AND www_redirect AND id <> $2",
+            )
+            .bind(www_of)
+            .bind(site_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(map_db_error)?;
+            if www_taken.is_some() {
+                return Err(AppError::conflict(format!(
+                    "{} is the www redirect of another site",
                     a.host
                 )));
             }

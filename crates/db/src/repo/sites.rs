@@ -217,6 +217,7 @@ impl<'a> Sites<'a> {
         F: FnOnce(&Allocation) -> Result<Value, AppError>,
     {
         let mut tx = self.pool.begin().await.map_err(db_err)?;
+        crate::repo::aliases::lock_hosts(&mut tx).await?;
 
         let taken: Option<String> =
             sqlx::query_scalar!("SELECT id FROM sites WHERE domain = $1", new.domain)
@@ -224,6 +225,16 @@ impl<'a> Sites<'a> {
                 .await
                 .map_err(db_err)?;
         if taken.is_some() {
+            return Err(CreateError::DomainTaken);
+        }
+        // A name that is a site's alias belongs to that site.
+        let aliased: Option<String> =
+            sqlx::query_scalar("SELECT site_id FROM site_aliases WHERE host = $1")
+                .bind(&new.domain)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(db_err)?;
+        if aliased.is_some() {
             return Err(CreateError::DomainTaken);
         }
 
@@ -416,6 +427,23 @@ impl<'a> Sites<'a> {
         enabled: bool,
     ) -> Result<Job, AppError> {
         let mut tx = self.pool.begin().await.map_err(map_db_error)?;
+        if enabled {
+            // The `www.` name must not be another site's alias.
+            crate::repo::aliases::lock_hosts(&mut tx).await?;
+            let clash: Option<String> = sqlx::query_scalar(
+                "SELECT a.host FROM site_aliases a JOIN sites s ON s.id = $1
+                 WHERE a.host = 'www.' || s.domain AND a.site_id <> $1",
+            )
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(map_db_error)?;
+            if let Some(host) = clash {
+                return Err(AppError::conflict(format!(
+                    "{host} is an alias of another site"
+                )));
+            }
+        }
         sqlx::query!(
             "UPDATE sites SET www_redirect = $2, updated_at = now() WHERE id = $1",
             id,

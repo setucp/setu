@@ -152,7 +152,7 @@ async fn online_server_arch(srv: &TestServer, name: &str, memory_mb: u64, arch: 
         .heartbeat(
             &server.id,
             &setu_db::HeartbeatInput {
-                agent_version: "0.1.0",
+                agent_version: "0.1.7",
                 boot_id: None,
                 load1: 0.0,
                 mem_free_mb: 0,
@@ -2510,4 +2510,244 @@ async fn aliases_put_get_validate_and_conflict() {
         json!(host),
         "unchanged after 409"
     );
+}
+
+/// A hostname belongs to one site, in every direction (review of #30,
+/// finding 1): a new site cannot take a name that is an alias, an alias
+/// cannot be another site's automatic `www.` name, and `www_redirect` cannot
+/// be turned on over another site's alias of that name.
+#[tokio::test]
+async fn a_hostname_belongs_to_one_site_in_every_direction() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_a, server_id) = running_site(&srv, &owner, "own-a").await;
+    let a_url = srv.url(&format!("/api/v1/sites/{site_a}/aliases"));
+
+    // 1. site create over an alias
+    let aliased = format!("{}.example.org", unique("shop"));
+    let r = owner
+        .put(&a_url)
+        .json(&json!({"aliases": [{"host": aliased, "mode": "serve"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::ACCEPTED);
+    let job = r.json::<Value>().await.unwrap()["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    poll_job(&srv, &owner, &job).await.expect("alias job");
+    let plan_id = default_plan_id(&srv).await;
+    let r = owner
+        .post(srv.url("/api/v1/sites"))
+        .json(&json!({
+            "name": unique("site"), "app_id": "hello", "version": "0.1.0",
+            "plan_id": plan_id, "domain": aliased, "server_id": server_id,
+            "owner_email": "owner@example.com",
+            "prompts": {"HELLO_NAME": "x"},
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        reqwest::StatusCode::CONFLICT,
+        "create over alias"
+    );
+
+    // 2. an alias that is another site's www name (its www_redirect is on)
+    let (site_b, _) = running_site(&srv, &owner, "own-b").await;
+    let b = get_site(&srv, &owner, &site_b).await;
+    let b_domain = b["domain"].as_str().unwrap().to_owned();
+    let b_url = srv.url(&format!("/api/v1/sites/{site_b}/www-redirect"));
+    let r = owner
+        .put(&b_url)
+        .json(&json!({"enabled": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::ACCEPTED);
+    let job = r.json::<Value>().await.unwrap()["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    poll_job(&srv, &owner, &job).await.expect("www job");
+    let r = owner
+        .put(&a_url)
+        .json(&json!({"aliases": [{"host": format!("www.{b_domain}"), "mode": "serve"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        reqwest::StatusCode::CONFLICT,
+        "alias over a www name"
+    );
+
+    // 3. www_redirect on while another site aliases that www name
+    let (site_c, _) = running_site(&srv, &owner, "own-c").await;
+    let c = get_site(&srv, &owner, &site_c).await;
+    let c_domain = c["domain"].as_str().unwrap().to_owned();
+    let r = owner
+        .put(&a_url)
+        .json(&json!({"aliases": [{"host": format!("www.{c_domain}"), "mode": "serve"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        reqwest::StatusCode::ACCEPTED,
+        "c's www is free while its redirect is off"
+    );
+    let job = r.json::<Value>().await.unwrap()["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    poll_job(&srv, &owner, &job).await.expect("alias job");
+    let r = owner
+        .put(srv.url(&format!("/api/v1/sites/{site_c}/www-redirect")))
+        .json(&json!({"enabled": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        reqwest::StatusCode::CONFLICT,
+        "www on over an alias"
+    );
+}
+
+/// A viewer reads aliases but cannot change aliases or noindex; an operator
+/// can set noindex through the API (review of #30, finding 5).
+#[tokio::test]
+async fn aliases_and_noindex_roles_and_noindex_put() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_id, _) = running_site(&srv, &owner, "roles").await;
+    let viewer = srv.login_as("viewer").await;
+    let aliases = srv.url(&format!("/api/v1/sites/{site_id}/aliases"));
+    let noindex = srv.url(&format!("/api/v1/sites/{site_id}/noindex"));
+
+    assert_eq!(
+        viewer.get(&aliases).send().await.unwrap().status(),
+        reqwest::StatusCode::OK
+    );
+    let r = viewer
+        .put(&aliases)
+        .json(&json!({"aliases": []}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::FORBIDDEN);
+    let r = viewer
+        .put(&noindex)
+        .json(&json!({"enabled": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let r = owner
+        .put(&noindex)
+        .json(&json!({"enabled": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::ACCEPTED);
+    let job = r.json::<Value>().await.unwrap()["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let done = poll_job(&srv, &owner, &job).await.expect("noindex job");
+    assert_eq!(done["status"], json!("done"), "{done}");
+    let got: Value = owner
+        .get(&noindex)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(got["enabled"], json!(true));
+    assert_eq!(
+        srv.agent.commands_of("set_route").last().unwrap()["noindex"],
+        json!(true)
+    );
+}
+
+/// An agent older than 0.1.7 would accept the route command and ignore the
+/// new fields (review of #30, finding 2): the `PUT`s refuse it, and a job
+/// whose agent does not echo what was sent fails instead of ending `done`.
+#[tokio::test]
+async fn an_agent_older_than_0_1_7_is_refused_and_a_silent_one_fails_the_job() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_id, server_id) = running_site(&srv, &owner, "oldagent").await;
+    let aliases = srv.url(&format!("/api/v1/sites/{site_id}/aliases"));
+    let noindex = srv.url(&format!("/api/v1/sites/{site_id}/noindex"));
+
+    // the control plane knows a 0.1.6 agent on the server
+    srv.db
+        .servers()
+        .heartbeat(
+            &server_id,
+            &setu_db::HeartbeatInput {
+                agent_version: "0.1.6",
+                boot_id: None,
+                load1: 0.0,
+                mem_free_mb: 0,
+                disk_free_mb: 0,
+                metrics: &[],
+            },
+        )
+        .await
+        .expect("heartbeat");
+    let r = owner
+        .put(&noindex)
+        .json(&json!({"enabled": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::CONFLICT);
+    let r = owner
+        .put(&aliases)
+        .json(&json!({"aliases": [{"host": "x.example.org", "mode": "serve"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::CONFLICT);
+
+    // a 0.1.7 server whose agent does not echo: the job fails
+    srv.db
+        .servers()
+        .heartbeat(
+            &server_id,
+            &setu_db::HeartbeatInput {
+                agent_version: "0.1.7",
+                boot_id: None,
+                load1: 0.0,
+                mem_free_mb: 0,
+                disk_free_mb: 0,
+                metrics: &[],
+            },
+        )
+        .await
+        .expect("heartbeat");
+    srv.agent.set_old_route_agent(true);
+    let r = owner
+        .put(&noindex)
+        .json(&json!({"enabled": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::ACCEPTED);
+    let job = r.json::<Value>().await.unwrap()["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let done = poll_job(&srv, &owner, &job).await.expect("job");
+    assert_eq!(done["status"], json!("failed"), "{done}");
 }
