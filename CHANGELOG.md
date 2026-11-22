@@ -19,6 +19,12 @@ matching the tag.
   file (before basic auth and the app, which cannot override it). Meant
   for staging sites; off by default, so an upgrade changes no site. `GET`
   shows the option. A change is stored with a `route_update` job.
+- **Domain pre-check.** `GET /api/v1/domain-check?domain=…&server_id=…`
+  (operator and above) reads DNS before a site is provisioned and says
+  whether Caddy can get a Let's Encrypt certificate: the name resolves,
+  its A/AAAA records are the server's public address, Cloudflare's proxy
+  is flagged (a warning, not a failure) and a CAA record that leaves out
+  `letsencrypt.org` is an error. It stores nothing and queues no job.
 - **Per-site HTTP basic auth.** `PUT /api/v1/sites/{id}/basic-auth` with a
   user name and password puts a login in front of one site; `DELETE`
   removes it and `GET` shows the user name. Caddy enforces it on the

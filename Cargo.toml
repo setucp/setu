@@ -85,3 +85,4 @@ url = { version = "2" }
 regex = { version = "1" }
 idna = { version = "1" }
 ipnet = { version = "2", features = ["serde"] }
+hickory-resolver = { version = "0.26", default-features = false, features = ["system-config", "tokio"] }
