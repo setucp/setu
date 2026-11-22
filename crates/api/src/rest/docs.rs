@@ -23,6 +23,7 @@ use super::basic_auth::{
     RouteStatus,
 };
 use super::jobs::{AuditEntryOut, AuditListOut, AuditQuery, JobListOut, JobsQuery};
+use super::noindex::{NoindexRequest, NoindexResponse, NoindexSetResponse};
 use super::operators::{CreateOperatorRequest, OperatorListOut, SetPasswordRequest};
 use super::panel::SelfBackupOut;
 use super::plans::{CreatePlanRequest, PlanLimitsIn, PlanListOut, PlanOut, UpdatePlanRequest};
@@ -99,6 +100,8 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::www_redirect::set,
         super::aliases::get,
         super::aliases::put,
+        super::noindex::get,
+        super::noindex::put,
         super::backups::reset_get,
         super::backups::reset_put,
         super::backups::reset_delete,
@@ -177,6 +180,9 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         AliasesRequest,
         AliasesResponse,
         AliasesSetResponse,
+        NoindexRequest,
+        NoindexResponse,
+        NoindexSetResponse,
         WwwRedirectRequest,
         WwwRedirectResponse,
         BasicAuthOut,

@@ -7,6 +7,12 @@ matching the tag.
 
 ### Added
 
+- **Per-site noindex.** `PUT /api/v1/sites/{id}/noindex` with
+  `{"enabled": true}` makes the site's route send `X-Robots-Tag: noindex,
+  nofollow` on every response and answer `/robots.txt` with a disallow-all
+  file (before basic auth and the app, which cannot override it). Meant
+  for staging sites; off by default, so an upgrade changes no site. `GET`
+  shows the option. A change is stored with a `route_update` job.
 - **Per-site HTTP basic auth.** `PUT /api/v1/sites/{id}/basic-auth` with a
   user name and password puts a login in front of one site; `DELETE`
   removes it and `GET` shows the user name. Caddy enforces it on the

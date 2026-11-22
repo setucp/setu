@@ -1,0 +1,58 @@
+{
+  "@id": "setu-site-abcd1234",
+  "handle": [
+    {
+      "handler": "headers",
+      "response": {
+        "set": {
+          "X-Robots-Tag": [
+            "noindex, nofollow"
+          ]
+        }
+      }
+    },
+    {
+      "handler": "subroute",
+      "routes": [
+        {
+          "handle": [
+            {
+              "body": "User-agent: *\nDisallow: /\n",
+              "handler": "static_response",
+              "headers": {
+                "Content-Type": [
+                  "text/plain; charset=utf-8"
+                ]
+              },
+              "status_code": 200
+            }
+          ],
+          "match": [
+            {
+              "path": [
+                "/robots.txt"
+              ]
+            }
+          ],
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "handler": "reverse_proxy",
+      "upstreams": [
+        {
+          "dial": "127.0.0.1:20001"
+        }
+      ]
+    }
+  ],
+  "match": [
+    {
+      "host": [
+        "staging.example.test"
+      ]
+    }
+  ],
+  "terminal": true
+}

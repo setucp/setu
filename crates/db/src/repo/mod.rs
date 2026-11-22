@@ -8,6 +8,7 @@ pub mod commands;
 pub mod jobs;
 pub mod metrics;
 pub mod operators;
+pub mod options;
 pub mod plans;
 pub mod resets;
 pub mod servers;
@@ -25,6 +26,7 @@ pub use commands::{AgentCommand, Commands, WaitError, NOTIFY_CHANNEL};
 pub use jobs::{Job, Jobs};
 pub use metrics::{LatestMetric, Metrics};
 pub use operators::{Operator, Operators};
+pub use options::Options;
 pub use plans::{NewPlan, Plan, Plans};
 pub use resets::{Resets, SiteReset};
 pub use servers::{

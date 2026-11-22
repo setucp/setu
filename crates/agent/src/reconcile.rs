@@ -46,6 +46,7 @@ async fn sync_site_routes<C: CaddyAdmin + ?Sized>(state: &State, caddy: &C) -> B
                 site.basic_auth
                     .as_ref()
                     .map(|(u, h)| (u.as_str(), h.as_str())),
+                site.noindex,
             )
             .await
         {

@@ -15,6 +15,7 @@ fn record(domain: Option<&str>, port: u16) -> SiteRecord {
         db: None,
         www_redirect: true,
         aliases: vec![],
+        noindex: false,
     }
 }
 

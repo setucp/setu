@@ -8,6 +8,7 @@ pub mod backups;
 pub mod basic_auth;
 pub mod docs;
 pub mod jobs;
+pub mod noindex;
 pub mod operators;
 pub mod panel;
 pub mod plans;
@@ -113,6 +114,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sites/{id}/backups/{bid}/restore", post(backups::restore))
         .route("/sites/{id}/www-redirect", put(www_redirect::set))
         .route("/sites/{id}/aliases", get(aliases::get).put(aliases::put))
+        .route("/sites/{id}/noindex", get(noindex::get).put(noindex::put))
         .route(
             "/sites/{id}/basic-auth",
             get(basic_auth::get)

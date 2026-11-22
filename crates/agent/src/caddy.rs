@@ -216,16 +216,23 @@ pub fn route_json_with_auth(
     upstream: &str,
     auth: Option<(&str, &str)>,
 ) -> anyhow::Result<serde_json::Value> {
-    route_json_with_hosts(id, domain, &[], upstream, auth)
+    route_json_with_hosts(id, domain, &[], upstream, auth, false)
 }
 
-/// [`route_json_with_auth`] answering on `extra` hostnames too (`serve` aliases).
+/// What `GET /robots.txt` answers on a `noindex` site.
+pub const NOINDEX_ROBOTS: &str = "User-agent: *\nDisallow: /\n";
+
+/// [`route_json_with_auth`] answering on `extra` hostnames too (`serve`
+/// aliases). `noindex` puts `X-Robots-Tag: noindex, nofollow` on every
+/// response and answers `/robots.txt` itself (before basic auth and the
+/// proxy, so the app cannot override it).
 pub fn route_json_with_hosts(
     id: &str,
     domain: &str,
     extra: &[String],
     upstream: &str,
     auth: Option<(&str, &str)>,
+    noindex: bool,
 ) -> anyhow::Result<serde_json::Value> {
     if !valid_route_id(id) {
         anyhow::bail!("invalid route id {id:?}");
@@ -242,6 +249,28 @@ pub fn route_json_with_hosts(
     let mut hosts = vec![domain.to_string()];
     hosts.extend(extra.iter().cloned());
     let mut handle = Vec::new();
+    if noindex {
+        if id == PANEL_ROUTE_ID {
+            anyhow::bail!("the panel route takes no noindex");
+        }
+        handle.push(serde_json::json!({
+            "handler": "headers",
+            "response": { "set": { "X-Robots-Tag": ["noindex, nofollow"] } },
+        }));
+        handle.push(serde_json::json!({
+            "handler": "subroute",
+            "routes": [{
+                "match": [{ "path": ["/robots.txt"] }],
+                "handle": [{
+                    "handler": "static_response",
+                    "status_code": 200,
+                    "headers": { "Content-Type": ["text/plain; charset=utf-8"] },
+                    "body": NOINDEX_ROBOTS,
+                }],
+                "terminal": true,
+            }],
+        }));
+    }
     if let Some((user, hash)) = auth {
         if id == PANEL_ROUTE_ID {
             anyhow::bail!("the panel route takes no basic auth");
@@ -295,6 +324,7 @@ pub trait CaddyAdmin: Send + Sync {
         extra: &[String],
         upstream: &str,
         auth: Option<(&str, &str)>,
+        noindex: bool,
     ) -> anyhow::Result<()>;
     /// Create or replace the `www.` → apex redirect route `id`.
     async fn upsert_www_route(&self, id: &str, domain: &str) -> anyhow::Result<()>;
@@ -457,10 +487,11 @@ impl<T: AdminTransport> CaddyAdmin for CaddyClient<T> {
         extra: &[String],
         upstream: &str,
         auth: Option<(&str, &str)>,
+        noindex: bool,
     ) -> anyhow::Result<()> {
         self.put_route(
             id,
-            &route_json_with_hosts(id, domain, extra, upstream, auth)?,
+            &route_json_with_hosts(id, domain, extra, upstream, auth, noindex)?,
         )
         .await
     }

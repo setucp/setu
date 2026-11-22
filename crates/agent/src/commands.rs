@@ -364,6 +364,7 @@ mod tests {
             }),
             www_redirect: true,
             aliases: vec![],
+            noindex: false,
         };
         let r = redact_result(
             CommandResult {

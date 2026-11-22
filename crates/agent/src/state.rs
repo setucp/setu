@@ -43,6 +43,10 @@ pub struct SiteRecord {
     /// before 0.1.7).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<setu_proto::Alias>,
+    /// Search engines are asked to stay away (off for a state file from
+    /// before 0.1.7).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub noindex: bool,
     #[serde(default)]
     pub version: String,
     #[serde(default)]
@@ -63,6 +67,7 @@ impl std::fmt::Debug for SiteRecord {
             )
             .field("www_redirect", &self.www_redirect)
             .field("aliases", &self.aliases)
+            .field("noindex", &self.noindex)
             .field("version", &self.version)
             .field("db", &self.db)
             .finish()

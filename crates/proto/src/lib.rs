@@ -210,6 +210,11 @@ pub enum Command {
         /// plane: none.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         aliases: Vec<Alias>,
+        /// Ask search engines to stay away (`X-Robots-Tag` and a
+        /// disallow-all `/robots.txt`). Absent in commands queued by an
+        /// older control plane: off.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        noindex: bool,
     },
     RemoveRoute {
         site_short_id: String,
@@ -622,6 +627,7 @@ mod tests {
                     }),
                     www_redirect: true,
                     aliases: vec![],
+                    noindex: false,
                 },
                 "set_route",
             ),
@@ -917,6 +923,7 @@ mod tests {
             basic_auth: None,
             www_redirect: true,
             aliases: vec![],
+            noindex: false,
         };
         assert!(!open.has_secrets());
         assert_eq!(open.redact(), serde_json::to_value(&open).unwrap());

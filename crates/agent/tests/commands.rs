@@ -230,6 +230,7 @@ async fn every_command_kind_is_handled() {
             basic_auth: None,
             www_redirect: true,
             aliases: vec![],
+            noindex: false,
         },
         Command::Backup {
             site: s(),
@@ -499,6 +500,7 @@ async fn route_commands_key_off_the_site_short_id() {
         basic_auth: None,
         www_redirect: true,
         aliases: vec![],
+        noindex: false,
     };
     let r = setu_agent::execute("c1", &set, &rt).await;
     assert!(r.ok, "{:?}", r.error);
@@ -522,6 +524,7 @@ async fn route_commands_key_off_the_site_short_id() {
         basic_auth: None,
         www_redirect: true,
         aliases: vec![],
+        noindex: false,
     };
     assert!(!setu_agent::execute("c2", &empty_short, &rt).await.ok);
 
@@ -1089,6 +1092,7 @@ async fn a_site_on_the_www_name_displaces_and_restores_the_apex_redirect() {
         basic_auth: None,
         www_redirect: true,
         aliases: vec![],
+        noindex: false,
     };
     let has_www = || {
         rt.caddy()

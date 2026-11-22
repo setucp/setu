@@ -38,6 +38,7 @@ fn state_round_trips_and_caps_results() {
                 basic_auth: None,
                 www_redirect: true,
                 aliases: vec![],
+                noindex: false,
             }
         })
         .expect("site");

@@ -132,6 +132,7 @@ fn secret_commands() -> [Command; 3] {
             }),
             www_redirect: true,
             aliases: vec![],
+            noindex: false,
         },
     ]
 }

@@ -171,6 +171,7 @@ async fn machine(ctx: &JobCtx, site: &Site, steps: &Steps) -> Result<(), (&'stat
                     basic_auth,
                     www_redirect: site.www_redirect,
                     aliases: vec![],
+                    noindex: false,
                 },
             )
             .await

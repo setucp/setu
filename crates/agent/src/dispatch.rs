@@ -205,6 +205,7 @@ where
             basic_auth,
             www_redirect,
             aliases,
+            noindex,
         } => {
             let id = match crate::caddy::site_route_id(site_short_id) {
                 Ok(id) => id,
@@ -221,6 +222,7 @@ where
                     .map(|a| (a.username.clone(), a.password_hash.clone()));
                 r.www_redirect = *www_redirect;
                 r.aliases.clone_from(aliases);
+                r.noindex = *noindex;
             }) {
                 return err(cmd_id, "set_route failed", e);
             }
@@ -237,6 +239,7 @@ where
                     basic_auth
                         .as_ref()
                         .map(|a| (a.username.as_str(), a.password_hash.as_str())),
+                    *noindex,
                 )
                 .await
             {
