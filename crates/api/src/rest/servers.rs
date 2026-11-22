@@ -8,7 +8,7 @@
 //! `SETU_JOIN_TOKEN` or on stdin (spec §7).
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -358,4 +358,85 @@ fn join_command(tls_internal: bool) -> String {
         cmd.push_str(super::setup::CADDY_LOCAL_CA);
     }
     cmd
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SystemLogsQuery {
+    /// `caddy` or `agent`.
+    pub unit: String,
+    /// The `cursor` of the previous page; absent for the newest lines.
+    pub cursor: Option<String>,
+    /// Lines per page, 1 to 1000 (default 200).
+    pub lines: Option<u32>,
+}
+
+/// One page of a host service's journal.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SystemLogsOut {
+    pub lines: Vec<String>,
+    /// Pass back as `cursor` to read what follows.
+    pub cursor: Option<String>,
+}
+
+/// Journal of a service on the server (operator and above): `unit` is
+/// `caddy` or `agent`. Poll with the returned `cursor` for new lines.
+/// 400 for another unit or a malformed cursor, 502 when the agent does
+/// not answer or cannot read the journal.
+#[utoipa::path(
+    get,
+    path = "/api/v1/servers/{id}/logs",
+    params(
+        ("id" = String, Path, description = "Server id"),
+        ("unit" = String, Query, description = "`caddy` or `agent`"),
+        ("cursor" = Option<String>, Query, description = "Cursor of the previous page"),
+        ("lines" = Option<u32>, Query, description = "Lines per page, 1 to 1000 (default 200)"),
+    ),
+    responses(
+        (status = 200, body = SystemLogsOut),
+        (status = 400, body = super::ErrorBody),
+        (status = 401, body = super::ErrorBody),
+        (status = 403, body = super::ErrorBody),
+        (status = 404, body = super::ErrorBody),
+        (status = 502, body = super::ErrorBody),
+    )
+)]
+pub async fn logs(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<String>,
+    Query(q): Query<SystemLogsQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    require_role(&session, Role::Operator).await?;
+    let unit = setu_proto::SystemUnit::parse(&q.unit)
+        .ok_or_else(|| AppError::validation("unit must be caddy or agent"))?;
+    if let Some(c) = q.cursor.as_deref() {
+        if c.is_empty() || c.len() > 512 || !setu_common::validate::no_control(c) {
+            return Err(AppError::validation("invalid cursor"));
+        }
+    }
+    let lines = q.lines.unwrap_or(200).clamp(1, 1000);
+    let server = state.db.servers().get(&id).await?;
+    let result = state
+        .agent
+        .call(
+            &server.id,
+            None,
+            setu_proto::Command::FetchSystemLogs {
+                unit,
+                cursor: q.cursor,
+                lines,
+            },
+        )
+        .await?;
+    if !result.ok {
+        tracing::warn!(server = %server.id, error = ?result.error, "server logs: fetch_system_logs failed");
+        return Err(AppError::agent_unreachable(
+            "the agent could not read the logs",
+        ));
+    }
+    let page: setu_proto::LogsOutput = serde_json::from_value(result.output).unwrap_or_default();
+    Ok(Json(SystemLogsOut {
+        lines: page.lines,
+        cursor: page.cursor,
+    }))
 }

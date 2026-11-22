@@ -234,6 +234,43 @@ pub enum Command {
         site: String,
         domain: String,
     },
+    /// Read the journal of one of the host's own services (server level,
+    /// read-only). Absent in older agents: they refuse it as unknown.
+    FetchSystemLogs {
+        unit: SystemUnit,
+        cursor: Option<String>,
+        lines: u32,
+    },
+}
+
+/// The services whose logs the panel may read: a fixed set, never a name
+/// from the wire, so no free string can reach `journalctl -u`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemUnit {
+    Caddy,
+    Agent,
+}
+
+impl SystemUnit {
+    /// The systemd unit the journal is read for.
+    #[must_use]
+    pub fn unit_name(self) -> &'static str {
+        match self {
+            Self::Caddy => "caddy.service",
+            Self::Agent => "setu-agent.service",
+        }
+    }
+
+    /// Parse the query value (`caddy`, `agent`).
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "caddy" => Some(Self::Caddy),
+            "agent" => Some(Self::Agent),
+            _ => None,
+        }
+    }
 }
 
 /// `install` may download a large archive.
@@ -270,6 +307,7 @@ impl Command {
             Self::FetchLogs { .. } => "fetch_logs",
             Self::Inventory => "inventory",
             Self::CertStatus { .. } => "cert_status",
+            Self::FetchSystemLogs { .. } => "fetch_system_logs",
         }
     }
 
@@ -297,7 +335,10 @@ impl Command {
             Self::SetRoute { site_short_id, .. } | Self::RemoveRoute { site_short_id, .. } => {
                 Some(site_short_id)
             }
-            Self::CreateDatabase { .. } | Self::DropDatabase { .. } | Self::Inventory => None,
+            Self::CreateDatabase { .. }
+            | Self::DropDatabase { .. }
+            | Self::Inventory
+            | Self::FetchSystemLogs { .. } => None,
         }
     }
 
@@ -309,6 +350,7 @@ impl Command {
                 | Self::FetchLogs { .. }
                 | Self::Inventory
                 | Self::CertStatus { .. }
+                | Self::FetchSystemLogs { .. }
         )
     }
 
@@ -690,6 +732,14 @@ mod tests {
                 },
                 "cert_status",
             ),
+            (
+                Command::FetchSystemLogs {
+                    unit: SystemUnit::Caddy,
+                    cursor: Some("s=1;i=2".to_string()),
+                    lines: 200,
+                },
+                "fetch_system_logs",
+            ),
         ]
     }
 
@@ -717,14 +767,19 @@ mod tests {
             | Command::SiteRemove { .. }
             | Command::FetchLogs { .. }
             | Command::Inventory
-            | Command::CertStatus { .. } => true,
+            | Command::CertStatus { .. }
+            | Command::FetchSystemLogs { .. } => true,
         }
     }
 
     #[test]
     fn every_command_round_trips_json() {
         let all = all_commands();
-        assert_eq!(all.len(), 21, "spec §5 lists 20 commands, plus cert_status");
+        assert_eq!(
+            all.len(),
+            22,
+            "spec §5 lists 20 commands, plus cert_status and fetch_system_logs"
+        );
         for (cmd, kind) in all {
             assert!(listed(&cmd));
             assert_eq!(cmd.kind(), kind);
@@ -737,10 +792,17 @@ mod tests {
                 serde_json::from_str::<Command>(&s).expect("from string"),
                 cmd
             );
-            if kind != "inventory" && kind != "create_database" && kind != "drop_database" {
-                assert_eq!(cmd.site_short_id(), Some("abcd1234"), "{kind}");
-            } else {
+            if [
+                "inventory",
+                "create_database",
+                "drop_database",
+                "fetch_system_logs",
+            ]
+            .contains(&kind)
+            {
                 assert_eq!(cmd.site_short_id(), None, "{kind}");
+            } else {
+                assert_eq!(cmd.site_short_id(), Some("abcd1234"), "{kind}");
             }
         }
         // No path-like or identity field ever crosses the wire.
@@ -940,7 +1002,13 @@ mod tests {
             .collect();
         assert_eq!(
             read_only,
-            ["status", "fetch_logs", "inventory", "cert_status"]
+            [
+                "status",
+                "fetch_logs",
+                "inventory",
+                "cert_status",
+                "fetch_system_logs"
+            ]
         );
     }
 

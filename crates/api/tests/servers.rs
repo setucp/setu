@@ -139,3 +139,74 @@ async fn cordon_toggles_and_is_audited() {
         .expect("sends");
     assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn server_logs_page_by_cursor_and_refuse_other_units() {
+    let tdb = TestDb::new().await;
+    let agent = FakeAgent::new();
+    agent.set_log_lines(vec!["one".into(), "two".into(), "three".into()]);
+    let srv = TestServer::spawn(tdb, agent).await;
+    let owner = srv.login_as_owner().await;
+    let viewer = srv.login_as("viewer").await;
+    let created: serde_json::Value = owner
+        .post(srv.url("/api/v1/servers"))
+        .json(&serde_json::json!({"name": "web-logs"}))
+        .send()
+        .await
+        .expect("create sends")
+        .json()
+        .await
+        .expect("json");
+    let id = created["server"]["id"].as_str().expect("id").to_string();
+    let url = srv.url(&format!("/api/v1/servers/{id}/logs"));
+
+    let denied = viewer
+        .get(&url)
+        .query(&[("unit", "caddy")])
+        .send()
+        .await
+        .expect("viewer sends");
+    assert_eq!(denied.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let first: serde_json::Value = owner
+        .get(&url)
+        .query(&[("unit", "caddy"), ("lines", "2")])
+        .send()
+        .await
+        .expect("first sends")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(first["lines"], serde_json::json!(["one", "two"]));
+    let cursor = first["cursor"].as_str().expect("cursor").to_string();
+    let second: serde_json::Value = owner
+        .get(&url)
+        .query(&[("unit", "agent"), ("cursor", cursor.as_str())])
+        .send()
+        .await
+        .expect("second sends")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(second["lines"], serde_json::json!(["three"]));
+
+    for q in [
+        vec![("unit", "sshd")],
+        vec![("unit", "caddy"), ("cursor", "a\nb")],
+        vec![],
+    ] {
+        let bad = owner.get(&url).query(&q).send().await.expect("bad sends");
+        assert!(bad.status().is_client_error(), "{q:?} -> {}", bad.status());
+    }
+    let units: Vec<String> = srv
+        .agent
+        .commands_of("fetch_system_logs")
+        .iter()
+        .map(|c| c["unit"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(
+        units,
+        ["caddy", "agent"],
+        "refused requests never reach the agent"
+    );
+}

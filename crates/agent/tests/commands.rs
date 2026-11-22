@@ -844,6 +844,45 @@ async fn fetch_logs_returns_cursor() {
 }
 
 #[tokio::test]
+async fn fetch_system_logs_reads_the_fixed_unit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bin = tempfile::tempdir().expect("bindir");
+    let args_file = dir.path().join("args");
+    let script = bin.path().join("journalctl");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n\
+             echo '{{\"__CURSOR\":\"c1\",\"MESSAGE\":\"\\u001b[32mcaddy up\"}}'\n",
+            args_file.display()
+        ),
+    )
+    .expect("script");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let rt: FakeRt = NativeRuntime::new(
+        FakeHelper::new(),
+        FakePostgres::new(),
+        FakeCaddy::new(),
+        fake_config(dir.path()),
+    )
+    .with_journalctl(script);
+    let agent = Agent::new(rt);
+    let cmd = Command::FetchSystemLogs {
+        unit: setu_proto::SystemUnit::Caddy,
+        cursor: None,
+        lines: 10,
+    };
+    let r = setu_agent::handle(&envelope("sl1", cmd), &agent).await;
+    assert!(r.ok, "{:?}", r.error);
+    let out: LogsOutput = serde_json::from_value(r.output).expect("logs output");
+    assert_eq!(out.lines, ["caddy up"]);
+    assert_eq!(out.cursor.as_deref(), Some("c1"));
+    let args = std::fs::read_to_string(&args_file).expect("args");
+    let args: Vec<&str> = args.lines().collect();
+    assert_eq!(args[..2], ["-u", "caddy.service"], "{args:?}");
+}
+
+#[tokio::test]
 async fn heartbeat_includes_metrics() {
     let dir = tempfile::tempdir().expect("tempdir");
     let helper = FakeHelper::new();

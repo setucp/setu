@@ -9,9 +9,22 @@ const MAX_CURSOR: usize = 512;
 /// journalctl argv (after the program name).
 pub fn journal_args(short: &str, cursor: Option<&str>, lines: u32) -> anyhow::Result<Vec<String>> {
     crate::paths::check_short(short)?;
+    unit_args(&crate::helper::unit_name(short), cursor, lines)
+}
+
+/// journalctl argv for a host service from the fixed [`SystemUnit`] set.
+pub fn system_journal_args(
+    unit: setu_proto::SystemUnit,
+    cursor: Option<&str>,
+    lines: u32,
+) -> anyhow::Result<Vec<String>> {
+    unit_args(unit.unit_name(), cursor, lines)
+}
+
+fn unit_args(unit: &str, cursor: Option<&str>, lines: u32) -> anyhow::Result<Vec<String>> {
     let mut args = vec![
         "-u".to_string(),
-        crate::helper::unit_name(short),
+        unit.to_string(),
         "-o".to_string(),
         "json".to_string(),
         "--no-pager".to_string(),
@@ -106,7 +119,24 @@ pub async fn read(
     cursor: Option<&str>,
     lines: u32,
 ) -> anyhow::Result<LogStream> {
-    let args = journal_args(short, cursor, lines)?;
+    run(program, journal_args(short, cursor, lines)?, cursor).await
+}
+
+/// Like [`read`], for a host service.
+pub async fn read_system(
+    program: &std::path::Path,
+    unit: setu_proto::SystemUnit,
+    cursor: Option<&str>,
+    lines: u32,
+) -> anyhow::Result<LogStream> {
+    run(program, system_journal_args(unit, cursor, lines)?, cursor).await
+}
+
+async fn run(
+    program: &std::path::Path,
+    args: Vec<String>,
+    cursor: Option<&str>,
+) -> anyhow::Result<LogStream> {
     let out = tokio::process::Command::new(program)
         .args(&args)
         .output()
@@ -130,6 +160,18 @@ pub async fn read(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_args_name_only_the_fixed_units() {
+        use setu_proto::SystemUnit;
+        let a = system_journal_args(SystemUnit::Caddy, Some("s=1;i=2"), 50).expect("args");
+        assert_eq!(a[..2], ["-u", "caddy.service"]);
+        assert_eq!(a.last().expect("last"), "--after-cursor=s=1;i=2");
+        let a = system_journal_args(SystemUnit::Agent, None, 99_999).expect("args");
+        assert_eq!(a[1], "setu-agent.service");
+        assert!(a.contains(&"5000".to_string()), "lines are clamped");
+        system_journal_args(SystemUnit::Caddy, Some("a\nb"), 1).expect_err("newline");
+    }
 
     #[test]
     fn args_carry_unit_and_cursor_as_one_element() {
