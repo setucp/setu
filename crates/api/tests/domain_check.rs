@@ -122,7 +122,7 @@ async fn wrong_address_unresolved_name_and_caa_are_errors() {
                 tag: "issue".into(),
                 value: "digicert.com".into(),
             }],
-            error: None,
+            ..DnsAnswers::default()
         },
     );
     let srv = boot(dns).await;

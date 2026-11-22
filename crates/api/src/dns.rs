@@ -9,8 +9,14 @@
 //! server's, that Cloudflare's proxy is not in the way unnoticed and that
 //! no CAA record forbids Let's Encrypt (RFC 8659: the closest CAA record
 //! set up the tree decides).
+//!
+//! The control plane's resolver can see a different answer from the public
+//! one (split horizon, a cache holding the old record); the findings are
+//! what the control plane sees.
 
 use std::net::IpAddr;
+use std::sync::LazyLock;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use ipnet::IpNet;
@@ -38,6 +44,10 @@ pub struct DnsAnswers {
     pub caa: Vec<CaaRecord>,
     /// Why the address lookup failed, when it did (shown to the operator).
     pub error: Option<String>,
+    /// Why the CAA lookup could not be completed (SERVFAIL, a timeout, a
+    /// DNSSEC failure), when it could not. A CA treats a failed CAA lookup
+    /// as a refusal, so this is never reported as "no CAA record".
+    pub caa_error: Option<String>,
 }
 
 /// Looks a name up in DNS.
@@ -46,34 +56,73 @@ pub trait DomainResolver: Send + Sync + std::fmt::Debug {
     async fn lookup(&self, domain: &str) -> DnsAnswers;
 }
 
-/// The resolver the control plane uses: the system's name servers.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SystemResolver;
+/// One deadline for a whole lookup: the CAA climb asks one query per label
+/// in turn, and a name can have over a hundred labels.
+const LOOKUP_DEADLINE: Duration = Duration::from_secs(10);
+
+/// The resolver the control plane uses: the system's name servers. The
+/// resolver is built once, on the first lookup, not on every request.
+#[derive(Debug, Default)]
+pub struct SystemResolver {
+    resolver: std::sync::OnceLock<Result<hickory_resolver::TokioResolver, String>>,
+}
+
+impl SystemResolver {
+    fn get(&self) -> Result<&hickory_resolver::TokioResolver, &str> {
+        self.resolver
+            .get_or_init(|| {
+                hickory_resolver::TokioResolver::builder_tokio()
+                    .map_err(|e| e.to_string())
+                    .and_then(|b| b.build().map_err(|e| e.to_string()))
+            })
+            .as_ref()
+            .map_err(String::as_str)
+    }
+}
 
 #[async_trait]
 impl DomainResolver for SystemResolver {
     async fn lookup(&self, domain: &str) -> DnsAnswers {
-        use hickory_resolver::proto::rr::{RData, RecordType};
-        use hickory_resolver::TokioResolver;
-
-        let built = TokioResolver::builder_tokio()
-            .map_err(|e| e.to_string())
-            .and_then(|b| b.build().map_err(|e| e.to_string()));
-        let resolver = match built {
+        let resolver = match self.get() {
             Ok(r) => r,
-            Err(e) => return failed(&e),
+            Err(e) => return failed(e),
         };
         let mut out = DnsAnswers::default();
-        match resolver.lookup_ip(format!("{domain}.")).await {
-            Ok(ips) => out.addresses = ips.iter().collect(),
-            Err(e) => out.error = Some(e.to_string()),
+        let work = lookup_all(resolver, domain, &mut out);
+        if tokio::time::timeout(LOOKUP_DEADLINE, work).await.is_err() {
+            let why = format!(
+                "the lookup took longer than {} s",
+                LOOKUP_DEADLINE.as_secs()
+            );
+            if out.addresses.is_empty() && out.error.is_none() {
+                out.error = Some(why);
+            } else if out.caa.is_empty() && out.caa_error.is_none() {
+                out.caa_error = Some(why);
+            }
         }
-        // RFC 8659 §3: climb from the name towards the root and stop at
-        // the first label set that has any CAA record. The bare TLD is
-        // never asked.
-        let mut name = domain;
-        loop {
-            if let Ok(found) = resolver.lookup(format!("{name}."), RecordType::CAA).await {
+        out
+    }
+}
+
+async fn lookup_all(
+    resolver: &hickory_resolver::TokioResolver,
+    domain: &str,
+    out: &mut DnsAnswers,
+) {
+    use hickory_resolver::proto::rr::{RData, RecordType};
+
+    match resolver.lookup_ip(format!("{domain}.")).await {
+        Ok(ips) => out.addresses = ips.iter().collect(),
+        Err(e) => out.error = Some(e.to_string()),
+    }
+    // RFC 8659 §3: climb from the name towards the root and stop at the
+    // first label set that has any CAA record. The bare TLD is never asked
+    // (a deliberate shortcut: the climb should end at the root, but a CAA
+    // record on a TLD is not something an operator can have set for us).
+    let mut name = domain;
+    loop {
+        match resolver.lookup(format!("{name}."), RecordType::CAA).await {
+            Ok(found) => {
                 let records: Vec<CaaRecord> = found
                     .answers()
                     .iter()
@@ -90,12 +139,17 @@ impl DomainResolver for SystemResolver {
                     break;
                 }
             }
-            match name.split_once('.') {
-                Some((_, parent)) if parent.contains('.') => name = parent,
-                _ => break,
+            // "No records" is an answer; anything else is a failed lookup.
+            Err(e) if e.is_no_records_found() => {}
+            Err(e) => {
+                out.caa_error = Some(format!("the CAA lookup for {name} failed: {e}"));
+                break;
             }
         }
-        out
+        match name.split_once('.') {
+            Some((_, parent)) if parent.contains('.') => name = parent,
+            _ => break,
+        }
     }
 }
 
@@ -161,13 +215,13 @@ const CLOUDFLARE: &[&str] = &[
     "2c0f:f248::/32",
 ];
 
+static CLOUDFLARE_NETS: LazyLock<Vec<IpNet>> =
+    LazyLock::new(|| CLOUDFLARE.iter().filter_map(|n| n.parse().ok()).collect());
+
 /// Is the address one of Cloudflare's proxy addresses?
 #[must_use]
 pub fn is_cloudflare(ip: IpAddr) -> bool {
-    CLOUDFLARE
-        .iter()
-        .filter_map(|n| n.parse::<IpNet>().ok())
-        .any(|net| net.contains(&ip))
+    CLOUDFLARE_NETS.iter().any(|net| net.contains(&ip))
 }
 
 /// Does the CAA record set allow Let's Encrypt to issue for the name
@@ -183,6 +237,52 @@ pub fn caa_allows_lets_encrypt(caa: &[CaaRecord]) -> bool {
         let issuer = r.value.split(';').next().unwrap_or("").trim();
         issuer.eq_ignore_ascii_case(LETS_ENCRYPT)
     })
+}
+
+/// Every address of the name must be the server's: Let's Encrypt prefers
+/// IPv6, so a stale AAAA at an old host fails issuance although the A
+/// record is right. A server reports one public address, so an address of
+/// the other family is a warning that names it; a different address of the
+/// same family is an error.
+fn points_at(addresses: &[IpAddr], server: IpAddr) -> Finding {
+    let join = |v: &[&IpAddr]| {
+        v.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let others: Vec<&IpAddr> = addresses.iter().filter(|a| **a != server).collect();
+    let same_family: Vec<&IpAddr> = others
+        .iter()
+        .copied()
+        .filter(|a| a.is_ipv4() == server.is_ipv4())
+        .collect();
+    if !addresses.contains(&server) || !same_family.is_empty() {
+        finding(
+            "points_at_server",
+            Level::Error,
+            format!(
+                "points at {}, not only at the server ({server}); certificate issuance will fail until the record is changed",
+                join(&addresses.iter().collect::<Vec<_>>())
+            ),
+        )
+    } else if others.is_empty() {
+        finding(
+            "points_at_server",
+            Level::Ok,
+            format!("points at the server ({server})"),
+        )
+    } else {
+        finding(
+            "points_at_server",
+            Level::Warn,
+            format!(
+                "points at the server ({server}) and also at {}, which the server does not report; \
+                 Let's Encrypt may validate over that address, so remove it unless it is this server",
+                join(&others)
+            ),
+        )
+    }
 }
 
 /// Turn what DNS said into findings. `server_ip` is the public address
@@ -220,19 +320,7 @@ pub fn assess(answers: &DnsAnswers, server_ip: Option<IpAddr>) -> Vec<Finding> {
                     Level::Warn,
                     "the server has not reported its public address yet, so the record cannot be compared",
                 )),
-                Some(ip) if answers.addresses.contains(&ip) => out.push(finding(
-                    "points_at_server",
-                    Level::Ok,
-                    format!("points at the server ({ip})"),
-                )),
-                Some(ip) => out.push(finding(
-                    "points_at_server",
-                    Level::Error,
-                    format!(
-                        "points at {}, not at the server ({ip}); certificate issuance will fail until the record is changed",
-                        answers.addresses.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
-                    ),
-                )),
+                Some(ip) => out.push(points_at(&answers.addresses, ip)),
             }
         } else {
             out.push(finding(
@@ -243,7 +331,13 @@ pub fn assess(answers: &DnsAnswers, server_ip: Option<IpAddr>) -> Vec<Finding> {
             ));
         }
     }
-    if caa_allows_lets_encrypt(&answers.caa) {
+    if let Some(why) = &answers.caa_error {
+        out.push(finding(
+            "caa",
+            Level::Warn,
+            format!("the CAA records could not be checked ({why}); a CA treats a failed CAA lookup as a refusal"),
+        ));
+    } else if caa_allows_lets_encrypt(&answers.caa) {
         out.push(finding(
             "caa",
             Level::Ok,
@@ -282,7 +376,7 @@ mod tests {
         DnsAnswers {
             addresses: addrs.iter().map(|a| ip(a)).collect(),
             caa,
-            error: None,
+            ..DnsAnswers::default()
         }
     }
 
@@ -334,6 +428,46 @@ mod tests {
     fn a_name_that_points_elsewhere_is_an_error() {
         let f = assess(&answers(&["198.51.100.1"], vec![]), Some(ip("203.0.113.9")));
         assert_eq!(level(&f, "points_at_server"), Some(Level::Error));
+    }
+
+    #[test]
+    fn a_stale_aaaa_next_to_the_right_a_record_is_not_all_ok() {
+        let f = assess(
+            &answers(&["203.0.113.9", "2001:db8::1"], vec![]),
+            Some(ip("203.0.113.9")),
+        );
+        assert_eq!(level(&f, "points_at_server"), Some(Level::Warn));
+        let m = &f
+            .iter()
+            .find(|x| x.id == "points_at_server")
+            .unwrap()
+            .message;
+        assert!(m.contains("2001:db8::1"));
+    }
+
+    #[test]
+    fn a_second_address_of_the_same_family_is_an_error() {
+        let f = assess(
+            &answers(&["203.0.113.9", "198.51.100.1"], vec![]),
+            Some(ip("203.0.113.9")),
+        );
+        assert_eq!(level(&f, "points_at_server"), Some(Level::Error));
+    }
+
+    #[test]
+    fn a_failed_caa_lookup_is_not_reported_as_no_record() {
+        let a = DnsAnswers {
+            caa_error: Some("SERVFAIL".into()),
+            ..answers(&["203.0.113.9"], vec![])
+        };
+        let f = assess(&a, Some(ip("203.0.113.9")));
+        assert_eq!(level(&f, "caa"), Some(Level::Warn));
+        assert!(f
+            .iter()
+            .find(|x| x.id == "caa")
+            .unwrap()
+            .message
+            .contains("SERVFAIL"));
     }
 
     #[test]

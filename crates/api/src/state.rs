@@ -81,7 +81,7 @@ impl AppState {
             agent,
             notifier,
             fetcher: Arc::new(crate::follow::HttpFetcher),
-            resolver: Arc::new(crate::dns::SystemResolver),
+            resolver: Arc::new(crate::dns::SystemResolver::default()),
             login_failures: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             agent_polls: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             agent_poll_limit: MAX_AGENT_POLLS,
