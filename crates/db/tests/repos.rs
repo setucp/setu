@@ -131,6 +131,7 @@ fn secret_commands() -> [Command; 3] {
                 password_hash: ROUTE_HASH.to_string(),
             }),
             www_redirect: true,
+            force_reload: false,
         },
     ]
 }

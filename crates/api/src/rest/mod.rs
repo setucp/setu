@@ -173,6 +173,32 @@ pub struct HealthOut {
     pub status: String,
 }
 
+/// The first agent version that decodes the 0.1.7 commands
+/// (`cert_status`, `fetch_system_logs`, route `aliases`, `noindex`,
+/// `force_reload`). An older agent fails to parse a poll that carries an
+/// unknown command, and the command is never redelivered, so the control
+/// plane must not queue one.
+pub const AGENT_0_1_7: &str = "0.1.7";
+
+/// True when `version` (a server's `agent_version`; `None` before its
+/// first heartbeat) is at least `min`. An unparsable version counts as old.
+#[must_use]
+pub fn agent_at_least(version: Option<&str>, min: &str) -> bool {
+    let parse = |v: &str| semver::Version::parse(v.trim_start_matches('v')).ok();
+    match (version.and_then(parse), parse(min)) {
+        (Some(have), Some(want)) => {
+            (have.major, have.minor, have.patch) >= (want.major, want.minor, want.patch)
+        }
+        _ => false,
+    }
+}
+
+/// The error for a command an older agent cannot decode.
+#[must_use]
+pub fn agent_too_old_message(min: &str) -> String {
+    format!("the agent on this server is older than {min}; upgrade it first")
+}
+
 /// Liveness: always 200, no auth, no database.
 #[utoipa::path(get, path = "/healthz", responses((status = 200, body = HealthOut)))]
 pub async fn healthz() -> impl IntoResponse {

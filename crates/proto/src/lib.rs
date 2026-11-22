@@ -189,6 +189,12 @@ pub enum Command {
         /// Absent in commands queued by an older control plane: off.
         #[serde(default)]
         www_redirect: bool,
+        /// Make Caddy reload even when the route is unchanged (the
+        /// certificate retry): the PATCH carries `Cache-Control:
+        /// must-revalidate`. Absent in older control planes: off. Older
+        /// agents ignore it, so the control plane checks the version first.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        force_reload: bool,
     },
     RemoveRoute {
         site_short_id: String,
@@ -221,8 +227,9 @@ pub enum Command {
     },
     Inventory,
     /// Read the certificate Caddy serves for `domain` on this server
-    /// (a local TLS handshake with that server name; read-only). Absent
-    /// in older agents: they refuse it as an unknown command.
+    /// (a local TLS handshake with that server name; read-only). Agents
+    /// older than 0.1.7 cannot decode it (the whole poll fails), so the
+    /// control plane never queues it for one (`agent_at_least`).
     CertStatus {
         site: String,
         domain: String,
@@ -629,6 +636,7 @@ mod tests {
                         password_hash: SECRET.to_string(),
                     }),
                     www_redirect: true,
+                    force_reload: false,
                 },
                 "set_route",
             ),
@@ -917,6 +925,7 @@ mod tests {
             port: 20001,
             basic_auth: None,
             www_redirect: true,
+            force_reload: false,
         };
         assert!(!open.has_secrets());
         assert_eq!(open.redact(), serde_json::to_value(&open).unwrap());
