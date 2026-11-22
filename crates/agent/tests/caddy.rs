@@ -458,3 +458,17 @@ fn alias_routes_redirect_and_serve_hosts_join_the_site_route() {
     )
     .is_err());
 }
+
+#[test]
+fn an_alias_route_is_a_308_to_the_primary_and_is_golden() {
+    use setu_agent::caddy::alias_route_json;
+    let id = "setu-site-abcd1234-alias-0";
+    assert!(valid_route_id(id));
+    let route = alias_route_json(id, "example.test", "old.example.test").expect("route");
+    assert_eq!(
+        serde_json::to_string_pretty(&route).expect("json") + "\n",
+        include_str!("golden/route-setu-site-abcd1234-alias-0.json")
+    );
+    assert!(alias_route_json(id, "example.test", "example.test").is_err());
+    assert!(alias_route_json("setu-site-abcd1234", "example.test", "old.example.test").is_err());
+}
