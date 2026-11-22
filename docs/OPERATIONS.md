@@ -170,6 +170,16 @@ tab. **Check now** on the Apps page checks at once. Sites are never
 updated on their own, and a version already published is never
 replaced by a check (publish by hand to replace it).
 
+## Aliases and noindex
+
+`PUT /api/v1/sites/{id}/aliases` with `{"aliases":[{"host":"old.example.com","mode":"redirect"}]}`
+adds hostnames: `redirect` answers 308 to the site's domain, `serve` makes the
+site answer on the name as well. Point the alias's DNS at the server first;
+Caddy gets its certificate once the name is in a route. `PUT .../noindex` with
+`{"enabled":true}` adds `X-Robots-Tag: noindex, nofollow` and a disallow-all
+`/robots.txt` (use it on staging). Both queue a route update; both are
+rebuilt from the agent's state on reconcile.
+
 ## Changing the TLS mode or the panel host
 
 Run `install-system` again with the new settings; it rewrites
