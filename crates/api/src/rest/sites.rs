@@ -422,7 +422,7 @@ fn host_key(host: &str) -> String {
 /// `localhost.localdomain`, and the hostname of any joined server.
 /// Caddy routes are first-match, so a site claiming one of these names
 /// could take over the panel's route (or the server's own name).
-async fn refuse_reserved_domain(state: &AppState, domain: &str) -> Result<(), AppError> {
+pub(super) async fn refuse_reserved_domain(state: &AppState, domain: &str) -> Result<(), AppError> {
     let domain = host_key(domain);
     let reserved = |what: &str| {
         Err(AppError::validation(format!(

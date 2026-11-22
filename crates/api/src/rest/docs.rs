@@ -9,6 +9,7 @@ use utoipa::OpenApi;
 
 use crate::auth::{require_role, Role, Session};
 
+use super::aliases::{AliasItem, AliasesRequest, AliasesResponse, AliasesSetResponse};
 use super::apps::{
     AppListOut, AppOut, AppSourceOut, AppVersionListOut, AppVersionOut, CheckOut, ManifestErrorOut,
     PromptListOut, PromptOut, PublishRequest, PublishResponse, ValidateRequest, ValidateResponse,
@@ -96,6 +97,8 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::basic_auth::put,
         super::basic_auth::delete,
         super::www_redirect::set,
+        super::aliases::get,
+        super::aliases::put,
         super::backups::reset_get,
         super::backups::reset_put,
         super::backups::reset_delete,
@@ -170,6 +173,10 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         BackupOut,
         BasicAuthGetOut,
         BasicAuthJobResponse,
+        AliasItem,
+        AliasesRequest,
+        AliasesResponse,
+        AliasesSetResponse,
         WwwRedirectRequest,
         WwwRedirectResponse,
         BasicAuthOut,

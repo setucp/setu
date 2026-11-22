@@ -8,7 +8,7 @@
 //! applies.
 
 use setu_common::AppError;
-use setu_proto::{BasicAuth, Command};
+use setu_proto::{Alias, AliasMode, BasicAuth, Command};
 
 use crate::JobCtx;
 
@@ -16,6 +16,7 @@ use crate::JobCtx;
 pub async fn route_command(ctx: &JobCtx, site_id: &str) -> Result<Command, AppError> {
     let site = ctx.db.sites().get(site_id).await?;
     let auth = ctx.db.basic_auths().get(site_id).await?;
+    let aliases = ctx.db.aliases().list(site_id).await?;
     let port = u16::try_from(site.port)
         .map_err(|_| AppError::validation(format!("site {site_id} has an invalid port")))?;
     Ok(Command::SetRoute {
@@ -27,6 +28,17 @@ pub async fn route_command(ctx: &JobCtx, site_id: &str) -> Result<Command, AppEr
             password_hash: a.password_hash,
         }),
         www_redirect: site.www_redirect,
+        aliases: aliases
+            .into_iter()
+            .map(|a| Alias {
+                host: a.host,
+                mode: if a.mode == "serve" {
+                    AliasMode::Serve
+                } else {
+                    AliasMode::Redirect
+                },
+            })
+            .collect(),
     })
 }
 

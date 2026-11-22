@@ -38,6 +38,45 @@ where
     Ok(www)
 }
 
+/// Make the alias routes of `short` match the state: one redirect route
+/// per live `redirect` alias, none left from removed ones. Returns the live
+/// aliases. Callers hold the route lock; the `serve` hosts ride in the site
+/// route itself (see [`serve_hosts`]).
+async fn apply_aliases<H, P, C>(
+    rt: &NativeRuntime<H, P, C>,
+    short: &str,
+) -> anyhow::Result<Vec<setu_proto::Alias>>
+where
+    H: Helper,
+    C: CaddyAdmin,
+{
+    let (live, domain) = rt.state().read(|st| {
+        (
+            st.live_aliases(short),
+            st.sites.get(short).and_then(|r| r.domain.clone()),
+        )
+    });
+    let prefix = format!("{}-alias-", crate::caddy::site_route_id(short)?);
+    let mut wanted = std::collections::BTreeSet::new();
+    if let Some(domain) = &domain {
+        for (n, a) in live
+            .iter()
+            .filter(|a| a.mode == setu_proto::AliasMode::Redirect)
+            .enumerate()
+        {
+            let id = crate::caddy::site_alias_route_id(short, n)?;
+            rt.caddy().upsert_alias_route(&id, domain, &a.host).await?;
+            wanted.insert(id);
+        }
+    }
+    for id in rt.caddy().list_route_ids().await? {
+        if id.starts_with(&prefix) && !wanted.contains(&id) {
+            rt.caddy().remove_route(&id).await?;
+        }
+    }
+    Ok(live)
+}
+
 fn ok(id: &str, output: serde_json::Value, log: &str) -> CommandResult {
     CommandResult {
         id: id.to_string(),
@@ -165,6 +204,7 @@ where
             port,
             basic_auth,
             www_redirect,
+            aliases,
         } => {
             let id = match crate::caddy::site_route_id(site_short_id) {
                 Ok(id) => id,
@@ -180,14 +220,19 @@ where
                     .as_ref()
                     .map(|a| (a.username.clone(), a.password_hash.clone()));
                 r.www_redirect = *www_redirect;
+                r.aliases.clone_from(aliases);
             }) {
                 return err(cmd_id, "set_route failed", e);
             }
+            let serve = rt
+                .state()
+                .read(|st| crate::state::serve_hosts(st, site_short_id));
             if let Err(e) = rt
                 .caddy()
-                .upsert_route_auth(
+                .upsert_route_hosts(
                     &id,
                     domain,
+                    &serve,
                     &upstream,
                     basic_auth
                         .as_ref()
@@ -213,9 +258,13 @@ where
                     Err(e) => return err(cmd_id, "set_route failed", e),
                 }
             }
+            let live = match apply_aliases(rt, site_short_id).await {
+                Ok(l) => l,
+                Err(e) => return err(cmd_id, "set_route failed", e),
+            };
             ok(
                 cmd_id,
-                serde_json::json!({"domain": domain, "route_id": id, "www": www}),
+                serde_json::json!({"domain": domain, "route_id": id, "www": www, "aliases": live.len()}),
                 "set_route ok",
             )
         }
@@ -241,6 +290,25 @@ where
                 .read(|st| st.www_neighbours(site_short_id, domain));
             let removed = match crate::caddy::site_www_route_id(site_short_id) {
                 Ok(www_id) => rt.caddy().remove_route(&www_id).await,
+                Err(e) => Err(e),
+            };
+            let removed = match removed {
+                Ok(()) => {
+                    let prefix = format!("{id}-alias-");
+                    match rt.caddy().list_route_ids().await {
+                        Ok(ids) => {
+                            let mut res = Ok(());
+                            for alias_id in ids.iter().filter(|i| i.starts_with(&prefix)) {
+                                if let Err(e) = rt.caddy().remove_route(alias_id).await {
+                                    res = Err(e);
+                                    break;
+                                }
+                            }
+                            res
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
                 Err(e) => Err(e),
             };
             let removed = match removed {

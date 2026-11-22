@@ -37,6 +37,7 @@ fn state_round_trips_and_caps_results() {
                 db: Some("site_abcd1234".into()),
                 basic_auth: None,
                 www_redirect: true,
+                aliases: vec![],
             }
         })
         .expect("site");
@@ -148,6 +149,7 @@ fn www_host_follows_the_opt_out_the_apex_rule_and_other_sites() {
         domain: Some(domain.to_string()),
         port: 20001,
         www_redirect: true,
+        aliases: vec![],
         ..SiteRecord::default()
     };
     let mut st = State::default();
@@ -183,4 +185,74 @@ fn a_state_record_from_before_0_1_7_has_no_www_redirect() {
     .expect("old state");
     assert!(!st.sites["aaaaaaaa"].www_redirect);
     assert_eq!(st.www_host("aaaaaaaa"), None);
+}
+
+#[test]
+fn live_aliases_skip_the_own_domain_other_sites_names_and_duplicates() {
+    use setu_proto::{Alias, AliasMode};
+    let alias = |h: &str, mode| Alias {
+        host: h.to_string(),
+        mode,
+    };
+    let mut st = State::default();
+    st.sites.insert(
+        "aaaaaaaa".into(),
+        SiteRecord {
+            domain: Some("example.test".into()),
+            port: 1,
+            aliases: vec![
+                alias("example.test", AliasMode::Serve),
+                alias("other.test", AliasMode::Serve),
+                alias("taken.test", AliasMode::Redirect),
+                alias("old.test", AliasMode::Redirect),
+                alias("old.test", AliasMode::Serve),
+                alias("bad host", AliasMode::Serve),
+            ],
+            ..SiteRecord::default()
+        },
+    );
+    st.sites.insert(
+        "bbbbbbbb".into(),
+        SiteRecord {
+            domain: Some("other.test".into()),
+            port: 2,
+            aliases: vec![alias("taken.test", AliasMode::Serve)],
+            ..SiteRecord::default()
+        },
+    );
+    let live: Vec<String> = st
+        .live_aliases("aaaaaaaa")
+        .into_iter()
+        .map(|a| a.host)
+        .collect();
+    assert_eq!(live, vec!["old.test"]);
+}
+
+#[test]
+fn an_explicit_alias_replaces_the_automatic_www_redirect() {
+    use setu_proto::{Alias, AliasMode};
+    let mut st = State::default();
+    st.sites.insert(
+        "aaaaaaaa".into(),
+        SiteRecord {
+            domain: Some("example.test".into()),
+            port: 1,
+            www_redirect: true,
+            ..SiteRecord::default()
+        },
+    );
+    assert_eq!(st.www_host("aaaaaaaa").as_deref(), Some("www.example.test"));
+    st.sites.get_mut("aaaaaaaa").unwrap().aliases = vec![Alias {
+        host: "www.example.test".into(),
+        mode: AliasMode::Serve,
+    }];
+    assert_eq!(st.www_host("aaaaaaaa"), None);
+}
+
+#[test]
+fn a_state_record_from_before_aliases_has_none() {
+    let st: State =
+        serde_json::from_str(r#"{"sites":{"aaaaaaaa":{"domain":"example.test","port":1}}}"#)
+            .expect("parse");
+    assert_eq!(st.sites["aaaaaaaa"].aliases, vec![]);
 }

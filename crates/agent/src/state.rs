@@ -39,6 +39,10 @@ pub struct SiteRecord {
     /// upgrade changes no site until its setting is sent.
     #[serde(default)]
     pub www_redirect: bool,
+    /// Extra hostnames recorded by `SetRoute` (none for a state file from
+    /// before 0.1.7).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<setu_proto::Alias>,
     #[serde(default)]
     pub version: String,
     #[serde(default)]
@@ -58,6 +62,7 @@ impl std::fmt::Debug for SiteRecord {
                     .map(|(user, _)| (user, "[redacted]")),
             )
             .field("www_redirect", &self.www_redirect)
+            .field("aliases", &self.aliases)
             .field("version", &self.version)
             .field("db", &self.db)
             .finish()
@@ -109,11 +114,39 @@ impl State {
             return None;
         }
         let www = crate::caddy::www_name(site.domain.as_deref()?)?;
+        // An explicit alias of that name replaces the automatic redirect.
+        if site.aliases.iter().any(|a| a.host == www) {
+            return None;
+        }
         let taken = self
             .sites
             .iter()
             .any(|(other, r)| other != short && r.domain.as_deref() == Some(www.as_str()));
         (!taken).then_some(www)
+    }
+
+    /// The aliases of `short` that may be routed: not the site's own
+    /// domain, not a name another site serves or aliases (first-match
+    /// routing would let one site shadow the other), each host once.
+    pub fn live_aliases(&self, short: &str) -> Vec<setu_proto::Alias> {
+        let Some(site) = self.sites.get(short) else {
+            return Vec::new();
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        site.aliases
+            .iter()
+            .filter(|a| crate::caddy::valid_domain(&a.host))
+            .filter(|a| site.domain.as_deref() != Some(a.host.as_str()))
+            .filter(|a| {
+                !self.sites.iter().any(|(other, r)| {
+                    other != short
+                        && (r.domain.as_deref() == Some(a.host.as_str())
+                            || r.aliases.iter().any(|o| o.host == a.host))
+                })
+            })
+            .filter(|a| seen.insert(a.host.clone()))
+            .cloned()
+            .collect()
     }
 
     /// The other sites whose `www.` name is `domain`: their redirect
@@ -270,6 +303,17 @@ impl StateStore {
                 .collect()
         })
     }
+}
+
+/// The hostnames of `short`'s live `serve` aliases (the site route answers
+/// on them too).
+pub fn serve_hosts(state: &State, short: &str) -> Vec<String> {
+    state
+        .live_aliases(short)
+        .into_iter()
+        .filter(|a| a.mode == setu_proto::AliasMode::Serve)
+        .map(|a| a.host)
+        .collect()
 }
 
 #[cfg(test)]

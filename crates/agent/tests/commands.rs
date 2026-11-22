@@ -229,6 +229,7 @@ async fn every_command_kind_is_handled() {
             port: servers.health_port,
             basic_auth: None,
             www_redirect: true,
+            aliases: vec![],
         },
         Command::Backup {
             site: s(),
@@ -497,6 +498,7 @@ async fn route_commands_key_off_the_site_short_id() {
         port: 20001,
         basic_auth: None,
         www_redirect: true,
+        aliases: vec![],
     };
     let r = setu_agent::execute("c1", &set, &rt).await;
     assert!(r.ok, "{:?}", r.error);
@@ -519,6 +521,7 @@ async fn route_commands_key_off_the_site_short_id() {
         port: 20002,
         basic_auth: None,
         www_redirect: true,
+        aliases: vec![],
     };
     assert!(!setu_agent::execute("c2", &empty_short, &rt).await.ok);
 
@@ -1085,6 +1088,7 @@ async fn a_site_on_the_www_name_displaces_and_restores_the_apex_redirect() {
         port,
         basic_auth: None,
         www_redirect: true,
+        aliases: vec![],
     };
     let has_www = || {
         rt.caddy()

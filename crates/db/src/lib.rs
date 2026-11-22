@@ -12,12 +12,12 @@ mod repo;
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 pub use repo::{
-    AgentCommand, Allocation, App, AppSource, AppSources, AppVersion, Apps, Audit, AuditEntry,
-    Backup, Backups, BasicAuths, Commands, CreateError, HeartbeatInput, HeartbeatOutcome, Job,
-    Jobs, JoinError, JoinInput, LatestMetric, Metrics, NewPlan, NewSite, Operator, Operators, Plan,
-    Plans, Resets, Server, ServerStatus, Servers, Session, Sessions, Settings, Site, SiteBasicAuth,
-    SiteReset, Sites, WaitError, NOTIFY_CHANNEL, ROUTE_JOB, SELF_BACKUP, SETUP_TOKEN_HASH,
-    TLS_INTERNAL,
+    AgentCommand, Aliases, Allocation, App, AppSource, AppSources, AppVersion, Apps, Audit,
+    AuditEntry, Backup, Backups, BasicAuths, Commands, CreateError, HeartbeatInput,
+    HeartbeatOutcome, Job, Jobs, JoinError, JoinInput, LatestMetric, Metrics, NewPlan, NewSite,
+    Operator, Operators, Plan, Plans, Resets, Server, ServerStatus, Servers, Session, Sessions,
+    Settings, Site, SiteAlias, SiteBasicAuth, SiteReset, Sites, WaitError, MAX_ALIASES,
+    NOTIFY_CHANNEL, ROUTE_JOB, SELF_BACKUP, SETUP_TOKEN_HASH, TLS_INTERNAL,
 };
 pub use setu_common::{AppError, ErrorCode};
 
@@ -116,6 +116,10 @@ impl Db {
 
     pub fn app_sources(&self) -> AppSources<'_> {
         AppSources::new(&self.pool)
+    }
+
+    pub fn aliases(&self) -> Aliases<'_> {
+        Aliases::new(&self.pool)
     }
 
     pub fn basic_auths(&self) -> BasicAuths<'_> {
