@@ -1460,6 +1460,7 @@ async fn aliases_clash_with_a_www_name_in_both_directions_and_cascade() {
     // deleting the site removes its aliases
     db.sites().delete(&b.id).await.unwrap();
     assert!(db.aliases().list(&b.id).await.unwrap().is_empty());
+}
 
 #[tokio::test]
 async fn a_dead_pool_reports_its_cause_and_a_healthy_one_clears_it() {
