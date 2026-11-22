@@ -878,6 +878,87 @@
         }
       }
     },
+    "/api/v1/domain-check": {
+      "get": {
+        "tags": [
+          "super::domain_check"
+        ],
+        "summary": "Check where a domain points before a site is created (operator and\nabove). A bad domain is a 400, an unknown server a 404; a name that\ndoes not resolve is a normal 200 with an error finding.",
+        "operationId": "check",
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "query",
+            "description": "The site's domain, as typed in the form.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "server_id",
+            "in": "query",
+            "description": "The server the site would be provisioned on.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainCheckOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/jobs": {
       "get": {
         "tags": [
@@ -5089,6 +5170,39 @@
           }
         }
       },
+      "DomainCheckOut": {
+        "type": "object",
+        "description": "Result of the pre-check.",
+        "required": [
+          "domain",
+          "findings",
+          "ok"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string",
+            "description": "The normalised domain that was checked."
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            },
+            "description": "The findings, in a fixed order."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "True when no finding is an error (warnings do not block)."
+          },
+          "server_ip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The server's public address, when its agent has reported one."
+          }
+        }
+      },
       "EnvEntryOut": {
         "type": "object",
         "required": [
@@ -5234,6 +5348,27 @@
             "type": "boolean"
           },
           "value": {
+            "type": "string"
+          }
+        }
+      },
+      "Finding": {
+        "type": "object",
+        "description": "One finding of the pre-check.",
+        "required": [
+          "id",
+          "level",
+          "message"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable id: `dns`, `points_at_server`, `proxy` or `caa`."
+          },
+          "level": {
+            "$ref": "#/components/schemas/Level"
+          },
+          "message": {
             "type": "string"
           }
         }
@@ -5467,6 +5602,15 @@
             "type": "string"
           }
         }
+      },
+      "Level": {
+        "type": "string",
+        "description": "How serious one finding is.",
+        "enum": [
+          "ok",
+          "warn",
+          "error"
+        ]
       },
       "Limits": {
         "type": "object",

@@ -11,6 +11,7 @@
 
 pub mod auth;
 pub mod cli;
+pub mod dns;
 pub mod embed;
 pub mod follow;
 pub mod listen;

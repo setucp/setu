@@ -15,6 +15,12 @@ matching the tag.
   left. `POST …/certificate/retry` (operator) queues a route update so
   Caddy attempts issuance at once, without a restart. Nothing is stored.
   The agent must be 0.1.7 too; an older agent answers `unknown`.
+- **Domain pre-check.** `GET /api/v1/domain-check?domain=…&server_id=…`
+  (operator and above) reads DNS before a site is provisioned and says
+  whether Caddy can get a Let's Encrypt certificate: the name resolves,
+  its A/AAAA records are the server's public address, Cloudflare's proxy
+  is flagged (a warning, not a failure) and a CAA record that leaves out
+  `letsencrypt.org` is an error. It stores nothing and queues no job.
 - **Per-site HTTP basic auth.** `PUT /api/v1/sites/{id}/basic-auth` with a
   user name and password puts a login in front of one site; `DELETE`
   removes it and `GET` shows the user name. Caddy enforces it on the

@@ -43,6 +43,8 @@ pub struct TestOptions {
     pub config_listen: Option<Listen>,
     /// The manifest fetcher (default: the guarded HTTP fetch).
     pub fetcher: Option<Arc<dyn crate::follow::ManifestFetcher>>,
+    /// The DNS resolver (default: the system's).
+    pub resolver: Option<Arc<dyn crate::dns::DomainResolver>>,
 }
 
 /// A running control plane for integration tests.
@@ -161,6 +163,9 @@ impl TestServer {
         }
         if let Some(fetcher) = opts.fetcher {
             state = state.with_fetcher(fetcher);
+        }
+        if let Some(resolver) = opts.resolver {
+            state = state.with_resolver(resolver);
         }
         let app = crate::rest::router(state.clone());
         let serve_app = app.clone();
