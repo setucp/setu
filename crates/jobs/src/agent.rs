@@ -169,6 +169,8 @@ pub mod testing {
 
     #[derive(Default)]
     struct FakeInner {
+        /// `SetRoute` answers ok without echoing `aliases` and `noindex`.
+        old_route_agent: bool,
         transcript: Vec<String>,
         /// Serialized commands, in call order (for [`FakeAgent::saw_secret`]).
         commands: Vec<serde_json::Value>,
@@ -270,6 +272,12 @@ pub mod testing {
         /// Most calls of `kind` ever in flight at once.
         pub fn max_concurrent(&self, kind: &str) -> usize {
             self.lock().max_in_flight.get(kind).copied().unwrap_or(0)
+        }
+
+        /// Behave like an agent older than 0.1.7: `SetRoute` answers ok but
+        /// does not echo `aliases` and `noindex`.
+        pub fn set_old_route_agent(&self, old: bool) {
+            self.lock().old_route_agent = old;
         }
 
         /// The nth call of `kind` (1-based) returns `ok: false`.
@@ -415,6 +423,13 @@ pub mod testing {
                     ..Default::default()
                 })
                 .unwrap_or_default(),
+                // Like the 0.1.7 agent: echoes what it applied. An agent that
+                // predates aliases and noindex (see `old_route_agent`) does not.
+                Command::SetRoute {
+                    aliases, noindex, ..
+                } if !inner.old_route_agent => {
+                    serde_json::json!({"aliases": aliases.len(), "noindex": noindex})
+                }
                 _ => serde_json::json!({}),
             };
             let reply = CommandResult {

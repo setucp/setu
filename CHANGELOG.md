@@ -7,6 +7,18 @@ matching the tag.
 
 ### Added
 
+- **Site aliases.** `PUT /api/v1/sites/{id}/aliases` takes extra hostnames
+  for a site (at most 10), each `redirect` (308 to the site's domain,
+  keeping the path) or `serve` (the site answers on it too); `GET` lists
+  them. A host that is another site's domain or alias is refused with 409.
+  An alias that names the site's `www.` host replaces the automatic `www`
+  redirect for that name. Stored in a new table with a `route_update` job.
+- **Per-site noindex.** `PUT /api/v1/sites/{id}/noindex` with
+  `{"enabled": true}` makes the site's route send `X-Robots-Tag: noindex,
+  nofollow` on every response and answer `/robots.txt` with a disallow-all
+  file (before basic auth and the app, which cannot override it). Meant
+  for staging sites; off by default, so an upgrade changes no site. `GET`
+  shows the option. A change is stored with a `route_update` job.
 - **Domain pre-check.** `GET /api/v1/domain-check?domain=…&server_id=…`
   (operator and above) reads DNS before a site is provisioned and says
   whether Caddy can get a Let's Encrypt certificate: the name resolves,

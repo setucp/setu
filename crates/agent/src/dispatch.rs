@@ -38,6 +38,86 @@ where
     Ok(www)
 }
 
+/// Make the alias routes of `short` match the state: one redirect route
+/// per live `redirect` alias, none left from removed ones. Returns the live
+/// aliases. Callers hold the route lock; the `serve` hosts ride in the site
+/// route itself (see [`serve_hosts`]).
+async fn apply_aliases<H, P, C>(
+    rt: &NativeRuntime<H, P, C>,
+    short: &str,
+) -> anyhow::Result<Vec<setu_proto::Alias>>
+where
+    H: Helper,
+    C: CaddyAdmin,
+{
+    let (live, domain) = rt.state().read(|st| {
+        (
+            st.live_aliases(short),
+            st.sites.get(short).and_then(|r| r.domain.clone()),
+        )
+    });
+    let prefix = format!("{}-alias-", crate::caddy::site_route_id(short)?);
+    let mut wanted = std::collections::BTreeSet::new();
+    if let Some(domain) = &domain {
+        for (n, a) in live
+            .iter()
+            .filter(|a| a.mode == setu_proto::AliasMode::Redirect)
+            .enumerate()
+        {
+            let id = crate::caddy::site_alias_route_id(short, n)?;
+            rt.caddy().upsert_alias_route(&id, domain, &a.host).await?;
+            wanted.insert(id);
+        }
+    }
+    for id in rt.caddy().list_route_ids().await? {
+        if id.starts_with(&prefix) && !wanted.contains(&id) {
+            rt.caddy().remove_route(&id).await?;
+        }
+    }
+    Ok(live)
+}
+
+/// Re-apply everything of `short` that depends on who holds a hostname:
+/// its site route (the `serve` hosts), `www.` redirect and alias routes.
+/// Used for the neighbours of a `SetRoute`/`RemoveRoute`, so a host that
+/// changes hands (an alias moved between sites, a name freed) is served by
+/// its new holder without waiting for a reconcile. Callers hold the route
+/// lock.
+async fn reapply_site<H, P, C>(rt: &NativeRuntime<H, P, C>, short: &str) -> anyhow::Result<()>
+where
+    H: Helper,
+    C: CaddyAdmin,
+{
+    let Some((domain, port, basic_auth, noindex, serve)) = rt.state().read(|st| {
+        let r = st.sites.get(short)?;
+        Some((
+            r.domain.clone()?,
+            r.port,
+            r.basic_auth.clone(),
+            r.noindex,
+            crate::state::serve_hosts(st, short),
+        ))
+    }) else {
+        return Ok(());
+    };
+    if port != 0 {
+        let id = crate::caddy::site_route_id(short)?;
+        rt.caddy()
+            .upsert_route_hosts(
+                &id,
+                &domain,
+                &serve,
+                &crate::caddy::site_upstream(port),
+                basic_auth.as_ref().map(|(u, h)| (u.as_str(), h.as_str())),
+                noindex,
+            )
+            .await?;
+    }
+    apply_www(rt, short).await?;
+    apply_aliases(rt, short).await?;
+    Ok(())
+}
+
 fn ok(id: &str, output: serde_json::Value, log: &str) -> CommandResult {
     CommandResult {
         id: id.to_string(),
@@ -165,6 +245,8 @@ where
             port,
             basic_auth,
             www_redirect,
+            aliases,
+            noindex,
         } => {
             let id = match crate::caddy::site_route_id(site_short_id) {
                 Ok(id) => id,
@@ -172,6 +254,15 @@ where
             };
             let upstream = crate::caddy::site_upstream(*port);
             let _routes = rt.route_lock().lock().await;
+            // Hosts this site held or now claims: other sites' routes that
+            // depend on them are re-applied below.
+            let mut names = vec![domain.clone()];
+            names.extend(aliases.iter().map(|a| a.host.clone()));
+            rt.state().read(|st| {
+                if let Some(r) = st.sites.get(site_short_id) {
+                    names.extend(r.aliases.iter().map(|a| a.host.clone()));
+                }
+            });
             // Recorded first: reconcile rebuilds the route from state.
             if let Err(e) = rt.update_state(site_short_id, |r| {
                 r.domain = Some(domain.clone());
@@ -180,18 +271,25 @@ where
                     .as_ref()
                     .map(|a| (a.username.clone(), a.password_hash.clone()));
                 r.www_redirect = *www_redirect;
+                r.aliases.clone_from(aliases);
+                r.noindex = *noindex;
             }) {
                 return err(cmd_id, "set_route failed", e);
             }
+            let serve = rt
+                .state()
+                .read(|st| crate::state::serve_hosts(st, site_short_id));
             if let Err(e) = rt
                 .caddy()
-                .upsert_route_auth(
+                .upsert_route_hosts(
                     &id,
                     domain,
+                    &serve,
                     &upstream,
                     basic_auth
                         .as_ref()
                         .map(|a| (a.username.as_str(), a.password_hash.as_str())),
+                    *noindex,
                 )
                 .await
             {
@@ -200,22 +298,29 @@ where
             // The `www.` name of an apex domain redirects to it; opting out,
             // a domain that has none, or another site serving that name
             // removes a redirect left from before.
-            let mut touched = vec![site_short_id.clone()];
-            touched.extend(
-                rt.state()
-                    .read(|st| st.www_neighbours(site_short_id, domain)),
-            );
-            let mut www = None;
-            for short in &touched {
-                match apply_www(rt, short).await {
-                    Ok(w) if short == site_short_id => www = w,
-                    Ok(_) => {}
-                    Err(e) => return err(cmd_id, "set_route failed", e),
+            let www = match apply_www(rt, site_short_id).await {
+                Ok(w) => w,
+                Err(e) => return err(cmd_id, "set_route failed", e),
+            };
+            let live = match apply_aliases(rt, site_short_id).await {
+                Ok(l) => l,
+                Err(e) => return err(cmd_id, "set_route failed", e),
+            };
+            let mut neighbours = rt.state().read(|st| {
+                let mut n = st.www_neighbours(site_short_id, domain);
+                n.extend(st.host_neighbours(site_short_id, &names));
+                n
+            });
+            neighbours.sort();
+            neighbours.dedup();
+            for short in &neighbours {
+                if let Err(e) = reapply_site(rt, short).await {
+                    return err(cmd_id, "set_route failed", e);
                 }
             }
             ok(
                 cmd_id,
-                serde_json::json!({"domain": domain, "route_id": id, "www": www}),
+                serde_json::json!({"domain": domain, "route_id": id, "www": www, "aliases": live.len(), "noindex": noindex}),
                 "set_route ok",
             )
         }
@@ -229,18 +334,51 @@ where
             };
             let _routes = rt.route_lock().lock().await;
             let known = rt.state().read(|st| st.sites.contains_key(site_short_id));
+            // The names this site held (domain and aliases) are free again.
+            let mut names = vec![domain.clone()];
+            rt.state().read(|st| {
+                if let Some(r) = st.sites.get(site_short_id) {
+                    names.extend(r.aliases.iter().map(|a| a.host.clone()));
+                }
+            });
             if known {
-                if let Err(e) = rt.update_state(site_short_id, |r| r.domain = None) {
+                if let Err(e) = rt.update_state(site_short_id, |r| {
+                    r.domain = None;
+                    r.aliases.clear();
+                }) {
                     return err(cmd_id, "remove_route failed", e);
                 }
             }
             // The name this site served is free again: a neighbour's
             // `www.` redirect may take it.
-            let neighbours = rt
-                .state()
-                .read(|st| st.www_neighbours(site_short_id, domain));
+            let mut neighbours = rt.state().read(|st| {
+                let mut n = st.www_neighbours(site_short_id, domain);
+                n.extend(st.host_neighbours(site_short_id, &names));
+                n
+            });
+            neighbours.sort();
+            neighbours.dedup();
             let removed = match crate::caddy::site_www_route_id(site_short_id) {
                 Ok(www_id) => rt.caddy().remove_route(&www_id).await,
+                Err(e) => Err(e),
+            };
+            let removed = match removed {
+                Ok(()) => {
+                    let prefix = format!("{id}-alias-");
+                    match rt.caddy().list_route_ids().await {
+                        Ok(ids) => {
+                            let mut res = Ok(());
+                            for alias_id in ids.iter().filter(|i| i.starts_with(&prefix)) {
+                                if let Err(e) = rt.caddy().remove_route(alias_id).await {
+                                    res = Err(e);
+                                    break;
+                                }
+                            }
+                            res
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
                 Err(e) => Err(e),
             };
             let removed = match removed {
@@ -251,7 +389,7 @@ where
                 Ok(()) => {
                     let mut res = Ok(());
                     for short in &neighbours {
-                        if let Err(e) = apply_www(rt, short).await {
+                        if let Err(e) = reapply_site(rt, short).await {
                             res = Err(e);
                             break;
                         }

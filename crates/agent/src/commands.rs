@@ -363,6 +363,8 @@ mod tests {
                 password_hash: "$2b$12$hashvalue".into(),
             }),
             www_redirect: true,
+            aliases: vec![],
+            noindex: false,
         };
         let r = redact_result(
             CommandResult {
