@@ -9,6 +9,7 @@ import {
 } from "@/lib/api";
 import { formatMb } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { DomainCheck } from "./DomainCheck";
 import { ErrorText } from "./ErrorText";
 import { PageHeader } from "./PageHeader";
 import { Alert } from "./ui/alert";
@@ -132,6 +133,10 @@ export function NewSiteWizard({ onCreated }: { onCreated?: (jobId: string) => vo
   const plan = plans.data?.find((p) => p.id === planId);
   const server = servers.data?.find((s) => s.id === serverId);
   const domainOk = DOMAIN_RE.test(domain.trim());
+  // The pre-check needs the server the site lands on: the chosen one, or
+  // the only one there is when placement is automatic.
+  const checkServerId =
+    serverId !== "" ? serverId : servers.data?.length === 1 ? (servers.data[0]?.id ?? null) : null;
 
   function clear(field: FieldName) {
     setErrors((prev) => (prev[field] === undefined ? prev : { ...prev, [field]: undefined }));
@@ -309,6 +314,7 @@ export function NewSiteWizard({ onCreated }: { onCreated?: (jobId: string) => vo
                   />
                 </Field>
               </div>
+              <DomainCheck domain={domainOk ? domain.trim() : null} serverId={checkServerId} />
             </Step>
 
             <Step

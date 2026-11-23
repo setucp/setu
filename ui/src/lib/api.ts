@@ -257,6 +257,19 @@ export function useSetBasicAuth(siteId: string) {
   });
 }
 
+/**
+ * The DNS pre-check for a domain on a server. Disabled until both are known
+ * (pass `null`); a result stays fresh for 30 s, and "Check again" refetches.
+ */
+export function useDomainCheck(domain: string | null, serverId: string | null) {
+  return useQuery({
+    queryKey: ["domain-check", domain, serverId],
+    queryFn: () => api.domainCheck(domain ?? "", serverId ?? ""),
+    enabled: domain !== null && serverId !== null,
+    staleTime: 30_000,
+  });
+}
+
 export function useCertificate(siteId: string) {
   return useQuery({
     queryKey: ["sites", siteId, "certificate"],

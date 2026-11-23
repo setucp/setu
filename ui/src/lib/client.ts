@@ -34,6 +34,9 @@ export type SystemUnit = components["schemas"]["SystemUnit"];
 export type SiteJobResponse = components["schemas"]["SiteJobResponse"];
 export type SetupStatus = components["schemas"]["SetupStatusOut"];
 export type LocalServerResponse = components["schemas"]["LocalServerResponse"];
+export type DomainCheck = components["schemas"]["DomainCheckOut"];
+export type DomainFinding = components["schemas"]["Finding"];
+export type FindingLevel = components["schemas"]["Level"];
 
 export interface PlanLimits {
   memory_mb?: number;
@@ -325,6 +328,15 @@ export const api = {
     return request(`/api/v1/sites/${encodeURIComponent(siteId)}/basic-auth`, {
       method: "DELETE",
     });
+  },
+
+  /**
+   * DNS pre-check before a site is created: does `domain` resolve, point at
+   * the server, sit behind a proxy, allow Let's Encrypt (CAA)? Reads DNS only.
+   */
+  domainCheck(domain: string, serverId: string): Promise<DomainCheck> {
+    const q = new URLSearchParams({ domain, server_id: serverId });
+    return request(`/api/v1/domain-check?${q.toString()}`);
   },
 
   /** The certificate Caddy serves for the site's domain, read by the agent now. */
