@@ -113,7 +113,14 @@ time; if the panel was down then, as soon as it is back) into
 `/var/lib/setu/backups/setu/setu-<UTC time>.dump`, keeping the newest
 seven. Settings → Panel shows the last successful one; a failed attempt
 is shown there too and retried hourly. These copies live on the same box:
-still copy them, and `setu.toml`, off it.
+still copy them, and `setu.toml`, off it. One backup runs at a time
+(`backups/setu/.lock`): `setu backup` during the nightly dump fails with
+"another backup is running"; run it again afterwards.
+
+Keep disk headroom on the host: when the disk fills, Postgres can panic
+and take the panel down with it. The control plane then answers `/readyz`
+with 503 and `database: down` and recovers by itself (or restarts itself
+if its pool is stuck) once Postgres accepts connections again.
 
 ## Restoring the control plane
 

@@ -18,6 +18,8 @@ pub struct SelfBackupOut {
     pub last_attempt_at: Option<chrono::DateTime<chrono::Utc>>,
     /// One line, no secrets (`pg_dump failed: exit status: 1`).
     pub last_error: Option<String>,
+    /// A database outage that cost a backup; a later successful dump keeps it.
+    pub last_outage: Option<String>,
     /// Where dumps are written (`<data_dir>/backups/setu`).
     pub dir: String,
 }
@@ -40,6 +42,7 @@ pub async fn backup_status(
         size_bytes: rec.size_bytes,
         last_attempt_at: rec.last_attempt_at,
         last_error: rec.last_error,
+        last_outage: rec.last_outage,
         dir: crate::self_backup::backup_dir(&state.config.data_dir)
             .display()
             .to_string(),

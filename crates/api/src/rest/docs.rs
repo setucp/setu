@@ -22,6 +22,7 @@ use super::basic_auth::{
     RouteStatus,
 };
 use super::certificate::{CertState, CertificateOut};
+use super::domain_check::DomainCheckOut;
 use super::jobs::{AuditEntryOut, AuditListOut, AuditQuery, JobListOut, JobsQuery};
 use super::operators::{CreateOperatorRequest, OperatorListOut, SetPasswordRequest};
 use super::panel::SelfBackupOut;
@@ -96,6 +97,7 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::backups::restore,
         super::certificate::get,
         super::certificate::retry,
+        super::domain_check::check,
         super::basic_auth::get,
         super::basic_auth::put,
         super::basic_auth::delete,
@@ -120,6 +122,9 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         HealthOut,
         CertificateOut,
         CertState,
+        DomainCheckOut,
+        crate::dns::Finding,
+        crate::dns::Level,
         ReadyOut,
         ErrorBody,
         ErrorDetail,
