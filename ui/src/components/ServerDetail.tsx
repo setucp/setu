@@ -7,6 +7,7 @@ import { AppLink } from "./AppLink";
 import { ErrorText } from "./ErrorText";
 import { PageHeader } from "./PageHeader";
 import { RelativeTime } from "./RelativeTime";
+import { ServerLogs } from "./ServerLogs";
 import { CapacityBar } from "./ServersTable";
 import { StatCard } from "./StatCard";
 import { StatusBadge, StatusDot } from "./StatusBadge";
@@ -24,7 +25,8 @@ function describeValue(value: unknown): string {
 /**
  * Server detail: heartbeat info, capacity, the sites placed on it, and a
  * cordon toggle (a cordoned server keeps its sites but gets no new ones),
- * confirmed with the server's name either way.
+ * confirmed with the server's name either way, and the journal of Caddy and
+ * the agent on that host.
  */
 export function ServerDetail({ server, sites }: { server: Server; sites: Site[] }) {
   const owned = sites.filter((s) => s.server_id === server.id);
@@ -192,6 +194,8 @@ export function ServerDetail({ server, sites }: { server: Server; sites: Site[] 
           </CardContent>
         </Card>
       </div>
+
+      <ServerLogs serverId={server.id} serverName={server.name} />
     </div>
   );
 }

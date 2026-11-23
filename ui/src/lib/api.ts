@@ -257,6 +257,26 @@ export function useSetBasicAuth(siteId: string) {
   });
 }
 
+export function useCertificate(siteId: string) {
+  return useQuery({
+    queryKey: ["sites", siteId, "certificate"],
+    queryFn: () => api.getCertificate(siteId),
+    // Each read asks the agent; a minute old is fresh enough for a page view.
+    staleTime: 60_000,
+  });
+}
+
+/** Queues the route job that makes Caddy retry; the caller follows the job. */
+export function useRetryCertificate(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.retryCertificate(siteId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
 export function useBackups(siteId: string) {
   return useQuery({
     queryKey: ["sites", siteId, "backups"],

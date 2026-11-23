@@ -1,6 +1,7 @@
 import { SkeletonRows } from "@/components/ui/skeleton";
 import { ErrorText } from "@/components/ErrorText";
 import { createFileRoute } from "@tanstack/react-router";
+import { SiteCertificate } from "@/components/SiteCertificate";
 import { SiteOverview } from "@/components/SiteOverview";
 import { useSite } from "@/lib/api";
 import { ApiError } from "@/lib/client";
@@ -19,5 +20,5 @@ function SiteOverviewTab() {
   if (site.data === undefined) {
     return <SkeletonRows rows={3} />;
   }
-  return <SiteOverview site={site.data} />;
+  return <SiteOverview site={site.data} aside={<SiteCertificate site={site.data} />} />;
 }

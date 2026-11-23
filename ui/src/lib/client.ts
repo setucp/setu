@@ -27,6 +27,10 @@ export type Backup = components["schemas"]["BackupOut"];
 export type ManifestError = components["schemas"]["ManifestErrorOut"];
 export type ValidateResponse = components["schemas"]["ValidateResponse"];
 export type CreateServerResponse = components["schemas"]["CreateServerResponse"];
+export type Certificate = components["schemas"]["CertificateOut"];
+export type CertState = components["schemas"]["CertState"];
+export type SystemLogs = components["schemas"]["SystemLogsOut"];
+export type SystemUnit = components["schemas"]["SystemUnit"];
 export type SiteJobResponse = components["schemas"]["SiteJobResponse"];
 export type SetupStatus = components["schemas"]["SetupStatusOut"];
 export type LocalServerResponse = components["schemas"]["LocalServerResponse"];
@@ -205,6 +209,16 @@ export const api = {
     return request(`/api/v1/servers/${encodeURIComponent(id)}`);
   },
 
+  /**
+   * One page of a host service's journal (`caddy` or `agent`). Pass the
+   * previous page's `cursor` to read only what came after it.
+   */
+  serverLogs(id: string, unit: SystemUnit, cursor: string | null): Promise<SystemLogs> {
+    const q = new URLSearchParams({ unit });
+    if (cursor !== null) q.set("cursor", cursor);
+    return request(`/api/v1/servers/${encodeURIComponent(id)}/logs?${q.toString()}`);
+  },
+
   createServer(name: string): Promise<CreateServerResponse> {
     return request("/api/v1/servers", {
       method: "POST",
@@ -310,6 +324,18 @@ export const api = {
   deleteBasicAuth(siteId: string): Promise<BasicAuthJobResponse> {
     return request(`/api/v1/sites/${encodeURIComponent(siteId)}/basic-auth`, {
       method: "DELETE",
+    });
+  },
+
+  /** The certificate Caddy serves for the site's domain, read by the agent now. */
+  getCertificate(siteId: string): Promise<Certificate> {
+    return request(`/api/v1/sites/${encodeURIComponent(siteId)}/certificate`);
+  },
+
+  /** Make Caddy try to get the site's certificate now; a route job starts. */
+  retryCertificate(siteId: string): Promise<Job> {
+    return request(`/api/v1/sites/${encodeURIComponent(siteId)}/certificate/retry`, {
+      method: "POST",
     });
   },
 

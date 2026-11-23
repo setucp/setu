@@ -330,6 +330,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/domain-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check where a domain points before a site is created (operator and
+         *     above). A bad domain is a 400, an unknown server a 404; a name that
+         *     does not resolve is a normal 200 with an error finding.
+         */
+        get: operations["check"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs": {
         parameters: {
             query?: never;
@@ -578,6 +599,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/servers/{id}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Journal of a service on the server (operator and above): `unit` is
+         *     `caddy` or `agent`. Poll with the returned `cursor` for new lines.
+         *     400 for another unit or a malformed cursor, 502 when the agent does
+         *     not answer or cannot read the journal.
+         */
+        get: operations["logs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/servers/{id}/rotate-token": {
         parameters: {
             query?: never;
@@ -778,6 +821,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sites/{id}/certificate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The certificate Caddy serves for the site's domain (viewer and above). */
+        get: operations["get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sites/{id}/certificate/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Make Caddy try to get the certificate now (operator and above): queues
+         *     a `route_update` job that rewrites the site's route and forces Caddy to
+         *     reload it. 409 when the server's agent is older than 0.1.7. 409 when the site
+         *     is not running or stopped, or has an active job.
+         */
+        post: operations["retry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sites/{id}/env": {
         parameters: {
             query?: never;
@@ -972,6 +1054,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sites/{id}/www-redirect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Turn the `www.` redirect on or off (operator and above); queues a route
+         *     update. 409 (and nothing stored) when the site has an active job or is
+         *     not running or stopped.
+         */
+        put: operations["set"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -996,7 +1099,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Readiness: 200 when `SELECT 1` succeeds, 503 otherwise. */
+        /**
+         * Readiness: 200 when `SELECT 1` succeeds, 503 with `database: down` and
+         *     the cause otherwise (a pool that stopped recovering shows here, #16).
+         */
         get: operations["readyz"];
         put?: never;
         post?: never;
@@ -1139,6 +1245,33 @@ export interface components {
             url: string;
             version: string;
         };
+        /**
+         * @description Where the certificate stands.
+         * @enum {string}
+         */
+        CertState: "pending" | "valid" | "expiring" | "expired" | "unknown";
+        /** @description The certificate of a site's domain. */
+        CertificateOut: {
+            /**
+             * Format: date-time
+             * @description When the agent was asked.
+             */
+            checked_at: string;
+            /**
+             * Format: int64
+             * @description Whole days until `not_after` (negative once expired).
+             */
+            days_left?: number | null;
+            domain: string;
+            /** @description Why no certificate was read, when none was. */
+            error?: string | null;
+            issuer?: string | null;
+            /** Format: date-time */
+            not_after?: string | null;
+            /** Format: date-time */
+            not_before?: string | null;
+            state: components["schemas"]["CertState"];
+        };
         /** @description `POST /apps/{id}/check`: the version the check published, if any. */
         CheckOut: {
             published?: string | null;
@@ -1202,11 +1335,23 @@ export interface components {
         } | {
             basic_auth?: null | components["schemas"]["BasicAuth"];
             domain: string;
+            /**
+             * @description Make Caddy reload even when the route is unchanged (the
+             *     certificate retry): the PATCH carries `Cache-Control:
+             *     must-revalidate`. Absent in older control planes: off. Older
+             *     agents ignore it, so the control plane checks the version first.
+             */
+            force_reload?: boolean;
             /** @enum {string} */
             kind: "set_route";
             /** Format: int32 */
             port: number;
             site_short_id: string;
+            /**
+             * @description Serve `www.<domain>` with a 301 to the apex (apex domains only).
+             *     Absent in commands queued by an older control plane: off.
+             */
+            www_redirect?: boolean;
         } | {
             domain: string;
             /** @enum {string} */
@@ -1246,6 +1391,18 @@ export interface components {
         } | {
             /** @enum {string} */
             kind: "inventory";
+        } | {
+            domain: string;
+            /** @enum {string} */
+            kind: "cert_status";
+            site: string;
+        } | {
+            cursor?: string | null;
+            /** @enum {string} */
+            kind: "fetch_system_logs";
+            /** Format: int32 */
+            lines: number;
+            unit: components["schemas"]["SystemUnit"];
         };
         /**
          * @description A command in flight: stable `id` so redelivery is idempotent.
@@ -1311,6 +1468,17 @@ export interface components {
             job: components["schemas"]["JobOut"];
             site: components["schemas"]["SiteOut"];
         };
+        /** @description Result of the pre-check. */
+        DomainCheckOut: {
+            /** @description The normalised domain that was checked. */
+            domain: string;
+            /** @description The findings, in a fixed order. */
+            findings: components["schemas"]["Finding"][];
+            /** @description True when no finding is an error (warnings do not block). */
+            ok: boolean;
+            /** @description The server's public address, when its agent has reported one. */
+            server_ip?: string | null;
+        };
         EnvEntryOut: {
             /** @description An operator-added variable the manifest does not declare. */
             extra: boolean;
@@ -1359,6 +1527,13 @@ export interface components {
         ExtraVarIn: {
             secret?: boolean;
             value: string;
+        };
+        /** @description One finding of the pre-check. */
+        Finding: {
+            /** @description Stable id: `dns`, `points_at_server`, `proxy` or `caa`. */
+            id: string;
+            level: components["schemas"]["Level"];
+            message: string;
         };
         HealthOut: {
             status: string;
@@ -1438,6 +1613,11 @@ export interface components {
             server_id: string;
             server_token: string;
         };
+        /**
+         * @description How serious one finding is.
+         * @enum {string}
+         */
+        Level: "ok" | "warn" | "error";
         /**
          * @description Resource limits for one site (mirrors the manifest `limits.default`;
          *     kept local so the agent needs no manifest dependency).
@@ -1528,7 +1708,10 @@ export interface components {
         };
         ReadyOut: {
             database: string;
-            /** @description Why the database is `down`. */
+            /**
+             * @description Why the database is `down`: `timeout`, `connection refused`,
+             *     `authentication` or `other` (the detail is in the server log).
+             */
             last_error?: string | null;
             status: string;
         };
@@ -1751,6 +1934,18 @@ export interface components {
             version: string;
             workdir: components["schemas"]["Workdir"];
         };
+        /** @description One page of a host service's journal. */
+        SystemLogsOut: {
+            /** @description Pass back as `cursor` to read what follows. */
+            cursor?: string | null;
+            lines: string[];
+        };
+        /**
+         * @description The services whose logs the panel may read: a fixed set, never a name
+         *     from the wire, so no free string can reach `journalctl -u`.
+         * @enum {string}
+         */
+        SystemUnit: "caddy" | "agent";
         /** @description One site unit's state as observed by the agent. */
         UnitState: {
             active: boolean;
@@ -2476,6 +2671,62 @@ export interface operations {
                 };
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    check: {
+        parameters: {
+            query: {
+                /** @description The site's domain, as typed in the form. */
+                domain: string;
+                /** @description The server the site would be provisioned on. */
+                server_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DomainCheckOut"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3241,6 +3492,75 @@ export interface operations {
             };
         };
     };
+    logs: {
+        parameters: {
+            query: {
+                /** @description `caddy` or `agent` */
+                unit: string;
+                /** @description Cursor of the previous page */
+                cursor?: string;
+                /** @description Lines per page, 1 to 1000 (default 200) */
+                lines?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Server id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemLogsOut"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     rotate_token: {
         parameters: {
             query?: never;
@@ -3952,6 +4272,98 @@ export interface operations {
             };
         };
     };
+    get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CertificateOut"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    retry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobOut"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     env_get: {
         parameters: {
             query?: never;
@@ -4531,6 +4943,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SiteJobResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    set: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WwwRedirectRequest"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WwwRedirectResponse"];
                 };
             };
             400: {

@@ -18,9 +18,10 @@ function Row({ term, children }: { term: string; children: React.ReactNode }) {
 
 /**
  * Overview tab (spec §7): status, version, the site's URL, placement and
- * the latest 1-minute metrics sample (memory, CPU seconds, disk).
+ * the latest 1-minute metrics sample (memory, CPU seconds, disk). `aside`
+ * goes under the usage card (the route puts the certificate card there).
  */
-export function SiteOverview({ site }: { site: SiteDetail }) {
+export function SiteOverview({ site, aside }: { site: SiteDetail; aside?: React.ReactNode }) {
   const m = site.metrics ?? null;
   const failed = site.failed_step !== null && site.failed_step !== undefined;
   return (
@@ -86,7 +87,8 @@ export function SiteOverview({ site }: { site: SiteDetail }) {
           </dl>
         </CardContent>
       </Card>
-      <Card className="self-start">
+      <div className="flex min-w-0 flex-col gap-6 self-start">
+      <Card>
         <CardHeader>
           <CardTitle>Usage</CardTitle>
           <CardDescription>Latest one-minute sample from the agent.</CardDescription>
@@ -111,6 +113,8 @@ export function SiteOverview({ site }: { site: SiteDetail }) {
           )}
         </CardContent>
       </Card>
+      {aside}
+      </div>
     </div>
   );
 }
