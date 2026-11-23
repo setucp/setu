@@ -7,6 +7,7 @@ pub mod backups;
 pub mod basic_auth;
 pub mod certificate;
 pub mod docs;
+pub mod domain_check;
 pub mod jobs;
 pub mod operators;
 pub mod panel;
@@ -18,6 +19,7 @@ pub mod www_redirect;
 
 use axum::{
     extract::{FromRequest, Request, State},
+    http::StatusCode,
     middleware,
     response::IntoResponse,
     routing::{delete, get, post, put},
@@ -96,6 +98,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/plans", get(plans::list).post(plans::create))
         .route("/plans/{id}", get(plans::get).put(plans::update))
+        .route("/domain-check", get(domain_check::check))
         .route("/sites", get(sites::list).post(sites::create))
         .route("/sites/{id}", get(sites::get).delete(sites::delete))
         .route("/sites/{id}/restart", post(sites::restart))
@@ -174,6 +177,32 @@ pub struct HealthOut {
     pub status: String,
 }
 
+/// The first agent version that decodes the 0.1.7 commands
+/// (`cert_status`, `fetch_system_logs`, route `aliases`, `noindex`,
+/// `force_reload`). An older agent fails to parse a poll that carries an
+/// unknown command, and the command is never redelivered, so the control
+/// plane must not queue one.
+pub const AGENT_0_1_7: &str = "0.1.7";
+
+/// True when `version` (a server's `agent_version`; `None` before its
+/// first heartbeat) is at least `min`. An unparsable version counts as old.
+#[must_use]
+pub fn agent_at_least(version: Option<&str>, min: &str) -> bool {
+    let parse = |v: &str| semver::Version::parse(v.trim_start_matches('v')).ok();
+    match (version.and_then(parse), parse(min)) {
+        (Some(have), Some(want)) => {
+            (have.major, have.minor, have.patch) >= (want.major, want.minor, want.patch)
+        }
+        _ => false,
+    }
+}
+
+/// The error for a command an older agent cannot decode.
+#[must_use]
+pub fn agent_too_old_message(min: &str) -> String {
+    format!("the agent on this server is older than {min}; upgrade it first")
+}
+
 /// Liveness: always 200, no auth, no database.
 #[utoipa::path(get, path = "/healthz", responses((status = 200, body = HealthOut)))]
 pub async fn healthz() -> impl IntoResponse {
@@ -186,22 +215,57 @@ pub async fn healthz() -> impl IntoResponse {
 pub struct ReadyOut {
     pub status: String,
     pub database: String,
+    /// Why the database is `down`: `timeout`, `connection refused`,
+    /// `authentication` or `other` (the detail is in the server log).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
-/// Readiness: 200 when `SELECT 1` succeeds, 503 otherwise.
-#[utoipa::path(get, path = "/readyz", responses((status = 200, body = ReadyOut)))]
-pub async fn readyz(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
-    sqlx::query("SELECT 1::int")
-        .fetch_one(state.db.pool())
-        .await
-        .map_err(|e| {
+/// Readiness: 200 when `SELECT 1` succeeds, 503 with `database: down` and
+/// the cause otherwise (a pool that stopped recovering shows here, #16).
+#[utoipa::path(
+    get,
+    path = "/readyz",
+    responses((status = 200, body = ReadyOut), (status = 503, body = ReadyOut))
+)]
+pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
+    match state.db.probe().await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(ReadyOut {
+                status: "ok".to_string(),
+                database: "up".to_string(),
+                last_error: None,
+            }),
+        ),
+        Err(e) => {
             tracing::error!(error = %e, "readyz database check failed");
-            AppError::internal()
-        })?;
-    Ok(Json(ReadyOut {
-        status: "ok".to_string(),
-        database: "up".to_string(),
-    }))
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ReadyOut {
+                    status: "unavailable".to_string(),
+                    database: "down".to_string(),
+                    last_error: Some(coarse_cause(&e).to_string()),
+                }),
+            )
+        }
+    }
+}
+
+/// What an anonymous caller of `/readyz` may learn about a database
+/// failure: a category, never the user, database, host or socket the raw
+/// error names (the full text stays in the log).
+fn coarse_cause(error: &str) -> &'static str {
+    let e = error.to_ascii_lowercase();
+    if e.contains("no answer within") || e.contains("timed out") || e.contains("timeout") {
+        "timeout"
+    } else if e.contains("authentication") || e.contains("password") {
+        "authentication"
+    } else if e.contains("refused") || e.contains("no such file") {
+        "connection refused"
+    } else {
+        "other"
+    }
 }
 
 /// Server-sent-event framing shared by the site logs and job log tails.
@@ -274,6 +338,29 @@ pub(crate) mod sse {
 
     #[cfg(test)]
     mod tests {
+        /// The agent built from this workspace passes its own gate.
+        #[test]
+        fn the_shipped_agent_version_passes_the_0_1_7_gate() {
+            use super::super::{agent_at_least, AGENT_0_1_7};
+            assert!(agent_at_least(Some(env!("CARGO_PKG_VERSION")), AGENT_0_1_7));
+        }
+
+        #[test]
+        fn readyz_names_a_category_never_the_raw_error() {
+            use super::super::coarse_cause;
+            let raw =
+                "error returned from database: password authentication failed for user \"setu\"";
+            assert_eq!(coarse_cause(raw), "authentication");
+            assert_eq!(coarse_cause("no answer within 5 s"), "timeout");
+            assert_eq!(
+                coarse_cause(
+                    "error communicating with database: Connection refused (os error 111)"
+                ),
+                "connection refused"
+            );
+            assert_eq!(coarse_cause("database \"setu\" does not exist"), "other");
+        }
+
         #[test]
         fn data_escapes_cr_and_lf() {
             assert_eq!(super::data("a\rb\nc"), "data: a\\rb\\nc\n\n");

@@ -371,6 +371,27 @@ async fn the_www_route_is_upserted_beside_the_site_route() {
     assert_eq!(caddy.admin().routes().len(), 1);
 }
 
+#[tokio::test]
+async fn an_unchanged_route_reloads_only_when_revalidation_is_asked() {
+    let caddy = FakeCaddy::new();
+    let id = site_route_id(SHORT).expect("id");
+    caddy
+        .upsert_route(&id, "example.test", &site_upstream(20001))
+        .await
+        .expect("create");
+    let after_create = caddy.admin().reloads();
+    // Rewriting the same route is a no-op for Caddy (the retry's old way).
+    caddy
+        .upsert_route(&id, "example.test", &site_upstream(20001))
+        .await
+        .expect("same");
+    assert_eq!(caddy.admin().reloads(), after_create, "equal PATCH skipped");
+    // A forced reload (Cache-Control: must-revalidate) is acted on.
+    caddy.reload_route(&id).await.expect("reload");
+    assert_eq!(caddy.admin().reloads(), after_create + 1);
+    assert!(caddy.reload_route("not-a-route").await.is_err());
+}
+
 #[test]
 fn caddy_route_with_basic_auth_is_golden_and_validated() {
     let hash = "$2a$14$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234";

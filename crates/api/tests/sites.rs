@@ -152,7 +152,7 @@ async fn online_server_arch(srv: &TestServer, name: &str, memory_mb: u64, arch: 
         .heartbeat(
             &server.id,
             &setu_db::HeartbeatInput {
-                agent_version: "0.1.0",
+                agent_version: "0.1.7",
                 boot_id: None,
                 load1: 0.0,
                 mem_free_mb: 0,
@@ -2500,5 +2500,45 @@ async fn the_certificate_is_read_from_the_agent_and_retry_queues_a_route_update(
         .expect("job");
     assert_eq!(done["status"], "done", "{done}");
     assert_eq!(srv.agent.commands_of("set_route").len(), before + 1);
+    // Caddy skips the reload of an unchanged route, so the retry says so.
+    let routes = srv.agent.commands_of("set_route");
+    assert_eq!(routes.last().expect("set_route")["force_reload"], true);
     assert_eq!(audit_actions(&srv, "site.certificate_retry").await.len(), 1);
+}
+
+#[tokio::test]
+async fn an_agent_older_than_0_1_7_is_not_asked_for_the_certificate() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_id, server_id) = running_site(&srv, &owner, "oldcert").await;
+    srv.db
+        .servers()
+        .heartbeat(
+            &server_id,
+            &setu_db::HeartbeatInput {
+                agent_version: "0.1.6",
+                boot_id: None,
+                load1: 0.0,
+                mem_free_mb: 0,
+                disk_free_mb: 0,
+                metrics: &[],
+            },
+        )
+        .await
+        .expect("heartbeat");
+    let body = get_json(
+        &owner,
+        &srv.url(&format!("/api/v1/sites/{site_id}/certificate")),
+    )
+    .await;
+    assert_eq!(body["state"], "unknown", "{body}");
+    assert!(body["error"].as_str().expect("error").contains("0.1.7"));
+    assert!(srv.agent.commands_of("cert_status").is_empty());
+    let retry = owner
+        .post(srv.url(&format!("/api/v1/sites/{site_id}/certificate/retry")))
+        .send()
+        .await
+        .expect("post");
+    assert_eq!(retry.status(), reqwest::StatusCode::CONFLICT);
 }

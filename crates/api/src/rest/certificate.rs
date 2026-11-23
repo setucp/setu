@@ -20,6 +20,7 @@ use crate::auth::{audit, require_role, ClientIp, Role, Session};
 use crate::state::AppState;
 
 use super::sites::{require_no_running_job, JobOut};
+use super::{agent_at_least, agent_too_old_message, AGENT_0_1_7};
 
 /// Days before expiry at which the state turns `expiring`.
 const EXPIRING_DAYS: i64 = 14;
@@ -97,23 +98,45 @@ pub async fn get(
     require_role(&session, Role::Viewer).await?;
     let site = state.db.sites().get(&id).await?;
     let now = state.clock.now();
-    let call = state
-        .agent
-        .call(
-            &site.server_id,
-            Some(&site.short_id),
-            setu_proto::Command::CertStatus {
-                site: site.short_id.clone(),
-                domain: site.domain.clone(),
-            },
+    let server = state.db.servers().get(&site.server_id).await?;
+    // An older agent cannot decode `cert_status`; do not queue it.
+    let call = if agent_at_least(server.agent_version.as_deref(), AGENT_0_1_7) {
+        Some(
+            state
+                .agent
+                .call(
+                    &site.server_id,
+                    Some(&site.short_id),
+                    setu_proto::Command::CertStatus {
+                        site: site.short_id.clone(),
+                        domain: site.domain.clone(),
+                    },
+                )
+                .await,
         )
-        .await;
-    let (state_, cert, error) = match call {
-        Ok(result) if result.ok => {
-            let cert: CertOutput = serde_json::from_value(result.output).unwrap_or_default();
-            (classify(&cert, now), cert.clone(), cert.error)
+    } else {
+        None
+    };
+    let (cert_state, cert, error) = match call {
+        None => (
+            CertState::Unknown,
+            CertOutput::default(),
+            Some(agent_too_old_message(AGENT_0_1_7)),
+        ),
+        Some(Ok(result)) if result.ok => {
+            match serde_json::from_value::<CertOutput>(result.output) {
+                Ok(cert) => (classify(&cert, now), cert.clone(), cert.error),
+                Err(e) => {
+                    tracing::warn!(site = %site.short_id, error = %e, "certificate: unreadable cert_status answer");
+                    (
+                        CertState::Unknown,
+                        CertOutput::default(),
+                        Some("the agent's answer could not be read".to_string()),
+                    )
+                }
+            }
         }
-        Ok(result) => {
+        Some(Ok(result)) => {
             tracing::warn!(site = %site.short_id, error = ?result.error, "certificate: cert_status failed");
             (
                 CertState::Unknown,
@@ -121,7 +144,7 @@ pub async fn get(
                 Some("the agent could not read the certificate".to_string()),
             )
         }
-        Err(e) => {
+        Some(Err(e)) => {
             tracing::warn!(site = %site.short_id, error = %e, "certificate: agent call failed");
             (
                 CertState::Unknown,
@@ -133,7 +156,7 @@ pub async fn get(
     let not_after = at(cert.not_after);
     Ok(Json(CertificateOut {
         domain: site.domain,
-        state: state_,
+        state: cert_state,
         issuer: cert.issuer,
         not_before: at(cert.not_before),
         not_after,
@@ -144,7 +167,8 @@ pub async fn get(
 }
 
 /// Make Caddy try to get the certificate now (operator and above): queues
-/// a `route_update` job that rewrites the site's route. 409 when the site
+/// a `route_update` job that rewrites the site's route and forces Caddy to
+/// reload it. 409 when the server's agent is older than 0.1.7. 409 when the site
 /// is not running or stopped, or has an active job.
 #[utoipa::path(
     post,
@@ -172,7 +196,13 @@ pub async fn retry(
             site.status
         )));
     }
+    let server = state.db.servers().get(&site.server_id).await?;
+    if !agent_at_least(server.agent_version.as_deref(), AGENT_0_1_7) {
+        return Err(AppError::conflict(agent_too_old_message(AGENT_0_1_7)));
+    }
     require_no_running_job(&state.db, &site.id).await?;
+    // `reload`: the agent sends the route with `Cache-Control:
+    // must-revalidate`, since Caddy skips the reload of an unchanged route.
     let job = state
         .db
         .jobs()
@@ -180,7 +210,7 @@ pub async fn retry(
             setu_db::ROUTE_JOB,
             Some(&site.id),
             Some(&site.server_id),
-            None,
+            Some(&serde_json::json!({ "reload": true })),
         )
         .await?;
     audit(
