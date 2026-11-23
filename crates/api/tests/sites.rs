@@ -2534,7 +2534,7 @@ async fn an_agent_older_than_0_1_7_is_not_asked_for_the_certificate() {
     .await;
     assert_eq!(body["state"], "unknown", "{body}");
     assert!(body["error"].as_str().expect("error").contains("0.1.7"));
-    assert!(srv.agent.commands_of("cert_status").is_empty());
+    assert_eq!(srv.agent.commands_of("cert_status").len(), 0);
     let retry = owner
         .post(srv.url(&format!("/api/v1/sites/{site_id}/certificate/retry")))
         .send()
