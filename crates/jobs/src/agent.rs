@@ -189,6 +189,7 @@ pub mod testing {
         write_envs: Vec<Vec<EnvVar>>,
         switch_versions: Vec<String>,
         log_lines: Vec<String>,
+        cert: setu_proto::CertOutput,
     }
 
     /// Scripted agent: records every call, returns `ok` results by
@@ -352,6 +353,11 @@ pub mod testing {
                 .collect()
         }
 
+        /// What `CertStatus` reports (no certificate served by default).
+        pub fn set_cert(&self, cert: setu_proto::CertOutput) {
+            self.lock().cert = cert;
+        }
+
         /// What `FetchLogs` reports (three canned lines by default).
         pub fn set_log_lines(&self, lines: Vec<String>) {
             self.lock().log_lines = lines;
@@ -423,6 +429,7 @@ pub mod testing {
                     ..Default::default()
                 })
                 .unwrap_or_default(),
+                Command::CertStatus { .. } => serde_json::to_value(&inner.cert).unwrap_or_default(),
                 // Like the 0.1.7 agent: echoes what it applied. An agent that
                 // predates aliases and noindex (see `old_route_agent`) does not.
                 Command::SetRoute {

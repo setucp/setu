@@ -22,6 +22,7 @@ use super::basic_auth::{
     BasicAuthGetOut, BasicAuthJobResponse, BasicAuthOut, BasicAuthPutRequest, BasicAuthRoute,
     RouteStatus,
 };
+use super::certificate::{CertState, CertificateOut};
 use super::domain_check::DomainCheckOut;
 use super::jobs::{AuditEntryOut, AuditListOut, AuditQuery, JobListOut, JobsQuery};
 use super::noindex::{NoindexRequest, NoindexResponse, NoindexSetResponse};
@@ -95,6 +96,8 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::backups::list,
         super::backups::create,
         super::backups::restore,
+        super::certificate::get,
+        super::certificate::retry,
         super::domain_check::check,
         super::basic_auth::get,
         super::basic_auth::put,
@@ -122,6 +125,8 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
     ),
     components(schemas(
         HealthOut,
+        CertificateOut,
+        CertState,
         DomainCheckOut,
         crate::dns::Finding,
         crate::dns::Level,

@@ -2457,6 +2457,93 @@ async fn the_www_redirect_is_off_for_old_sites_on_for_new_and_switchable() {
 }
 
 #[tokio::test]
+async fn the_certificate_is_read_from_the_agent_and_retry_queues_a_route_update() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let viewer = srv.login_as("viewer").await;
+    let (site_id, _server_id) = running_site(&srv, &owner, "cert").await;
+    let url = srv.url(&format!("/api/v1/sites/{site_id}/certificate"));
+
+    // Nothing served yet: pending.
+    let body = get_json(&viewer, &url).await;
+    assert_eq!(body["state"], "pending", "{body}");
+    assert!(body["not_after"].is_null());
+
+    // A public certificate with 60 days left.
+    let now = chrono::Utc::now().timestamp();
+    srv.agent.set_cert(setu_proto::CertOutput {
+        served: true,
+        issuer: Some("R11".to_string()),
+        not_before: Some(now - 30 * 86_400),
+        not_after: Some(now + 60 * 86_400),
+        public: true,
+        error: None,
+    });
+    let body = get_json(&viewer, &url).await;
+    assert_eq!(body["state"], "valid", "{body}");
+    assert_eq!(body["issuer"], "R11");
+    assert_eq!(body["days_left"], 59);
+    assert_eq!(srv.agent.commands_of("cert_status").len(), 2);
+
+    // Retry: operators only, queues a route update that finishes.
+    let retry_url = srv.url(&format!("/api/v1/sites/{site_id}/certificate/retry"));
+    let denied = viewer.post(&retry_url).send().await.expect("post");
+    assert_eq!(denied.status(), reqwest::StatusCode::FORBIDDEN);
+    let before = srv.agent.commands_of("set_route").len();
+    let retry = owner.post(&retry_url).send().await.expect("post");
+    assert_eq!(retry.status(), reqwest::StatusCode::ACCEPTED);
+    let job: Value = retry.json().await.expect("json");
+    assert_eq!(job["kind"], "route_update");
+    let done = poll_job(&srv, &owner, job["id"].as_str().expect("id"))
+        .await
+        .expect("job");
+    assert_eq!(done["status"], "done", "{done}");
+    assert_eq!(srv.agent.commands_of("set_route").len(), before + 1);
+    // Caddy skips the reload of an unchanged route, so the retry says so.
+    let routes = srv.agent.commands_of("set_route");
+    assert_eq!(routes.last().expect("set_route")["force_reload"], true);
+    assert_eq!(audit_actions(&srv, "site.certificate_retry").await.len(), 1);
+}
+
+#[tokio::test]
+async fn an_agent_older_than_0_1_7_is_not_asked_for_the_certificate() {
+    let tdb = TestDb::new().await;
+    let srv = TestServer::spawn(tdb, FakeAgent::new()).await;
+    let owner = srv.login_as_owner().await;
+    let (site_id, server_id) = running_site(&srv, &owner, "oldcert").await;
+    srv.db
+        .servers()
+        .heartbeat(
+            &server_id,
+            &setu_db::HeartbeatInput {
+                agent_version: "0.1.6",
+                boot_id: None,
+                load1: 0.0,
+                mem_free_mb: 0,
+                disk_free_mb: 0,
+                metrics: &[],
+            },
+        )
+        .await
+        .expect("heartbeat");
+    let body = get_json(
+        &owner,
+        &srv.url(&format!("/api/v1/sites/{site_id}/certificate")),
+    )
+    .await;
+    assert_eq!(body["state"], "unknown", "{body}");
+    assert!(body["error"].as_str().expect("error").contains("0.1.7"));
+    assert_eq!(srv.agent.commands_of("cert_status").len(), 0);
+    let retry = owner
+        .post(srv.url(&format!("/api/v1/sites/{site_id}/certificate/retry")))
+        .send()
+        .await
+        .expect("post");
+    assert_eq!(retry.status(), reqwest::StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn aliases_put_get_validate_and_conflict() {
     let tdb = TestDb::new().await;
     let srv = TestServer::spawn(tdb, FakeAgent::new()).await;

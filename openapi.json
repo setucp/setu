@@ -3005,6 +3005,130 @@
         }
       }
     },
+    "/api/v1/sites/{id}/certificate": {
+      "get": {
+        "tags": [
+          "super::certificate"
+        ],
+        "summary": "The certificate Caddy serves for the site's domain (viewer and above).",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CertificateOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{id}/certificate/retry": {
+      "post": {
+        "tags": [
+          "super::certificate"
+        ],
+        "summary": "Make Caddy try to get the certificate now (operator and above): queues\na `route_update` job that rewrites the site's route and forces Caddy to\nreload it. 409 when the server's agent is older than 0.1.7. 409 when the site\nis not running or stopped, or has an active job.",
+        "operationId": "retry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sites/{id}/env": {
       "get": {
         "tags": [
@@ -4637,6 +4761,74 @@
           }
         }
       },
+      "CertState": {
+        "type": "string",
+        "description": "Where the certificate stands.",
+        "enum": [
+          "pending",
+          "valid",
+          "expiring",
+          "expired",
+          "unknown"
+        ]
+      },
+      "CertificateOut": {
+        "type": "object",
+        "description": "The certificate of a site's domain.",
+        "required": [
+          "domain",
+          "state",
+          "checked_at"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the agent was asked."
+          },
+          "days_left": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Whole days until `not_after` (negative once expired)."
+          },
+          "domain": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why no certificate was read, when none was."
+          },
+          "issuer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "not_after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "not_before": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CertState"
+          }
+        }
+      },
       "CheckOut": {
         "type": "object",
         "description": "`POST /apps/{id}/check`: the version the check published, if any.",
@@ -4930,6 +5122,10 @@
               "domain": {
                 "type": "string"
               },
+              "force_reload": {
+                "type": "boolean",
+                "description": "Make Caddy reload even when the route is unchanged (the\ncertificate retry): the PATCH carries `Cache-Control:\nmust-revalidate`. Absent in older control planes: off. Older\nagents ignore it, so the control plane checks the version first."
+              },
               "kind": {
                 "type": "string",
                 "enum": [
@@ -5127,6 +5323,29 @@
                 "enum": [
                   "inventory"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Read the certificate Caddy serves for `domain` on this server\n(a local TLS handshake with that server name; read-only). Agents\nolder than 0.1.7 cannot decode it (the whole poll fails), so the\ncontrol plane never queues it for one (`agent_at_least`).",
+            "required": [
+              "site",
+              "domain",
+              "kind"
+            ],
+            "properties": {
+              "domain": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "cert_status"
+                ]
+              },
+              "site": {
+                "type": "string"
               }
             }
           }

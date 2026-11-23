@@ -29,6 +29,7 @@ pub async fn route_command(ctx: &JobCtx, site_id: &str) -> Result<Command, AppEr
             password_hash: a.password_hash,
         }),
         www_redirect: site.www_redirect,
+        force_reload: false,
         aliases: aliases
             .into_iter()
             .map(|a| {
@@ -97,7 +98,16 @@ pub async fn run(ctx: &JobCtx, site_id: &str) -> Result<(), AppError> {
         )));
     }
     ctx.step("set_route", async {
-        let cmd = route_command(ctx, site_id).await?;
+        let mut cmd = route_command(ctx, site_id).await?;
+        // The certificate retry (`payload.reload`): Caddy must reload the
+        // route even though nothing in it changed.
+        if let Command::SetRoute { force_reload, .. } = &mut cmd {
+            *force_reload = ctx
+                .payload_get("reload")
+                .await
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+        }
         let (n, noindex) = match &cmd {
             Command::SetRoute {
                 aliases, noindex, ..

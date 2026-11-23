@@ -328,6 +328,10 @@ pub trait CaddyAdmin: Send + Sync {
     ) -> anyhow::Result<()>;
     /// Create or replace the `www.` → apex redirect route `id`.
     async fn upsert_www_route(&self, id: &str, domain: &str) -> anyhow::Result<()>;
+    /// Make Caddy reload route `id` as it is, so it retries certificate
+    /// issuance now (a PATCH of the same body with `Cache-Control:
+    /// must-revalidate`; a plain PATCH of an unchanged route is a no-op).
+    async fn reload_route(&self, id: &str) -> anyhow::Result<()>;
     /// Create or replace the redirect route `id` of `alias` to `domain`.
     async fn upsert_alias_route(&self, id: &str, domain: &str, alias: &str) -> anyhow::Result<()>;
     /// Delete route `id`; a missing route is success.
@@ -365,6 +369,15 @@ pub trait AdminTransport: Send + Sync {
         body: Option<Vec<u8>>,
     ) -> anyhow::Result<(u16, Vec<u8>)>;
     async fn tcp_admin_open(&self) -> bool;
+    /// Like [`AdminTransport::request`] with `Cache-Control:
+    /// must-revalidate`, which makes Caddy reload a config equal to the
+    /// running one (it skips the reload otherwise).
+    async fn request_revalidate(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Vec<u8>>,
+    ) -> anyhow::Result<(u16, Vec<u8>)>;
 }
 
 /// The admin-API logic over any transport.
@@ -469,6 +482,25 @@ impl<T: AdminTransport> CaddyClient<T> {
 
 #[async_trait::async_trait]
 impl<T: AdminTransport> CaddyAdmin for CaddyClient<T> {
+    async fn reload_route(&self, id: &str) -> anyhow::Result<()> {
+        if !valid_route_id(id) {
+            anyhow::bail!("invalid route id {id:?}");
+        }
+        let path = format!("/id/{id}");
+        let (status, resp) = self.transport.request("GET", &path, None).await?;
+        if status != 200 {
+            anyhow::bail!("caddy get route: HTTP {status}: {}", first_line(&resp));
+        }
+        let (status, resp) = self
+            .transport
+            .request_revalidate("PATCH", &path, Some(resp))
+            .await?;
+        if !(200..300).contains(&status) {
+            anyhow::bail!("caddy reload route: HTTP {status}: {}", first_line(&resp));
+        }
+        Ok(())
+    }
+
     async fn upsert_route_auth(
         &self,
         id: &str,
@@ -574,6 +606,7 @@ impl UnixTransport {
         method: &str,
         path: &str,
         body: Option<Vec<u8>>,
+        revalidate: bool,
     ) -> anyhow::Result<(u16, Vec<u8>)> {
         use http_body_util::{BodyExt as _, Full};
         let stream = tokio::net::UnixStream::connect(&self.socket)
@@ -595,6 +628,9 @@ impl UnixTransport {
             .header(hyper::header::HOST, "127.0.0.1");
         if body.is_some() {
             req = req.header(hyper::header::CONTENT_TYPE, "application/json");
+        }
+        if revalidate {
+            req = req.header(hyper::header::CACHE_CONTROL, "must-revalidate");
         }
         let req = req
             .body(Full::new(bytes::Bytes::from(body.unwrap_or_default())))
@@ -623,7 +659,18 @@ impl AdminTransport for UnixTransport {
         path: &str,
         body: Option<Vec<u8>>,
     ) -> anyhow::Result<(u16, Vec<u8>)> {
-        tokio::time::timeout(REQUEST_TIMEOUT, self.exchange(method, path, body))
+        tokio::time::timeout(REQUEST_TIMEOUT, self.exchange(method, path, body, false))
+            .await
+            .map_err(|_| anyhow::anyhow!("caddy admin: timed out"))?
+    }
+
+    async fn request_revalidate(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Vec<u8>>,
+    ) -> anyhow::Result<(u16, Vec<u8>)> {
+        tokio::time::timeout(REQUEST_TIMEOUT, self.exchange(method, path, body, true))
             .await
             .map_err(|_| anyhow::anyhow!("caddy admin: timed out"))?
     }
@@ -654,6 +701,10 @@ struct FakeState {
     requests: Vec<FakeRequest>,
     up: bool,
     tcp_admin_open: bool,
+    /// Config changes Caddy would act on: a PATCH or POST that changes the
+    /// config, or a PATCH with `Cache-Control: must-revalidate`. An equal
+    /// PATCH without the header is skipped, as real Caddy skips it.
+    reloads: usize,
 }
 
 /// In-memory model of the admin API subset Setu uses, mirroring real
@@ -714,6 +765,7 @@ impl FakeAdmin {
                 requests: Vec::new(),
                 up: true,
                 tcp_admin_open: false,
+                reloads: 0,
             })),
         }
     }
@@ -740,6 +792,11 @@ impl FakeAdmin {
         self.lock().requests.clone()
     }
 
+    /// How many requests made the model reload (see `FakeState::reloads`).
+    pub fn reloads(&self) -> usize {
+        self.lock().reloads
+    }
+
     pub fn clear_requests(&self) {
         self.lock().requests.clear();
     }
@@ -758,6 +815,19 @@ impl FakeAdmin {
     /// that exposes it over a real socket).
     #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
     pub fn handle(&self, method: &str, path: &str, body: &[u8]) -> (u16, Vec<u8>) {
+        self.handle_with(method, path, body, false)
+    }
+
+    /// [`FakeAdmin::handle`] with the `Cache-Control: must-revalidate`
+    /// flag of the request.
+    #[allow(clippy::expect_used)] // reviewed: kept as-is (R150)
+    pub fn handle_with(
+        &self,
+        method: &str,
+        path: &str,
+        body: &[u8],
+        revalidate: bool,
+    ) -> (u16, Vec<u8>) {
         let mut st = self.lock();
         let parsed: Option<serde_json::Value> = if body.is_empty() {
             None
@@ -772,7 +842,11 @@ impl FakeAdmin {
             path: path.to_string(),
             body: parsed.clone(),
         });
-        let cfg = &mut st.config;
+        let FakeState {
+            config: cfg,
+            reloads,
+            ..
+        } = &mut *st;
         if let Some(id) = path.strip_prefix("/id/") {
             let id = id.trim_end_matches('/');
             let idx = routes_of(cfg).and_then(|r| {
@@ -783,9 +857,13 @@ impl FakeAdmin {
                 ("GET", Some(i)) => (200, json_body(&routes_of(cfg).expect("routes")[i])),
                 ("PATCH", Some(i)) => match parsed {
                     Some(v) => {
+                        let same = routes_of(cfg).expect("routes")[i] == v;
                         routes_mut(cfg).expect("routes")[i] = v;
                         if has_duplicate_ids(cfg) {
                             return (400, err_body("duplicate ID"));
+                        }
+                        if !same || revalidate {
+                            *reloads += 1;
                         }
                         (200, Vec::new())
                     }
@@ -871,6 +949,18 @@ impl AdminTransport for FakeAdmin {
             anyhow::bail!("caddy admin socket: connection refused (fake down)");
         }
         Ok(self.handle(method, path, &body.unwrap_or_default()))
+    }
+
+    async fn request_revalidate(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Vec<u8>>,
+    ) -> anyhow::Result<(u16, Vec<u8>)> {
+        if !self.is_up() {
+            anyhow::bail!("caddy admin socket: connection refused (fake down)");
+        }
+        Ok(self.handle_with(method, path, &body.unwrap_or_default(), true))
     }
 
     async fn tcp_admin_open(&self) -> bool {

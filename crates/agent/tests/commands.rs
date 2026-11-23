@@ -229,6 +229,7 @@ async fn every_command_kind_is_handled() {
             port: servers.health_port,
             basic_auth: None,
             www_redirect: true,
+            force_reload: false,
             aliases: vec![],
             noindex: false,
         },
@@ -499,6 +500,7 @@ async fn route_commands_key_off_the_site_short_id() {
         port: 20001,
         basic_auth: None,
         www_redirect: true,
+        force_reload: false,
         aliases: vec![],
         noindex: false,
     };
@@ -523,6 +525,7 @@ async fn route_commands_key_off_the_site_short_id() {
         port: 20002,
         basic_auth: None,
         www_redirect: true,
+        force_reload: false,
         aliases: vec![],
         noindex: false,
     };
@@ -1091,6 +1094,7 @@ async fn a_site_on_the_www_name_displaces_and_restores_the_apex_redirect() {
         port,
         basic_auth: None,
         www_redirect: true,
+        force_reload: false,
         aliases: vec![],
         noindex: false,
     };
@@ -1135,6 +1139,7 @@ async fn a_moved_alias_goes_live_for_the_new_site_when_the_old_one_lets_go() {
         port,
         basic_auth: None,
         www_redirect: false,
+        force_reload: false,
         aliases,
         noindex: false,
     };

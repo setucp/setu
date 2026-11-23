@@ -245,6 +245,7 @@ where
             port,
             basic_auth,
             www_redirect,
+            force_reload,
             aliases,
             noindex,
         } => {
@@ -294,6 +295,11 @@ where
                 .await
             {
                 return err(cmd_id, "set_route failed", e);
+            }
+            if *force_reload {
+                if let Err(e) = rt.caddy().reload_route(&id).await {
+                    return err(cmd_id, "set_route failed", e);
+                }
             }
             // The `www.` name of an apex domain redirects to it; opting out,
             // a domain that has none, or another site serving that name
@@ -467,6 +473,28 @@ where
             ),
             Err(e) => err(cmd_id, "fetch_logs failed", e),
         },
+        Command::CertStatus { site, domain } => {
+            if crate::caddy::site_route_id(site).is_err() {
+                return err(
+                    cmd_id,
+                    "cert_status failed",
+                    anyhow::anyhow!("invalid site {site}"),
+                );
+            }
+            if !crate::caddy::valid_domain(domain) {
+                return err(
+                    cmd_id,
+                    "cert_status failed",
+                    anyhow::anyhow!("invalid domain {domain}"),
+                );
+            }
+            let out = crate::cert::probe(crate::cert::LOCAL_HTTPS, domain).await;
+            ok(
+                cmd_id,
+                serde_json::to_value(out).unwrap_or_default(),
+                "cert_status ok",
+            )
+        }
         Command::Inventory => match inventory(rt).await {
             Ok(report) => ok(
                 cmd_id,

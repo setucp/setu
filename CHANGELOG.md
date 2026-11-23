@@ -7,6 +7,14 @@ matching the tag.
 
 ### Added
 
+- **Certificate status per site.** `GET /api/v1/sites/{id}/certificate`
+  reads the certificate Caddy serves for the site's domain (a local TLS
+  handshake by the agent, new read-only `cert_status` command) and
+  reports `pending` (none, or only Caddy's own), `valid`, `expiring`
+  (under 14 days), `expired` or `unknown`, with issuer, validity and days
+  left. `POST …/certificate/retry` (operator) queues a route update so
+  Caddy attempts issuance at once, without a restart. Nothing is stored.
+  The agent must be 0.1.7 too; an older agent answers `unknown`.
 - **Site aliases.** `PUT /api/v1/sites/{id}/aliases` takes extra hostnames
   for a site (at most 10), each `redirect` (308 to the site's domain,
   keeping the path) or `serve` (the site answers on it too); `GET` lists

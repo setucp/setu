@@ -6,6 +6,7 @@ pub mod apps;
 pub mod auth;
 pub mod backups;
 pub mod basic_auth;
+pub mod certificate;
 pub mod docs;
 pub mod domain_check;
 pub mod jobs;
@@ -115,6 +116,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/sites/{id}/backups/{bid}", delete(backups::delete))
         .route("/sites/{id}/backups/{bid}/restore", post(backups::restore))
+        .route("/sites/{id}/certificate", get(certificate::get))
+        .route("/sites/{id}/certificate/retry", post(certificate::retry))
         .route("/sites/{id}/www-redirect", put(www_redirect::set))
         .route("/sites/{id}/aliases", get(aliases::get).put(aliases::put))
         .route("/sites/{id}/noindex", get(noindex::get).put(noindex::put))
@@ -175,6 +178,32 @@ pub fn router(state: AppState) -> Router {
 #[derive(Serialize, ToSchema)]
 pub struct HealthOut {
     pub status: String,
+}
+
+/// The first agent version that decodes the 0.1.7 commands
+/// (`cert_status`, `fetch_system_logs`, route `aliases`, `noindex`,
+/// `force_reload`). An older agent fails to parse a poll that carries an
+/// unknown command, and the command is never redelivered, so the control
+/// plane must not queue one.
+pub const AGENT_0_1_7: &str = "0.1.7";
+
+/// True when `version` (a server's `agent_version`; `None` before its
+/// first heartbeat) is at least `min`. An unparsable version counts as old.
+#[must_use]
+pub fn agent_at_least(version: Option<&str>, min: &str) -> bool {
+    let parse = |v: &str| semver::Version::parse(v.trim_start_matches('v')).ok();
+    match (version.and_then(parse), parse(min)) {
+        (Some(have), Some(want)) => {
+            (have.major, have.minor, have.patch) >= (want.major, want.minor, want.patch)
+        }
+        _ => false,
+    }
+}
+
+/// The error for a command an older agent cannot decode.
+#[must_use]
+pub fn agent_too_old_message(min: &str) -> String {
+    format!("the agent on this server is older than {min}; upgrade it first")
 }
 
 /// Liveness: always 200, no auth, no database.
@@ -312,6 +341,13 @@ pub(crate) mod sse {
 
     #[cfg(test)]
     mod tests {
+        /// The agent built from this workspace passes its own gate.
+        #[test]
+        fn the_shipped_agent_version_passes_the_0_1_7_gate() {
+            use super::super::{agent_at_least, AGENT_0_1_7};
+            assert!(agent_at_least(Some(env!("CARGO_PKG_VERSION")), AGENT_0_1_7));
+        }
+
         #[test]
         fn readyz_names_a_category_never_the_raw_error() {
             use super::super::coarse_cause;
