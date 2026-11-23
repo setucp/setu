@@ -78,9 +78,47 @@ pub fn valid_domain(domain: &str) -> bool {
 /// only ones that reach an admin URL path.
 pub fn valid_route_id(id: &str) -> bool {
     id == PANEL_ROUTE_ID
-        || id
-            .strip_prefix("setu-site-")
-            .is_some_and(|rest| setu_common::is_short_id(rest.strip_suffix("-www").unwrap_or(rest)))
+        || id.strip_prefix("setu-site-").is_some_and(|rest| {
+            let short =
+                rest.strip_suffix("-www")
+                    .unwrap_or_else(|| match rest.split_once("-alias-") {
+                        Some((short, n))
+                            if !n.is_empty()
+                                && n.len() <= 3
+                                && n.bytes().all(|b| b.is_ascii_digit()) =>
+                        {
+                            short
+                        }
+                        _ => rest,
+                    });
+            setu_common::is_short_id(short)
+        })
+}
+
+/// `setu-site-<short>-alias-<n>`: the redirect route of a site's `n`th alias.
+pub fn site_alias_route_id(short: &str, n: usize) -> anyhow::Result<String> {
+    Ok(format!("{}-alias-{n}", site_route_id(short)?))
+}
+
+/// The redirect route of an alias (golden `route-setu-site-*-alias-*.json`):
+/// `alias` answers `308` to `https://<domain>` keeping the URI.
+pub fn alias_route_json(id: &str, domain: &str, alias: &str) -> anyhow::Result<serde_json::Value> {
+    if !valid_route_id(id) || !id.contains("-alias-") {
+        anyhow::bail!("invalid route id {id:?}");
+    }
+    if !valid_domain(domain) || !valid_domain(alias) || alias == domain {
+        anyhow::bail!("invalid alias {alias:?} of {domain:?}");
+    }
+    Ok(serde_json::json!({
+        "@id": id,
+        "match": [{ "host": [alias] }],
+        "handle": [{
+            "handler": "static_response",
+            "status_code": 308,
+            "headers": { "Location": [format!("https://{domain}{{http.request.uri}}")] },
+        }],
+        "terminal": true,
+    }))
 }
 
 /// `setu-site-<short>-www`: the redirect route of a site's `www.` name.
@@ -178,16 +216,61 @@ pub fn route_json_with_auth(
     upstream: &str,
     auth: Option<(&str, &str)>,
 ) -> anyhow::Result<serde_json::Value> {
+    route_json_with_hosts(id, domain, &[], upstream, auth, false)
+}
+
+/// What `GET /robots.txt` answers on a `noindex` site.
+pub const NOINDEX_ROBOTS: &str = "User-agent: *\nDisallow: /\n";
+
+/// [`route_json_with_auth`] answering on `extra` hostnames too (`serve`
+/// aliases). `noindex` puts `X-Robots-Tag: noindex, nofollow` on every
+/// response and answers `/robots.txt` itself (before basic auth and the
+/// proxy, so the app cannot override it).
+pub fn route_json_with_hosts(
+    id: &str,
+    domain: &str,
+    extra: &[String],
+    upstream: &str,
+    auth: Option<(&str, &str)>,
+    noindex: bool,
+) -> anyhow::Result<serde_json::Value> {
     if !valid_route_id(id) {
         anyhow::bail!("invalid route id {id:?}");
     }
     if !valid_domain(domain) {
         anyhow::bail!("invalid domain {domain:?}");
     }
+    if let Some(bad) = extra.iter().find(|h| !valid_domain(h)) {
+        anyhow::bail!("invalid alias {bad:?}");
+    }
     if !valid_upstream(upstream) {
         anyhow::bail!("invalid upstream {upstream:?}");
     }
+    let mut hosts = vec![domain.to_string()];
+    hosts.extend(extra.iter().cloned());
     let mut handle = Vec::new();
+    if noindex {
+        if id == PANEL_ROUTE_ID {
+            anyhow::bail!("the panel route takes no noindex");
+        }
+        handle.push(serde_json::json!({
+            "handler": "headers",
+            "response": { "set": { "X-Robots-Tag": ["noindex, nofollow"] } },
+        }));
+        handle.push(serde_json::json!({
+            "handler": "subroute",
+            "routes": [{
+                "match": [{ "path": ["/robots.txt"] }],
+                "handle": [{
+                    "handler": "static_response",
+                    "status_code": 200,
+                    "headers": { "Content-Type": ["text/plain; charset=utf-8"] },
+                    "body": NOINDEX_ROBOTS,
+                }],
+                "terminal": true,
+            }],
+        }));
+    }
     if let Some((user, hash)) = auth {
         if id == PANEL_ROUTE_ID {
             anyhow::bail!("the panel route takes no basic auth");
@@ -212,7 +295,7 @@ pub fn route_json_with_auth(
     }));
     Ok(serde_json::json!({
         "@id": id,
-        "match": [{ "host": [domain] }],
+        "match": [{ "host": hosts }],
         "handle": handle,
         "terminal": true,
     }))
@@ -233,12 +316,24 @@ pub trait CaddyAdmin: Send + Sync {
         upstream: &str,
         auth: Option<(&str, &str)>,
     ) -> anyhow::Result<()>;
+    /// [`CaddyAdmin::upsert_route_auth`] answering on `extra` hostnames too.
+    async fn upsert_route_hosts(
+        &self,
+        id: &str,
+        domain: &str,
+        extra: &[String],
+        upstream: &str,
+        auth: Option<(&str, &str)>,
+        noindex: bool,
+    ) -> anyhow::Result<()>;
     /// Create or replace the `www.` → apex redirect route `id`.
     async fn upsert_www_route(&self, id: &str, domain: &str) -> anyhow::Result<()>;
     /// Make Caddy reload route `id` as it is, so it retries certificate
     /// issuance now (a PATCH of the same body with `Cache-Control:
     /// must-revalidate`; a plain PATCH of an unchanged route is a no-op).
     async fn reload_route(&self, id: &str) -> anyhow::Result<()>;
+    /// Create or replace the redirect route `id` of `alias` to `domain`.
+    async fn upsert_alias_route(&self, id: &str, domain: &str, alias: &str) -> anyhow::Result<()>;
     /// Delete route `id`; a missing route is success.
     async fn remove_route(&self, id: &str) -> anyhow::Result<()>;
     /// `@id`s of the routes of server `setu`, in order.
@@ -414,6 +509,27 @@ impl<T: AdminTransport> CaddyAdmin for CaddyClient<T> {
         auth: Option<(&str, &str)>,
     ) -> anyhow::Result<()> {
         self.put_route(id, &route_json_with_auth(id, domain, upstream, auth)?)
+            .await
+    }
+
+    async fn upsert_route_hosts(
+        &self,
+        id: &str,
+        domain: &str,
+        extra: &[String],
+        upstream: &str,
+        auth: Option<(&str, &str)>,
+        noindex: bool,
+    ) -> anyhow::Result<()> {
+        self.put_route(
+            id,
+            &route_json_with_hosts(id, domain, extra, upstream, auth, noindex)?,
+        )
+        .await
+    }
+
+    async fn upsert_alias_route(&self, id: &str, domain: &str, alias: &str) -> anyhow::Result<()> {
+        self.put_route(id, &alias_route_json(id, domain, alias)?)
             .await
     }
 

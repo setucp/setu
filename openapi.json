@@ -2347,6 +2347,148 @@
         }
       }
     },
+    "/api/v1/sites/{id}/aliases": {
+      "get": {
+        "tags": [
+          "super::aliases"
+        ],
+        "summary": "The site's aliases.",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "super::aliases"
+        ],
+        "summary": "Replace the site's aliases (operator and above); queues a route update.\n400 for a bad host or mode, 409 (and nothing stored) when a host is\nanother site's domain or alias, or the site has an active job.",
+        "operationId": "put",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasesSetResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sites/{id}/backups": {
       "get": {
         "tags": [
@@ -3265,6 +3407,148 @@
         }
       }
     },
+    "/api/v1/sites/{id}/noindex": {
+      "get": {
+        "tags": [
+          "super::noindex"
+        ],
+        "summary": "Whether the site asks search engines to stay away.",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoindexResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "super::noindex"
+        ],
+        "summary": "Turn the option on or off (operator and above); queues a route update.\n409 (and nothing stored) while the site has an active job.",
+        "operationId": "put",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Site id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoindexRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoindexSetResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sites/{id}/reset": {
       "get": {
         "tags": [
@@ -3977,6 +4261,96 @@
   },
   "components": {
     "schemas": {
+      "Alias": {
+        "type": "object",
+        "description": "One extra hostname of a site (issue #18).",
+        "required": [
+          "host",
+          "mode"
+        ],
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/AliasMode"
+          }
+        }
+      },
+      "AliasItem": {
+        "type": "object",
+        "description": "One alias: a hostname and how it answers.",
+        "required": [
+          "host",
+          "mode"
+        ],
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "description": "`redirect` (308 to the site's domain) or `serve` (the site answers)."
+          }
+        }
+      },
+      "AliasMode": {
+        "type": "string",
+        "description": "How a site answers on an extra hostname.",
+        "enum": [
+          "redirect",
+          "serve"
+        ]
+      },
+      "AliasesRequest": {
+        "type": "object",
+        "description": "`PUT /sites/{id}/aliases` body: the whole new list.",
+        "required": [
+          "aliases"
+        ],
+        "properties": {
+          "aliases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AliasItem"
+            }
+          }
+        }
+      },
+      "AliasesResponse": {
+        "type": "object",
+        "description": "The aliases of a site.",
+        "required": [
+          "aliases"
+        ],
+        "properties": {
+          "aliases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AliasItem"
+            }
+          }
+        }
+      },
+      "AliasesSetResponse": {
+        "type": "object",
+        "description": "The aliases after a change and the route job that applies them.",
+        "required": [
+          "aliases",
+          "job"
+        ],
+        "properties": {
+          "aliases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AliasItem"
+            }
+          },
+          "job": {
+            "$ref": "#/components/schemas/JobOut"
+          }
+        }
+      },
       "AppListOut": {
         "type": "object",
         "required": [
@@ -4727,6 +5101,13 @@
               "kind"
             ],
             "properties": {
+              "aliases": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Alias"
+                },
+                "description": "Extra hostnames. Absent in commands queued by an older control\nplane: none."
+              },
               "basic_auth": {
                 "oneOf": [
                   {
@@ -4750,6 +5131,10 @@
                 "enum": [
                   "set_route"
                 ]
+              },
+              "noindex": {
+                "type": "boolean",
+                "description": "Ask search engines to stay away (`X-Robots-Tag` and a\ndisallow-all `/robots.txt`). Absent in commands queued by an\nolder control plane: off."
               },
               "port": {
                 "type": "integer",
@@ -5709,6 +6094,46 @@
           },
           "path": {
             "type": "string"
+          }
+        }
+      },
+      "NoindexRequest": {
+        "type": "object",
+        "description": "`PUT /sites/{id}/noindex` body.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "NoindexResponse": {
+        "type": "object",
+        "description": "The option as stored.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "NoindexSetResponse": {
+        "type": "object",
+        "description": "The option after a change and the route job that applies it.",
+        "required": [
+          "enabled",
+          "job"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "job": {
+            "$ref": "#/components/schemas/JobOut"
           }
         }
       },

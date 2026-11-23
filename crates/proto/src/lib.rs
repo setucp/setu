@@ -111,6 +111,23 @@ impl fmt::Debug for BasicAuth {
     }
 }
 
+/// How a site answers on an extra hostname.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum AliasMode {
+    /// `308` to the canonical domain, keeping the URI.
+    Redirect,
+    /// The site answers on the alias as well.
+    Serve,
+}
+
+/// One extra hostname of a site (issue #18).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Alias {
+    pub host: String,
+    pub mode: AliasMode,
+}
+
 /// Everything the agent needs to materialise one site. No paths, no
 /// user, no env file: the agent derives them from `short_id` (spec §4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -195,6 +212,15 @@ pub enum Command {
         /// agents ignore it, so the control plane checks the version first.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         force_reload: bool,
+        /// Extra hostnames. Absent in commands queued by an older control
+        /// plane: none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        aliases: Vec<Alias>,
+        /// Ask search engines to stay away (`X-Robots-Tag` and a
+        /// disallow-all `/robots.txt`). Absent in commands queued by an
+        /// older control plane: off.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        noindex: bool,
     },
     RemoveRoute {
         site_short_id: String,
@@ -637,6 +663,8 @@ mod tests {
                     }),
                     www_redirect: true,
                     force_reload: false,
+                    aliases: vec![],
+                    noindex: false,
                 },
                 "set_route",
             ),
@@ -906,6 +934,20 @@ mod tests {
     }
 
     #[test]
+    fn set_route_without_aliases_means_none_and_an_alias_round_trips() {
+        let cmd: Command = serde_json::from_value(serde_json::json!({
+            "kind": "set_route", "site_short_id": "abcd1234", "domain": "a.test", "port": 1
+        }))
+        .expect("parse");
+        let Command::SetRoute { aliases, .. } = cmd else {
+            panic!("not a set_route");
+        };
+        assert_eq!(aliases, vec![]);
+        let a: Alias = serde_json::from_str(r#"{"host":"b.test","mode":"serve"}"#).expect("alias");
+        assert_eq!(a.mode, AliasMode::Serve);
+    }
+
+    #[test]
     fn set_route_without_www_redirect_means_off() {
         let cmd: Command = serde_json::from_str(
             r#"{"kind":"set_route","site_short_id":"abcd1234","domain":"example.com","port":20001}"#,
@@ -926,6 +968,8 @@ mod tests {
             basic_auth: None,
             www_redirect: true,
             force_reload: false,
+            aliases: vec![],
+            noindex: false,
         };
         assert!(!open.has_secrets());
         assert_eq!(open.redact(), serde_json::to_value(&open).unwrap());

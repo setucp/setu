@@ -441,3 +441,99 @@ fn caddy_route_with_basic_auth_is_golden_and_validated() {
         route_json_with_auth("setu-panel", "a.test", "127.0.0.1:1", Some(("alice", hash))).is_err()
     );
 }
+
+#[test]
+fn alias_routes_redirect_and_serve_hosts_join_the_site_route() {
+    use setu_agent::caddy::{
+        alias_route_json, route_json_with_hosts, site_alias_route_id, valid_route_id,
+    };
+    let id = site_alias_route_id("abcd1234", 0).unwrap();
+    assert_eq!(id, "setu-site-abcd1234-alias-0");
+    assert!(valid_route_id(&id));
+    assert!(!valid_route_id("setu-site-abcd1234-alias-"));
+    assert!(!valid_route_id("setu-site-abcd1234-alias-x"));
+    assert!(!valid_route_id("setu-site-abcd123-alias-1"));
+    let r = alias_route_json(&id, "example.test", "old.test").unwrap();
+    assert_eq!(r["match"][0]["host"][0], "old.test");
+    assert_eq!(r["handle"][0]["status_code"], 308);
+    assert!(alias_route_json(&id, "example.test", "example.test").is_err());
+    assert!(alias_route_json("setu-site-abcd1234", "example.test", "old.test").is_err());
+    let site = route_json_with_hosts(
+        "setu-site-abcd1234",
+        "example.test",
+        &["also.test".to_string()],
+        "127.0.0.1:20001",
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        site["match"][0]["host"],
+        serde_json::json!(["example.test", "also.test"])
+    );
+    assert!(route_json_with_hosts(
+        "setu-site-abcd1234",
+        "example.test",
+        &["a/b".to_string()],
+        "127.0.0.1:20001",
+        None,
+        false
+    )
+    .is_err());
+}
+
+#[test]
+fn an_alias_route_is_a_308_to_the_primary_and_is_golden() {
+    use setu_agent::caddy::alias_route_json;
+    let id = "setu-site-abcd1234-alias-0";
+    assert!(valid_route_id(id));
+    let route = alias_route_json(id, "example.test", "old.example.test").expect("route");
+    assert_eq!(
+        serde_json::to_string_pretty(&route).expect("json") + "\n",
+        include_str!("golden/route-setu-site-abcd1234-alias-0.json")
+    );
+    assert!(alias_route_json(id, "example.test", "example.test").is_err());
+    assert!(alias_route_json("setu-site-abcd1234", "example.test", "old.example.test").is_err());
+}
+
+#[test]
+fn a_noindex_route_sets_the_header_answers_robots_txt_and_is_golden() {
+    use setu_agent::caddy::route_json_with_hosts;
+    let id = site_route_id(SHORT).expect("id");
+    let route = route_json_with_hosts(
+        &id,
+        "staging.example.test",
+        &[],
+        &site_upstream(20001),
+        None,
+        true,
+    )
+    .expect("route");
+    assert_eq!(
+        serde_json::to_string_pretty(&route).expect("json") + "\n",
+        include_str!("golden/route-setu-site-abcd1234-noindex.json")
+    );
+    // Off: the route is the plain one.
+    let plain = route_json_with_hosts(
+        &id,
+        "a.example.test",
+        &[],
+        &site_upstream(20001),
+        None,
+        false,
+    )
+    .expect("route");
+    assert_eq!(
+        plain,
+        route_json(&id, "a.example.test", &site_upstream(20001)).expect("route")
+    );
+    assert!(route_json_with_hosts(
+        "setu-panel",
+        "p.example.test",
+        &[],
+        &site_upstream(20001),
+        None,
+        true
+    )
+    .is_err());
+}

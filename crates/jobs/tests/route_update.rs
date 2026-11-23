@@ -178,3 +178,44 @@ async fn a_retried_provision_keeps_the_stored_credentials() {
     assert_eq!(last["basic_auth"]["username"], "alice");
     assert_eq!(last["basic_auth"]["password_hash"], hash.as_str());
 }
+
+#[tokio::test]
+async fn a_retried_provision_sends_the_stored_aliases_and_noindex() {
+    let (_test_db, fx) = setup(&manifest_toml("0.1.0")).await;
+    let agent = FakeAgent::new();
+    let (ctx, _logs) = ctx_with_logs(fx.db.clone(), &agent);
+    provision::run(&ctx, &fx.site_id).await.expect("provision");
+
+    let job = fx
+        .db
+        .aliases()
+        .replace_with_route_job(
+            &fx.site_id,
+            &fx.server_id,
+            &[setu_db::SiteAlias {
+                host: "old.example.test".to_string(),
+                mode: "redirect".to_string(),
+            }],
+        )
+        .await
+        .unwrap();
+    finish(&fx.db, &job.id).await;
+    let job = fx
+        .db
+        .options()
+        .set_noindex_with_route_job(&fx.site_id, &fx.server_id, true)
+        .await
+        .unwrap();
+    finish(&fx.db, &job.id).await;
+    // Retry runs provision again from step 1: its route must carry both.
+    fx.db
+        .sites()
+        .set_status(&fx.site_id, "failed", Some("set_route"))
+        .await
+        .unwrap();
+    provision::run(&ctx, &fx.site_id).await.expect("retry");
+    let last = agent.commands_of("set_route").pop().unwrap();
+    assert_eq!(last["noindex"], true);
+    assert_eq!(last["aliases"][0]["host"], "old.example.test");
+    assert_eq!(last["aliases"][0]["mode"], "redirect");
+}

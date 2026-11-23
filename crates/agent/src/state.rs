@@ -39,6 +39,14 @@ pub struct SiteRecord {
     /// upgrade changes no site until its setting is sent.
     #[serde(default)]
     pub www_redirect: bool,
+    /// Extra hostnames recorded by `SetRoute` (none for a state file from
+    /// before 0.1.7).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<setu_proto::Alias>,
+    /// Search engines are asked to stay away (off for a state file from
+    /// before 0.1.7).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub noindex: bool,
     #[serde(default)]
     pub version: String,
     #[serde(default)]
@@ -58,6 +66,8 @@ impl std::fmt::Debug for SiteRecord {
                     .map(|(user, _)| (user, "[redacted]")),
             )
             .field("www_redirect", &self.www_redirect)
+            .field("aliases", &self.aliases)
+            .field("noindex", &self.noindex)
             .field("version", &self.version)
             .field("db", &self.db)
             .finish()
@@ -109,11 +119,60 @@ impl State {
             return None;
         }
         let www = crate::caddy::www_name(site.domain.as_deref()?)?;
-        let taken = self
-            .sites
-            .iter()
-            .any(|(other, r)| other != short && r.domain.as_deref() == Some(www.as_str()));
+        // An explicit alias of that name replaces the automatic redirect.
+        if site.aliases.iter().any(|a| a.host == www) {
+            return None;
+        }
+        let taken = self.sites.iter().any(|(other, r)| {
+            other != short
+                && (r.domain.as_deref() == Some(www.as_str())
+                    || r.aliases.iter().any(|a| a.host == www))
+        });
         (!taken).then_some(www)
+    }
+
+    /// The aliases of `short` that may be routed: not the site's own
+    /// domain, not a name another site serves or aliases (first-match
+    /// routing would let one site shadow the other), each host once.
+    pub fn live_aliases(&self, short: &str) -> Vec<setu_proto::Alias> {
+        let Some(site) = self.sites.get(short) else {
+            return Vec::new();
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        site.aliases
+            .iter()
+            .filter(|a| crate::caddy::valid_domain(&a.host))
+            .filter(|a| site.domain.as_deref() != Some(a.host.as_str()))
+            .filter(|a| {
+                !self.sites.iter().any(|(other, r)| {
+                    other != short
+                        && (r.domain.as_deref() == Some(a.host.as_str())
+                            || r.aliases.iter().any(|o| o.host == a.host))
+                })
+            })
+            .filter(|a| seen.insert(a.host.clone()))
+            .cloned()
+            .collect()
+    }
+
+    /// The other sites whose routes depend on who holds the names `names`
+    /// (a domain and the hosts of the aliases being set or removed): a
+    /// site whose alias is one of `names`, or whose `www.` name is one.
+    /// Their routes are re-applied when the holder changes, so a host two
+    /// sites listed during a move ends up with the one that still lists it.
+    pub fn host_neighbours(&self, short: &str, names: &[String]) -> Vec<String> {
+        self.sites
+            .iter()
+            .filter(|(other, r)| {
+                other.as_str() != short
+                    && (r.aliases.iter().any(|a| names.contains(&a.host))
+                        || r.domain
+                            .as_deref()
+                            .and_then(crate::caddy::www_name)
+                            .is_some_and(|w| names.contains(&w)))
+            })
+            .map(|(other, _)| other.clone())
+            .collect()
     }
 
     /// The other sites whose `www.` name is `domain`: their redirect
@@ -272,6 +331,17 @@ impl StateStore {
     }
 }
 
+/// The hostnames of `short`'s live `serve` aliases (the site route answers
+/// on them too).
+pub fn serve_hosts(state: &State, short: &str) -> Vec<String> {
+    state
+        .live_aliases(short)
+        .into_iter()
+        .filter(|a| a.mode == setu_proto::AliasMode::Serve)
+        .map(|a| a.host)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,5 +383,56 @@ mod tests {
         let s = State::load(&path).expect("load");
         assert_eq!(s.sites["abcd1234"].port, 20001);
         assert_eq!(s.sites["abcd1234"].domain, None);
+    }
+
+    fn site(domain: &str, aliases: &[&str], www: bool) -> SiteRecord {
+        SiteRecord {
+            domain: Some(domain.into()),
+            port: 3000,
+            www_redirect: www,
+            aliases: aliases
+                .iter()
+                .map(|h| setu_proto::Alias {
+                    host: (*h).into(),
+                    mode: setu_proto::AliasMode::Serve,
+                })
+                .collect(),
+            ..SiteRecord::default()
+        }
+    }
+
+    /// Another site's alias is a name taken: the automatic `www.` redirect
+    /// does not shadow it (review of #30, finding 1).
+    #[test]
+    fn www_redirect_yields_to_another_sites_alias() {
+        let mut st = State::default();
+        st.sites.insert("a".into(), site("example.com", &[], true));
+        st.sites
+            .insert("b".into(), site("other.org", &["www.example.com"], false));
+        assert_eq!(st.www_host("a"), None);
+        st.sites.get_mut("b").unwrap().aliases.clear();
+        assert_eq!(st.www_host("a").as_deref(), Some("www.example.com"));
+    }
+
+    /// Moving an alias between sites: while both list it nobody routes it;
+    /// `host_neighbours` names the other holder so its route is re-applied
+    /// once the first lets go (review of #30, finding 3).
+    #[test]
+    fn a_moved_alias_ends_with_the_site_that_still_lists_it() {
+        let mut st = State::default();
+        st.sites.insert(
+            "a".into(),
+            site("a.example.com", &["old.example.com"], false),
+        );
+        st.sites.insert(
+            "b".into(),
+            site("b.example.com", &["old.example.com"], false),
+        );
+        assert!(st.live_aliases("a").is_empty() && st.live_aliases("b").is_empty());
+        // A drops it: B is a neighbour of the names A held, and now routes it.
+        st.sites.get_mut("a").unwrap().aliases.clear();
+        let names = vec!["old.example.com".to_string()];
+        assert_eq!(st.host_neighbours("a", &names), vec!["b".to_string()]);
+        assert_eq!(st.live_aliases("b").len(), 1);
     }
 }

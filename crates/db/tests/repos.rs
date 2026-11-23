@@ -132,6 +132,8 @@ fn secret_commands() -> [Command; 3] {
             }),
             www_redirect: true,
             force_reload: false,
+            aliases: vec![],
+            noindex: false,
         },
     ]
 }
@@ -1363,6 +1365,104 @@ async fn rejoining_server_that_stopped_heartbeating_is_offline() {
         setu_db::ServerStatus::Offline,
         "stale heartbeat wins over the rejoin state"
     );
+}
+
+fn alias(host: &str, mode: &str) -> setu_db::SiteAlias {
+    setu_db::SiteAlias {
+        host: host.to_string(),
+        mode: mode.to_string(),
+    }
+}
+
+#[tokio::test]
+async fn aliases_are_unique_per_host_and_replaced_as_a_set() {
+    let (_test, db) = test_db().await;
+    let a = site(&db).await;
+    let b = db
+        .sites()
+        .create(&new_site(
+            Some(&a.server_id),
+            &a.plan_id,
+            "b.example.com",
+            512,
+        ))
+        .await
+        .expect("create b");
+    db.aliases()
+        .replace_with_route_job(
+            &a.id,
+            &a.server_id,
+            &[
+                alias("shop.example.com", "serve"),
+                alias("old.example.com", "redirect"),
+            ],
+        )
+        .await
+        .expect("set a");
+    let listed = db.aliases().list(&a.id).await.unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].host, "old.example.com");
+
+    // another site cannot take a listed host, nor another site's domain
+    let err = db
+        .aliases()
+        .replace_with_route_job(&b.id, &b.server_id, &[alias("shop.example.com", "serve")])
+        .await
+        .expect_err("alias clash");
+    assert_eq!(err.code, ErrorCode::Conflict, "{err:?}");
+    let left = db.aliases().list(&b.id).await.unwrap();
+    assert_eq!(left, vec![]);
+    let err = db
+        .aliases()
+        .replace_with_route_job(&b.id, &b.server_id, &[alias("a.example.com", "serve")])
+        .await
+        .expect_err("domain clash");
+    assert_eq!(err.code, ErrorCode::Conflict, "{err:?}");
+}
+
+#[tokio::test]
+async fn aliases_clash_with_a_www_name_in_both_directions_and_cascade() {
+    let (_test, db) = test_db().await;
+    let a = site(&db).await; // www_redirect is on by default
+    let b = db
+        .sites()
+        .create(&new_site(
+            Some(&a.server_id),
+            &a.plan_id,
+            "b.example.com",
+            512,
+        ))
+        .await
+        .expect("create b");
+    // an alias that is a's automatic www name
+    let err = db
+        .aliases()
+        .replace_with_route_job(&b.id, &b.server_id, &[alias("www.a.example.com", "serve")])
+        .await
+        .expect_err("www clash");
+    assert_eq!(err.code, ErrorCode::Conflict, "{err:?}");
+
+    // a new site whose www name is another site's alias is refused
+    db.aliases()
+        .replace_with_route_job(&b.id, &b.server_id, &[alias("www.c.example.com", "serve")])
+        .await
+        .expect("set b");
+    let err = db
+        .sites()
+        .create(&new_site(
+            Some(&a.server_id),
+            &a.plan_id,
+            "c.example.com",
+            512,
+        ))
+        .await
+        .expect_err("create over a www alias");
+    assert!(matches!(err, CreateError::DomainTaken), "{err:?}");
+
+    // deleting the site removes its aliases
+    db.sites().delete(&b.id).await.unwrap();
+    let left = db.aliases().list(&b.id).await.unwrap();
+    assert_eq!(left, vec![]);
 }
 
 #[tokio::test]

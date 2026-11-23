@@ -38,13 +38,15 @@ async fn sync_site_routes<C: CaddyAdmin + ?Sized>(state: &State, caddy: &C) -> B
         }
         wanted.insert(id.clone());
         if let Err(e) = caddy
-            .upsert_route_auth(
+            .upsert_route_hosts(
                 &id,
                 domain,
+                &crate::state::serve_hosts(state, short),
                 &site_upstream(site.port),
                 site.basic_auth
                     .as_ref()
                     .map(|(u, h)| (u.as_str(), h.as_str())),
+                site.noindex,
             )
             .await
         {
@@ -54,6 +56,19 @@ async fn sync_site_routes<C: CaddyAdmin + ?Sized>(state: &State, caddy: &C) -> B
             wanted.insert(www_id.clone());
             if let Err(e) = caddy.upsert_www_route(&www_id, domain).await {
                 tracing::warn!(route = %www_id, error = %e, "reconcile: cannot upsert www route");
+            }
+        }
+        let redirects = state
+            .live_aliases(short)
+            .into_iter()
+            .filter(|a| a.mode == setu_proto::AliasMode::Redirect);
+        for (n, a) in redirects.enumerate() {
+            let Ok(alias_id) = crate::caddy::site_alias_route_id(short, n) else {
+                continue;
+            };
+            wanted.insert(alias_id.clone());
+            if let Err(e) = caddy.upsert_alias_route(&alias_id, domain, &a.host).await {
+                tracing::warn!(route = %alias_id, error = %e, "reconcile: cannot upsert alias route");
             }
         }
     }

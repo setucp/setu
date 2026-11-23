@@ -1,6 +1,7 @@
 //! `/api/v1` handlers: auth, operators, servers, apps, plans (spec §6).
 
 pub mod agent;
+pub mod aliases;
 pub mod apps;
 pub mod auth;
 pub mod backups;
@@ -9,6 +10,7 @@ pub mod certificate;
 pub mod docs;
 pub mod domain_check;
 pub mod jobs;
+pub mod noindex;
 pub mod operators;
 pub mod panel;
 pub mod plans;
@@ -117,6 +119,8 @@ pub fn router(state: AppState) -> Router {
         .route("/sites/{id}/certificate", get(certificate::get))
         .route("/sites/{id}/certificate/retry", post(certificate::retry))
         .route("/sites/{id}/www-redirect", put(www_redirect::set))
+        .route("/sites/{id}/aliases", get(aliases::get).put(aliases::put))
+        .route("/sites/{id}/noindex", get(noindex::get).put(noindex::put))
         .route(
             "/sites/{id}/basic-auth",
             get(basic_auth::get)

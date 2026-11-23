@@ -9,6 +9,7 @@ use utoipa::OpenApi;
 
 use crate::auth::{require_role, Role, Session};
 
+use super::aliases::{AliasItem, AliasesRequest, AliasesResponse, AliasesSetResponse};
 use super::apps::{
     AppListOut, AppOut, AppSourceOut, AppVersionListOut, AppVersionOut, CheckOut, ManifestErrorOut,
     PromptListOut, PromptOut, PublishRequest, PublishResponse, ValidateRequest, ValidateResponse,
@@ -24,6 +25,7 @@ use super::basic_auth::{
 use super::certificate::{CertState, CertificateOut};
 use super::domain_check::DomainCheckOut;
 use super::jobs::{AuditEntryOut, AuditListOut, AuditQuery, JobListOut, JobsQuery};
+use super::noindex::{NoindexRequest, NoindexResponse, NoindexSetResponse};
 use super::operators::{CreateOperatorRequest, OperatorListOut, SetPasswordRequest};
 use super::panel::SelfBackupOut;
 use super::plans::{CreatePlanRequest, PlanLimitsIn, PlanListOut, PlanOut, UpdatePlanRequest};
@@ -101,6 +103,10 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         super::basic_auth::put,
         super::basic_auth::delete,
         super::www_redirect::set,
+        super::aliases::get,
+        super::aliases::put,
+        super::noindex::get,
+        super::noindex::put,
         super::backups::reset_get,
         super::backups::reset_put,
         super::backups::reset_delete,
@@ -180,6 +186,13 @@ use super::{ErrorBody, ErrorDetail, HealthOut, ReadyOut};
         BackupOut,
         BasicAuthGetOut,
         BasicAuthJobResponse,
+        AliasItem,
+        AliasesRequest,
+        AliasesResponse,
+        AliasesSetResponse,
+        NoindexRequest,
+        NoindexResponse,
+        NoindexSetResponse,
         WwwRedirectRequest,
         WwwRedirectResponse,
         BasicAuthOut,

@@ -1,0 +1,22 @@
+{
+  "@id": "setu-site-abcd1234-alias-0",
+  "handle": [
+    {
+      "handler": "static_response",
+      "headers": {
+        "Location": [
+          "https://example.test{http.request.uri}"
+        ]
+      },
+      "status_code": 308
+    }
+  ],
+  "match": [
+    {
+      "host": [
+        "old.example.test"
+      ]
+    }
+  ],
+  "terminal": true
+}
