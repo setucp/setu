@@ -1170,5 +1170,19 @@ async fn a_moved_alias_goes_live_for_the_new_site_when_the_old_one_lets_go() {
     assert_eq!(r.output["aliases"], 0, "B routes nothing while A holds it");
     let r = setu_agent::execute("c3", &set("aaaaaaaa", "a.example.test", 20001, vec![]), &rt).await;
     assert!(r.ok);
-    assert_eq!(alias_routes(), 1, "B routes the host once A lets go");
+    let owner_routes = |short: &str| {
+        let prefix = format!("setu-site-{short}-alias-");
+        rt.caddy()
+            .admin()
+            .routes()
+            .iter()
+            .filter(|r| r["@id"].as_str().is_some_and(|id| id.starts_with(&prefix)))
+            .count()
+    };
+    assert_eq!(
+        owner_routes("bbbbbbbb"),
+        1,
+        "B routes the host once A lets go"
+    );
+    assert_eq!(owner_routes("aaaaaaaa"), 0, "A keeps no alias route");
 }
