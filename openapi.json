@@ -1921,6 +1921,117 @@
         }
       }
     },
+    "/api/v1/servers/{id}/logs": {
+      "get": {
+        "tags": [
+          "super::servers"
+        ],
+        "summary": "Journal of a service on the server (operator and above): `unit` is\n`caddy` or `agent`. Poll with the returned `cursor` for new lines.\n400 for another unit or a malformed cursor, 502 when the agent does\nnot answer or cannot read the journal.",
+        "operationId": "logs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Server id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "unit",
+            "in": "query",
+            "description": "`caddy` or `agent`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor of the previous page",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lines",
+            "in": "query",
+            "description": "Lines per page, 1 to 1000 (default 200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemLogsOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/servers/{id}/rotate-token": {
       "post": {
         "tags": [
@@ -5348,6 +5459,37 @@
                 "type": "string"
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Read the journal of one of the host's own services (server level,\nread-only). Absent in older agents: they refuse it as unknown.",
+            "required": [
+              "unit",
+              "lines",
+              "kind"
+            ],
+            "properties": {
+              "cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "fetch_system_logs"
+                ]
+              },
+              "lines": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "unit": {
+                "$ref": "#/components/schemas/SystemUnit"
+              }
+            }
           }
         ],
         "description": "Idempotent agent commands, JSON-tagged by `kind` (snake_case)."
@@ -6973,6 +7115,36 @@
             "$ref": "#/components/schemas/Workdir"
           }
         }
+      },
+      "SystemLogsOut": {
+        "type": "object",
+        "description": "One page of a host service's journal.",
+        "required": [
+          "lines"
+        ],
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass back as `cursor` to read what follows."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SystemUnit": {
+        "type": "string",
+        "description": "The services whose logs the panel may read: a fixed set, never a name\nfrom the wire, so no free string can reach `journalctl -u`.",
+        "enum": [
+          "caddy",
+          "agent"
+        ]
       },
       "UnitState": {
         "type": "object",

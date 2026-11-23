@@ -76,7 +76,7 @@ impl std::fmt::Debug for SiteRecord {
 
 /// One persisted command result; `posted` once the control plane
 /// acknowledged it. Results of read-only commands (`status`,
-/// `fetch_logs`, `inventory`: re-running them is harmless, and a log
+/// `fetch_logs`, `fetch_system_logs`, `inventory`: re-running them is harmless, and a log
 /// page can be megabytes) are dropped once posted.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RecentResult {

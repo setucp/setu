@@ -10,8 +10,8 @@
 //!    late).
 //! 3. **Per-site FIFO**: a command with a site short id that is not
 //!    read-only takes that site's slot (the database commands take the
-//!    slot of the `site_<short>` they name); `status`, `fetch_logs` and
-//!    `inventory` take none. Slots are queued in delivery order
+//!    slot of the `site_<short>` they name); `status`, `fetch_logs`,
+//!    `fetch_system_logs` and `inventory` take none. Slots are queued in delivery order
 //!    ([`Agent::spawn`] enqueues before the task starts), so one site's
 //!    commands run in order while other sites run concurrently.
 //! 4. **Redaction**: every secret value the command carried

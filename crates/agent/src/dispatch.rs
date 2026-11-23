@@ -473,6 +473,25 @@ where
             ),
             Err(e) => err(cmd_id, "fetch_logs failed", e),
         },
+        Command::FetchSystemLogs {
+            unit,
+            cursor,
+            lines,
+        } => match rt
+            .system_logs_inner(*unit, cursor.as_deref(), (*lines).clamp(1, 5000))
+            .await
+        {
+            Ok(stream) => ok(
+                cmd_id,
+                serde_json::to_value(LogsOutput {
+                    lines: stream.lines,
+                    cursor: stream.next,
+                })
+                .unwrap_or_default(),
+                "fetch_system_logs ok",
+            ),
+            Err(e) => err(cmd_id, "fetch_system_logs failed", e),
+        },
         Command::CertStatus { site, domain } => {
             if crate::caddy::site_route_id(site).is_err() {
                 return err(

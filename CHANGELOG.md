@@ -7,6 +7,13 @@ matching the tag.
 
 ### Added
 
+- **Caddy and agent logs per server.** `GET /api/v1/servers/{id}/logs?unit=caddy|agent`
+  (operator and above) returns a page of that service's journal as
+  `{lines, cursor}`; pass the cursor back to read what follows (polling,
+  not SSE). New read-only `fetch_system_logs` agent command: the unit is
+  one of a fixed set (`caddy.service`, `setu-agent.service`), never a
+  string from the wire. The agent must be 0.1.7 too; an older agent
+  answers 502.
 - **Certificate status per site.** `GET /api/v1/sites/{id}/certificate`
   reads the certificate Caddy serves for the site's domain (a local TLS
   handshake by the agent, new read-only `cert_status` command) and
