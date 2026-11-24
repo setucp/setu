@@ -3,7 +3,7 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
-## 0.1.7 — Unreleased
+## 0.1.7 — 2026-11-23
 
 ### Added
 
