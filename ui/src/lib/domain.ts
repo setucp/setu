@@ -1,7 +1,11 @@
 /**
  * Hostname rules shared by the forms that take one. The server is the
  * judge (`setu_common::domain::normalise`); these mirror it so the forms
- * neither refuse a name the server takes nor accept one it refuses.
+ * neither refuse a name the server takes nor accept one it refuses. One known
+ * exception, on the safe side: a hex-looking last label (`foo.0x7f`,
+ * `foo.0x`) makes the browser's URL parser throw, so the form refuses it,
+ * while the server, which refuses only an all-digit last label, would take it.
+ * No real top-level domain looks like that.
  */
 const ASCII_HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 

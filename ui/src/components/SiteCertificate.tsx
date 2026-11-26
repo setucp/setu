@@ -173,15 +173,16 @@ function RetryJob({ id, siteId, onEnd }: { id: string; siteId: string; onEnd: ()
   const onEndRef = React.useRef(onEnd);
   onEndRef.current = onEnd;
   // Once per job: a read that fails and then works again while the job runs
-  // must not end it a second time.
-  const endedOnce = React.useRef(false);
+  // must not end it a second time. Keyed by the job id, not by the remount
+  // `key={jobId}` gives, so a later retry's job always ends too.
+  const endedFor = React.useRef<string | null>(null);
   React.useEffect(() => {
-    if (ended && !endedOnce.current) {
-      endedOnce.current = true;
+    if (ended && endedFor.current !== id) {
+      endedFor.current = id;
       void queryClient.invalidateQueries({ queryKey: ["sites", siteId, "certificate"] });
       onEndRef.current();
     }
-  }, [ended, siteId, queryClient]);
+  }, [ended, id, siteId, queryClient]);
   return (
     <span className="flex items-center gap-1.5 text-xs">
       <AppLink href={`/jobs/${id}`} className="text-link hover:underline">

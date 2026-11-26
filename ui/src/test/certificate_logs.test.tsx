@@ -192,6 +192,43 @@ describe("site certificate", () => {
     expect(certReads()).toBe(2);
   });
 
+  it("a second retry ends too: the button comes back and the certificate is read once per job end", async () => {
+    const jobStatus: Record<string, string> = { "job-r1": "running", "job-r2": "running" };
+    let posts = 0;
+    const calls = stubFetch((url, method) => {
+      if (url.endsWith("/api/v1/auth/me")) return json(me("operator"));
+      if (url.endsWith(`${CERT}/retry`) && method === "POST") {
+        posts += 1;
+        return json({ id: `job-r${posts}`, kind: "route_update", status: "queued" }, 202);
+      }
+      if (url.endsWith(CERT)) return json(valid);
+      const m = /\/api\/v1\/jobs\/(job-r\d)$/.exec(url);
+      if (m) return json({ id: m[1], kind: "route_update", status: jobStatus[m[1]!] });
+      return notFound();
+    });
+    const certReads = () => calls.filter((c) => c.url === CERT).length;
+    const retryButton = () => screen.getByRole("button", { name: /retry now/i });
+    const user = userEvent.setup();
+    renderWithClient(<SiteCertificate site={site()} />);
+    await screen.findByRole("button", { name: /retry now/i });
+    await waitFor(() => expect(certReads()).toBe(1));
+
+    await user.click(retryButton());
+    expect(await screen.findByText("running")).toBeInTheDocument();
+    jobStatus["job-r1"] = "done";
+    await waitFor(() => expect(retryButton()).toBeEnabled(), { timeout: 3000 });
+    await waitFor(() => expect(certReads()).toBe(2));
+
+    // Without a latch per job id (or the remount `key={jobId}` gives), this job's end is never seen.
+    await user.click(retryButton());
+    expect(await screen.findByRole("link", { name: /retry job/i })).toHaveAttribute("href", "/jobs/job-r2");
+    await waitFor(() => expect(retryButton()).toBeDisabled());
+    jobStatus["job-r2"] = "done";
+    await waitFor(() => expect(retryButton()).toBeEnabled(), { timeout: 3000 });
+    await waitFor(() => expect(certReads()).toBe(3));
+    expect(posts).toBe(2);
+  });
+
   it("the retry comes back when its job can no longer be read", async () => {
     const calls = stubFetch((url, method) => {
       if (url.endsWith("/api/v1/auth/me")) return json(me("operator"));
