@@ -1,5 +1,7 @@
 import * as React from "react";
-import { api, type SystemUnit } from "@/lib/client";
+import { useMe } from "@/lib/api";
+import { api, ApiError, type SystemUnit } from "@/lib/client";
+import { redirectOnUnauthorised } from "@/lib/session";
 import { ErrorText } from "./ErrorText";
 import { LogPanel } from "./LogPanel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
@@ -7,6 +9,8 @@ import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 /** How often the open journal is read again. */
 export const SERVER_LOG_POLL_MS = 3000;
+/** The longest wait between reads after the agent keeps failing. */
+export const SERVER_LOG_MAX_BACKOFF_MS = 30_000;
 /** Lines kept on screen; older ones drop off the top. */
 export const SERVER_LOG_KEEP = 2000;
 
@@ -20,6 +24,11 @@ const UNITS: Array<{ unit: SystemUnit; label: string }> = [
  * returns the tail and a cursor, each later read passes the cursor back
  * and appends only the new lines. Pausing stops the reads; resuming goes
  * on from the same cursor, so nothing is missed or shown twice.
+ *
+ * A request the server refuses (4xx: an agent too old for the journal
+ * endpoint, a role without access) is not retried; an expired session goes
+ * to the sign-in page. A failing agent (5xx, network) is read again with a
+ * doubling wait, and nothing is read while the browser tab is hidden.
  */
 export function useServerJournal(serverId: string, unit: SystemUnit, live: boolean) {
   const [lines, setLines] = React.useState<string[]>([]);
@@ -37,11 +46,29 @@ export function useServerJournal(serverId: string, unit: SystemUnit, live: boole
     if (!live) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let wait = SERVER_LOG_POLL_MS;
+    let waitingForTab = false;
+    function schedule() {
+      if (stopped) return;
+      if (document.hidden) {
+        waitingForTab = true;
+        return;
+      }
+      timer = setTimeout(() => void read(), wait);
+    }
+    function onVisible() {
+      if (!document.hidden && waitingForTab && !stopped) {
+        waitingForTab = false;
+        void read();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisible);
     async function read() {
       try {
         const page = await api.serverLogs(serverId, unit, cursor.current);
         if (stopped) return;
         cursor.current = page.cursor ?? cursor.current;
+        wait = SERVER_LOG_POLL_MS;
         setError(null);
         if (page.lines.length > 0) {
           setLines((prev) => {
@@ -52,12 +79,16 @@ export function useServerJournal(serverId: string, unit: SystemUnit, live: boole
       } catch (err) {
         if (stopped) return;
         setError(err);
+        if (redirectOnUnauthorised(err)) return;
+        if (err instanceof ApiError && err.status >= 400 && err.status < 500) return;
+        wait = Math.min(wait * 2, SERVER_LOG_MAX_BACKOFF_MS);
       }
-      if (!stopped) timer = setTimeout(() => void read(), SERVER_LOG_POLL_MS);
+      schedule();
     }
     void read();
     return () => {
       stopped = true;
+      document.removeEventListener("visibilitychange", onVisible);
       if (timer !== undefined) clearTimeout(timer);
     };
   }, [serverId, unit, live]);
@@ -67,6 +98,27 @@ export function useServerJournal(serverId: string, unit: SystemUnit, live: boole
 
 /** Server detail card: Caddy's and the agent's journal on that host, with pause and copy. */
 export function ServerLogs({ serverId, serverName }: { serverId: string; serverName: string }) {
+  const me = useMe();
+  // The journal endpoint is operator-only: a viewer is told so, and no
+  // request is made.
+  if (me.data === undefined) return null;
+  if (me.data.role === "viewer") {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Service logs</CardTitle>
+          <CardDescription>
+            The journal of Caddy and the Setu agent on {serverName} is shown to operators and
+            admins.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+  return <ServerJournalCard serverId={serverId} serverName={serverName} />;
+}
+
+function ServerJournalCard({ serverId, serverName }: { serverId: string; serverName: string }) {
   const [unit, setUnit] = React.useState<SystemUnit>("caddy");
   const [paused, setPaused] = React.useState(false);
   const { lines, error } = useServerJournal(serverId, unit, !paused);

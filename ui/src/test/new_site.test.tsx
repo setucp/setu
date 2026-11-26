@@ -35,7 +35,6 @@ const domainOk = {
   findings: [
     { id: "dns", level: "ok", message: "resolves to 203.0.113.7" },
     { id: "points_at_server", level: "ok", message: "points at the server (203.0.113.7)" },
-    { id: "proxy", level: "ok", message: "not behind a proxy" },
     { id: "caa", level: "ok", message: "no CAA record; any CA may issue" },
   ],
 };
@@ -47,8 +46,7 @@ const domainBad = {
   findings: [
     { id: "dns", level: "ok", message: "resolves to 198.51.100.1" },
     { id: "points_at_server", level: "error", message: "points at 198.51.100.1, not 203.0.113.7" },
-    { id: "proxy", level: "warn", message: "behind Cloudflare's proxy" },
-    { id: "caa", level: "ok", message: "no CAA record; any CA may issue" },
+    { id: "caa", level: "warn", message: "the CAA lookup failed (SERVFAIL); Let's Encrypt may refuse to issue" },
   ],
 };
 

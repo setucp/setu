@@ -3,7 +3,7 @@ import { Plus, Save, Trash2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAliases, useMe, useSetAliases } from "@/lib/api";
 import { ApiError, type Alias, type AliasMode, type SiteDetail } from "@/lib/client";
-import { DOMAIN_RE, normaliseHost } from "@/lib/domain";
+import { asciiHost, normaliseHost, wwwName } from "@/lib/domain";
 import { DomainCheck } from "./DomainCheck";
 import { ErrorText } from "./ErrorText";
 import { Alert } from "./ui/alert";
@@ -24,9 +24,9 @@ export const MAX_ALIASES = 10;
  * there (409).
  */
 export function aliasError(typed: string, rows: Alias[], siteDomain: string): string | null {
-  const host = normaliseHost(typed);
-  if (host === "") return null;
-  if (!DOMAIN_RE.test(host)) return "A bare hostname, e.g. old.example.com.";
+  if (normaliseHost(typed) === "") return null;
+  const host = asciiHost(typed);
+  if (host === null) return "A bare hostname, e.g. old.example.com.";
   if (host === siteDomain) return "That is the site's own domain.";
   if (rows.some((r) => r.host === host)) return "Already listed.";
   return null;
@@ -73,7 +73,8 @@ export function SiteAliases({
   const canEdit = me.data !== undefined && me.data.role !== "viewer";
   const busy = !settled(site.status);
   const full = rows.length >= MAX_ALIASES;
-  const host = normaliseHost(typed);
+  // The stored (ASCII) form, so a saved list compares equal to the draft.
+  const host = asciiHost(typed) ?? normaliseHost(typed);
   const typedErr = aliasError(typed, rows, site.domain);
   const canAdd = host !== "" && typedErr === null && !full;
 
@@ -120,10 +121,13 @@ export function SiteAliases({
         ) : (
           <ul aria-label="Hostnames" className="divide-y rounded-md border">
             {rows.map((a, i) => (
-              <li key={a.host} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 text-sm">
+              <li
+                key={a.host}
+                className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 text-sm"
+              >
                 <span className="min-w-0 flex-1 font-mono text-xs break-all">
                   {a.host}
-                  {a.host === `www.${site.domain}` ? (
+                  {site.www_redirect && a.host === wwwName(site.domain) ? (
                     <span className="block font-sans text-muted-foreground">
                       Replaces the automatic www redirect.
                     </span>
@@ -199,6 +203,7 @@ export function SiteAliases({
               <DomainCheck
                 domain={canAdd ? host : null}
                 serverId={site.server_id}
+                context="alias"
               />
             </form>
             {busy ? (
@@ -228,7 +233,9 @@ export function SiteAliases({
                 </Button>
               ) : null}
               <span className="text-xs text-muted-foreground">
-                {dirty ? "Not saved yet." : "Saving updates the site's route; the app does not restart."}
+                {dirty
+                  ? "Not saved yet."
+                  : "Saving updates the site's route; the app does not restart."}
               </span>
             </div>
           </>

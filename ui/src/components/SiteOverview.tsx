@@ -33,8 +33,8 @@ export function SiteOverview({ site, aside }: { site: SiteDetail; aside?: React.
         <CardContent className="pt-2">
           {failed ? (
             <Alert variant="destructive" className="mb-3" title="Provisioning failed">
-              The job stopped at step <code>{site.failed_step}</code>. Retry it from the Danger
-              tab once the cause is fixed.
+              The job stopped at step <code>{site.failed_step}</code>. Retry it from the Danger tab
+              once the cause is fixed.
             </Alert>
           ) : null}
           <dl className="divide-y">
@@ -67,7 +67,10 @@ export function SiteOverview({ site, aside }: { site: SiteDetail; aside?: React.
               {site.app_id} <span className="font-mono text-xs">{site.app_version}</span>
             </Row>
             <Row term="Server">
-              <AppLink href={`/servers/${site.server_id}`} className="font-mono text-xs text-link hover:underline">
+              <AppLink
+                href={`/servers/${site.server_id}`}
+                className="font-mono text-xs text-link hover:underline"
+              >
                 {site.server_id}
               </AppLink>
             </Row>
@@ -88,32 +91,32 @@ export function SiteOverview({ site, aside }: { site: SiteDetail; aside?: React.
         </CardContent>
       </Card>
       <div className="flex min-w-0 flex-col gap-6 self-start">
-      <Card>
-        <CardHeader>
-          <CardTitle>Usage</CardTitle>
-          <CardDescription>Latest one-minute sample from the agent.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {m === null ? (
-            <p className="rounded-md border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-              No sample yet — the agent reports usage every minute while the site runs.
-            </p>
-          ) : (
-            <>
-              <dl className="grid grid-cols-3 gap-3">
-                <Metric label="Memory" value={formatBytes(m.memory_bytes)} />
-                <Metric label="CPU time" value={formatSeconds(m.cpu_seconds)} />
-                <Metric label="Disk" value={formatBytes(m.disk_bytes)} />
-              </dl>
-              <p className="mt-3 text-xs text-muted-foreground">
-                Sampled <RelativeTime iso={m.at} />. CPU time is cumulative since the service
-                started.
+        <Card>
+          <CardHeader>
+            <CardTitle>Usage</CardTitle>
+            <CardDescription>Latest one-minute sample from the agent.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {m === null ? (
+              <p className="rounded-md border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+                No sample yet — the agent reports usage every minute while the site runs.
               </p>
-            </>
-          )}
-        </CardContent>
-      </Card>
-      {aside}
+            ) : (
+              <>
+                <dl className="grid grid-cols-3 gap-3">
+                  <Metric label="Memory" value={formatBytes(m.memory_bytes)} />
+                  <Metric label="CPU time" value={formatSeconds(m.cpu_seconds)} />
+                  <Metric label="Disk" value={formatBytes(m.disk_bytes)} />
+                </dl>
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Sampled <RelativeTime iso={m.at} />. CPU time is cumulative since the service
+                  started.
+                </p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+        {aside}
       </div>
     </div>
   );

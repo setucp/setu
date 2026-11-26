@@ -13,7 +13,8 @@ matching the tag.
   the new-site form runs the DNS pre-check on the domain; the Access tab
   edits the site's extra hostnames (redirect or serve each, the DNS
   pre-check per name, saved as one list) and turns noindex on or off
-  (asking first). Viewers see all of them read-only.
+  (asking first). Viewers see the certificate, hostnames and noindex
+  setting read-only; the service logs are for operators and admins.
 
 ## 0.1.7 — 2026-11-23
 

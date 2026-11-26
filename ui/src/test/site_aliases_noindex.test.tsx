@@ -35,6 +35,28 @@ describe("site aliases", { timeout: 15_000 }, () => {
     expect(aliasError("localhost", rows, "blog.example.com")).toMatch(/bare hostname/);
     expect(aliasError("Blog.Example.com", rows, "blog.example.com")).toMatch(/own domain/);
     expect(aliasError("OLD.example.com.", rows, "blog.example.com")).toMatch(/Already listed/);
+    // The server takes IDN names (stored as punycode) and refuses IP addresses.
+    expect(aliasError("bücher.example", rows, "blog.example.com")).toBeNull();
+    expect(aliasError("xn--bcher-kva.example", [{ host: "xn--bcher-kva.example", mode: "redirect" }], "x.example")).toMatch(/Already listed/);
+    expect(aliasError("bücher.example", [{ host: "xn--bcher-kva.example", mode: "redirect" }], "x.example")).toMatch(/Already listed/);
+    expect(aliasError("1.2.3.4", rows, "blog.example.com")).toMatch(/bare hostname/);
+    expect(aliasError("*.example.com", rows, "blog.example.com")).toMatch(/bare hostname/);
+  });
+
+  it("names the automatic www redirect only where the agent makes one", async () => {
+    stubFetch((url) => {
+      if (url.endsWith("/api/v1/auth/me")) return json(me("viewer"));
+      if (url.endsWith(ALIASES)) return json({ aliases: [{ host: "www.example.com", mode: "serve" }] });
+      return notFound();
+    });
+    const { unmount } = renderWithClient(
+      <SiteAliases site={site({ domain: "example.com", www_redirect: true })} />,
+    );
+    expect(await screen.findByText(/replaces the automatic www redirect/i)).toBeInTheDocument();
+    unmount();
+    renderWithClient(<SiteAliases site={site({ domain: "example.com", www_redirect: false })} />);
+    await screen.findByText("www.example.com");
+    expect(screen.queryByText(/replaces the automatic www redirect/i)).not.toBeInTheDocument();
   });
 
   it("edits a draft (add, change mode, remove) and saves the whole list once", async () => {
@@ -58,7 +80,8 @@ describe("site aliases", { timeout: 15_000 }, () => {
 
     const list = await screen.findByRole("list", { name: "Hostnames" });
     expect(within(list).getByText("old.example.com")).toBeInTheDocument();
-    expect(within(list).getByText(/replaces the automatic www redirect/i)).toBeInTheDocument();
+    // blog.example.com is a subdomain: the agent makes no automatic www redirect for it.
+    expect(within(list).queryByText(/replaces the automatic www redirect/i)).not.toBeInTheDocument();
     const save = await screen.findByRole("button", { name: /save hostnames/i });
     expect(save).toBeDisabled();
 
@@ -218,6 +241,22 @@ describe("site noindex", () => {
       { enabled: true },
       { enabled: false },
     ]);
+  });
+
+  it("cancelling the confirm leaves the site indexed and sends nothing", async () => {
+    const calls = stubFetch((url) => {
+      if (url.endsWith("/api/v1/auth/me")) return json(me("operator"));
+      if (url.endsWith(NOINDEX)) return json({ enabled: false });
+      return notFound();
+    });
+    const user = userEvent.setup();
+    renderWithClient(<SiteNoindex site={site()} />);
+    await user.click(await screen.findByRole("button", { name: /hide from search engines/i }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: /cancel/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByText("allowed")).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
   });
 
   it("shows viewers the setting without the button", async () => {

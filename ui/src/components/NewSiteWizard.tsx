@@ -7,7 +7,7 @@ import {
   usePlans,
   useServers,
 } from "@/lib/api";
-import { DOMAIN_RE } from "@/lib/domain";
+import { asciiHost } from "@/lib/domain";
 import { formatMb } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { DomainCheck } from "./DomainCheck";
@@ -21,7 +21,6 @@ import { Input } from "./ui/input";
 import { Select } from "./ui/select";
 import { Skeleton } from "./ui/skeleton";
 import { Textarea } from "./ui/textarea";
-
 
 /** Parse `KEY=value` lines into the `prompts` map the API expects.
  * Returns the map plus the 1-based numbers of lines that do not parse
@@ -132,7 +131,8 @@ export function NewSiteWizard({ onCreated }: { onCreated?: (jobId: string) => vo
   const app = apps.data?.find((a) => a.id === appId);
   const plan = plans.data?.find((p) => p.id === planId);
   const server = servers.data?.find((s) => s.id === serverId);
-  const domainOk = DOMAIN_RE.test(domain.trim());
+  const checkedDomain = asciiHost(domain);
+  const domainOk = checkedDomain !== null;
   // The pre-check needs the server the site lands on: the chosen one, or
   // the only one there is when placement is automatic.
   const checkServerId =
@@ -314,7 +314,7 @@ export function NewSiteWizard({ onCreated }: { onCreated?: (jobId: string) => vo
                   />
                 </Field>
               </div>
-              <DomainCheck domain={domainOk ? domain.trim() : null} serverId={checkServerId} />
+              <DomainCheck domain={checkedDomain} serverId={checkServerId} context="site" />
             </Step>
 
             <Step

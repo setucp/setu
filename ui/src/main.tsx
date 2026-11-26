@@ -3,7 +3,8 @@ import { createRouter, RouterProvider } from "@tanstack/react-router";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { routeTree } from "./routeTree.gen";
-import { api, ApiError } from "@/lib/client";
+import { api } from "@/lib/client";
+import { redirectOnUnauthorised } from "@/lib/session";
 import { NotFound, RouteError } from "@/components/RouteStates";
 import { Mark } from "@/components/Mark";
 import "@/styles/globals.css";
@@ -11,14 +12,7 @@ import "@/styles/globals.css";
 const queryClient = new QueryClient({
   queryCache: new QueryCache({
     onError: (error) => {
-      // An expired session surfaces as 401s everywhere: send the visitor
-      // back to sign in once, with the way back.
-      if (error instanceof ApiError && error.status === 401) {
-        const back = window.location.pathname;
-        if (back !== "/login" && back !== "/setup") {
-          window.location.assign(`/login?redirect=${encodeURIComponent(back)}`);
-        }
-      }
+      redirectOnUnauthorised(error);
     },
   }),
   mutationCache: new MutationCache(),

@@ -2,7 +2,8 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { daysLeftText, SiteCertificate } from "@/components/SiteCertificate";
-import { ServerLogs, SERVER_LOG_POLL_MS } from "@/components/ServerLogs";
+import { ServerLogs, SERVER_LOG_MAX_BACKOFF_MS, SERVER_LOG_POLL_MS } from "@/components/ServerLogs";
+import { CERTIFICATE_FOLLOW_MS } from "@/lib/api";
 import type { SiteDetail } from "@/lib/client";
 import { json, notFound, renderWithClient, siteFixture, stubFetch } from "./helpers";
 
@@ -29,6 +30,20 @@ const pending = {
 afterEach(() => {
   vi.useRealTimers();
 });
+
+/**
+ * The journal endpoint is operator-only: these stubs sign in as `role` and
+ * return only the journal reads, in order.
+ */
+function stubLogs(handler: (url: string) => Response, role = "operator") {
+  const reads: { url: string }[] = [];
+  stubFetch((url) => {
+    if (url.endsWith("/api/v1/auth/me")) return json(me(role));
+    reads.push({ url });
+    return handler(url);
+  });
+  return reads;
+}
 
 describe("site certificate", () => {
   it("words the days left", () => {
@@ -75,12 +90,41 @@ describe("site certificate", () => {
     const link = await screen.findByRole("link", { name: /retry job/i });
     expect(link).toHaveAttribute("href", "/jobs/job-r");
     expect(await screen.findByText("running")).toBeInTheDocument();
+    // A second retry while the job runs would be refused (409): the button is off.
+    expect(screen.getByRole("button", { name: /retry now/i })).toBeDisabled();
 
     // The job ends: the card reads the certificate again.
     cert = valid;
     jobStatus = "done";
     expect(await screen.findByText("valid", {}, { timeout: 3000 })).toBeInTheDocument();
     expect(calls.filter((c) => c.url === CERT).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByRole("button", { name: /retry now/i })).toBeEnabled();
+  });
+
+  it("after the retry job ends, a still-pending certificate is read again until Caddy issues it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let cert: unknown = pending;
+    const calls = stubFetch((url, method) => {
+      if (url.endsWith("/api/v1/auth/me")) return json(me("operator"));
+      if (url.endsWith(`${CERT}/retry`) && method === "POST") {
+        return json({ id: "job-r", kind: "route_update", status: "queued" }, 202);
+      }
+      if (url.endsWith(CERT)) return json(cert);
+      if (url.endsWith("/api/v1/jobs/job-r")) return json({ id: "job-r", kind: "route_update", status: "done" });
+      return notFound();
+    });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) });
+    renderWithClient(<SiteCertificate site={site()} />);
+    await user.click(await screen.findByRole("button", { name: /retry now/i }));
+    await screen.findByText("done");
+    // The read right after the job still says pending.
+    await waitFor(() => expect(calls.filter((c) => c.url === CERT).length).toBeGreaterThanOrEqual(2));
+    expect(screen.getByText("pending")).toBeInTheDocument();
+    cert = valid;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CERTIFICATE_FOLLOW_MS);
+    });
+    expect(await screen.findByText("valid")).toBeInTheDocument();
   });
 
   it("the retry is off while the site is neither running nor stopped", async () => {
@@ -110,7 +154,7 @@ describe("server logs", () => {
   it("reads the tail, then only what follows the cursor; switching unit starts over", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let page = 0;
-    const calls = stubFetch((url) => {
+    const calls = stubLogs((url) => {
       const u = new URL(url, "http://x");
       if (u.pathname !== "/api/v1/servers/srv1/logs") return notFound();
       const unit = u.searchParams.get("unit");
@@ -138,7 +182,7 @@ describe("server logs", () => {
 
   it("pausing stops the reads; resuming goes on from the same cursor", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const calls = stubFetch((url) => {
+    const calls = stubLogs((url) => {
       const cursor = new URL(url, "http://x").searchParams.get("cursor");
       return json({ lines: cursor === null ? ["first"] : [`after ${cursor}`], cursor: "k1" });
     });
@@ -159,10 +203,10 @@ describe("server logs", () => {
     expect(calls.at(-1)?.url).toBe("/api/v1/servers/srv1/logs?unit=caddy&cursor=k1");
   });
 
-  it("a read the agent cannot answer shows the error and keeps trying", async () => {
+  it("a read the agent cannot answer shows the error and keeps trying, waiting longer each time", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let fail = true;
-    stubFetch(() =>
+    const calls = stubLogs(() =>
       fail
         ? json({ error: { code: "agent_unavailable", message: "the agent did not answer" } }, 502)
         : json({ lines: ["back"], cursor: "z" }),
@@ -170,6 +214,11 @@ describe("server logs", () => {
     renderWithClient(<ServerLogs serverId="srv1" serverName="web1" />);
     const card = (await screen.findByText("the agent did not answer")).closest("div");
     expect(card).not.toBeNull();
+    // The second read waits twice the poll interval.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SERVER_LOG_POLL_MS);
+    });
+    expect(calls).toHaveLength(1);
     fail = false;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(SERVER_LOG_POLL_MS);
@@ -177,5 +226,63 @@ describe("server logs", () => {
     await waitFor(() => expect(screen.getByTestId("server-logs").textContent).toBe("back"));
     expect(screen.queryByText("the agent did not answer")).not.toBeInTheDocument();
     expect(within(screen.getByRole("tablist")).getAllByRole("tab")).toHaveLength(2);
+  });
+
+  it("a request the server refuses is not read again", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const calls = stubLogs(() =>
+      json({ error: { code: "agent_too_old", message: "the agent predates the journal endpoint" } }, 409),
+    );
+    renderWithClient(<ServerLogs serverId="srv1" serverName="web1" />);
+    expect(await screen.findByText("the agent predates the journal endpoint")).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SERVER_LOG_MAX_BACKOFF_MS * 2);
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("stops reading when the card goes away", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const calls = stubLogs(() => json({ lines: ["x"], cursor: "k" }));
+    const { unmount } = renderWithClient(<ServerLogs serverId="srv1" serverName="web1" />);
+    await waitFor(() => expect(calls).toHaveLength(1));
+    unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SERVER_LOG_POLL_MS * 3);
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("does not read while the browser tab is hidden, and goes on when it is shown", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let hidden = false;
+    const spy = vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    const calls = stubLogs(() => json({ lines: ["x"], cursor: "k" }));
+    renderWithClient(<ServerLogs serverId="srv1" serverName="web1" />);
+    await waitFor(() => expect(calls).toHaveLength(1));
+    hidden = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SERVER_LOG_POLL_MS);
+    });
+    // The read already scheduled runs; after it, nothing while hidden.
+    const whileHidden = calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SERVER_LOG_POLL_MS * 3);
+    });
+    expect(calls).toHaveLength(whileHidden);
+    hidden = false;
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() => expect(calls).toHaveLength(whileHidden + 1));
+    spy.mockRestore();
+  });
+
+  it("a viewer is told the journal is for operators, and nothing is read", async () => {
+    const calls = stubLogs(() => json({ lines: ["secret"], cursor: "k" }), "viewer");
+    renderWithClient(<ServerLogs serverId="srv1" serverName="web1" />);
+    expect(await screen.findByText(/shown to operators and admins/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("server-logs")).not.toBeInTheDocument();
+    expect(calls).toHaveLength(0);
   });
 });

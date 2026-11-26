@@ -96,7 +96,8 @@ export function usePlans() {
   return useQuery({ queryKey: ["plans"], queryFn: () => api.listPlans() });
 }
 
-function jobIsOpen(status: string): boolean {
+/** Whether a job is still queued or running. */
+export function jobIsOpen(status: string): boolean {
   return status === "queued" || status === "running";
 }
 
@@ -309,12 +310,24 @@ export function useSetNoindex(siteId: string) {
   });
 }
 
-export function useCertificate(siteId: string) {
+/** How often a certificate still pending after a retry is read again. */
+export const CERTIFICATE_FOLLOW_MS = 5000;
+
+/**
+ * The site's certificate. `followUntil` (epoch ms) keeps reading it every
+ * few seconds while it is still pending: after a retry's route job ends,
+ * Caddy issues the certificate on its own time.
+ */
+export function useCertificate(siteId: string, followUntil: number | null = null) {
   return useQuery({
     queryKey: ["sites", siteId, "certificate"],
     queryFn: () => api.getCertificate(siteId),
     // Each read asks the agent; a minute old is fresh enough for a page view.
     staleTime: 60_000,
+    refetchInterval: (query) =>
+      followUntil !== null && Date.now() < followUntil && query.state.data?.state === "pending"
+        ? CERTIFICATE_FOLLOW_MS
+        : false,
   });
 }
 

@@ -2,7 +2,7 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
-import { useCertificate, useJob, useMe, useRetryCertificate } from "@/lib/api";
+import { jobIsOpen, useCertificate, useJob, useMe, useRetryCertificate } from "@/lib/api";
 import { ApiError, type CertState, type SiteDetail } from "@/lib/client";
 import { absoluteTime } from "@/lib/time";
 import { AppLink } from "./AppLink";
@@ -14,7 +14,10 @@ import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { SkeletonRows } from "./ui/skeleton";
 
-const stateBadge: Record<CertState, { label: string; variant: "success" | "warning" | "destructive" | "secondary" }> = {
+const stateBadge: Record<
+  CertState,
+  { label: string; variant: "success" | "warning" | "destructive" | "secondary" }
+> = {
   valid: { label: "valid", variant: "success" },
   expiring: { label: "expiring soon", variant: "warning" },
   expired: { label: "expired", variant: "destructive" },
@@ -41,16 +44,20 @@ function canRetry(status: string): boolean {
  * follows it and reads the certificate again once it ends.
  */
 export function SiteCertificate({ site }: { site: SiteDetail }) {
-  const cert = useCertificate(site.id);
+  const [followUntil, setFollowUntil] = React.useState<number | null>(null);
+  const cert = useCertificate(site.id, followUntil);
   const me = useMe();
   const retry = useRetryCertificate(site.id);
   const [jobId, setJobId] = React.useState<string | null>(null);
+  const [jobOpen, setJobOpen] = React.useState(false);
   const canEdit = me.data !== undefined && me.data.role !== "viewer";
 
   function onRetry() {
     retry.mutate(undefined, {
       onSuccess: (job) => {
         setJobId(job.id);
+        setJobOpen(true);
+        setFollowUntil(null);
         toast.success(`Caddy retries the certificate for ${site.domain}`);
       },
       onError: (err) => {
@@ -120,17 +127,26 @@ export function SiteCertificate({ site }: { site: SiteDetail }) {
                 variant="outline"
                 size="sm"
                 loading={retry.isPending}
-                disabled={!canRetry(site.status)}
+                disabled={!canRetry(site.status) || jobOpen}
                 onClick={onRetry}
               >
                 {retry.isPending ? null : <RefreshCw aria-hidden="true" />}
                 Retry now
               </Button>
-              {jobId !== null ? <RetryJob id={jobId} siteId={site.id} /> : null}
+              {jobId !== null ? (
+                <RetryJob
+                  id={jobId}
+                  siteId={site.id}
+                  onEnd={() => {
+                    setJobOpen(false);
+                    setFollowUntil(Date.now() + FOLLOW_AFTER_RETRY_MS);
+                  }}
+                />
+              ) : null}
             </div>
             <p className="text-xs text-muted-foreground">
               {canRetry(site.status)
-                ? "Caddy reloads the site's route and asks for the certificate again."
+                ? "Caddy reloads the site's route and asks for the certificate again; issuing it can take a minute after the job ends, and this card reads it again until then."
                 : `Available once the site is running or stopped (it is ${site.status}).`}
             </p>
           </div>
@@ -140,16 +156,26 @@ export function SiteCertificate({ site }: { site: SiteDetail }) {
   );
 }
 
-/** The retry's route job: its status, a link to its log, and a fresh read when it ends. */
-function RetryJob({ id, siteId }: { id: string; siteId: string }) {
+/** How long the card keeps reading a pending certificate after the retry job ends. */
+const FOLLOW_AFTER_RETRY_MS = 120_000;
+
+/**
+ * The retry's route job: its status, a link to its log, and a fresh read
+ * when it ends (`onEnd` then keeps the card reading while Caddy issues).
+ */
+function RetryJob({ id, siteId, onEnd }: { id: string; siteId: string; onEnd: () => void }) {
   const job = useJob(id);
   const queryClient = useQueryClient();
   const status = job.data?.status;
+  const ended = status !== undefined && !jobIsOpen(status);
+  const onEndRef = React.useRef(onEnd);
+  onEndRef.current = onEnd;
   React.useEffect(() => {
-    if (status === "done" || status === "failed") {
+    if (ended) {
       void queryClient.invalidateQueries({ queryKey: ["sites", siteId, "certificate"] });
+      onEndRef.current();
     }
-  }, [status, siteId, queryClient]);
+  }, [ended, siteId, queryClient]);
   return (
     <span className="flex items-center gap-1.5 text-xs">
       <AppLink href={`/jobs/${id}`} className="text-link hover:underline">
