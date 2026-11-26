@@ -14,7 +14,7 @@ matching the tag.
   edits the site's extra hostnames (redirect or serve each, the DNS
   pre-check per name, saved as one list) and turns noindex on or off
   (asking first). Viewers see the certificate, hostnames and noindex
-  setting read-only; the service logs are for operators and admins.
+  setting read-only; the service logs are for operators and owners.
 
 ## 0.1.7 — 2026-11-23
 

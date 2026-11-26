@@ -167,7 +167,8 @@ function RetryJob({ id, siteId, onEnd }: { id: string; siteId: string; onEnd: ()
   const job = useJob(id);
   const queryClient = useQueryClient();
   const status = job.data?.status;
-  const ended = status !== undefined && !jobIsOpen(status);
+  // A job that can no longer be read counts as ended, so the retry comes back.
+  const ended = (status !== undefined && !jobIsOpen(status)) || job.isError;
   const onEndRef = React.useRef(onEnd);
   onEndRef.current = onEnd;
   React.useEffect(() => {

@@ -127,6 +127,24 @@ describe("site certificate", () => {
     expect(await screen.findByText("valid")).toBeInTheDocument();
   });
 
+  it("the retry comes back when its job can no longer be read", async () => {
+    const calls = stubFetch((url, method) => {
+      if (url.endsWith("/api/v1/auth/me")) return json(me("operator"));
+      if (url.endsWith(`${CERT}/retry`) && method === "POST") {
+        return json({ id: "job-r", kind: "route_update", status: "queued" }, 202);
+      }
+      if (url.endsWith(CERT)) return json(pending);
+      return notFound();
+    });
+    const user = userEvent.setup();
+    renderWithClient(<SiteCertificate site={site()} />);
+    await user.click(await screen.findByRole("button", { name: /retry now/i }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/api/v1/jobs/job-r"))).toBe(true));
+    await waitFor(() => expect(screen.getByRole("button", { name: /retry now/i })).toBeEnabled(), {
+      timeout: 4000,
+    });
+  });
+
   it("the retry is off while the site is neither running nor stopped", async () => {
     stubFetch((url) => {
       if (url.endsWith("/api/v1/auth/me")) return json(me("owner"));
@@ -228,17 +246,26 @@ describe("server logs", () => {
     expect(within(screen.getByRole("tablist")).getAllByRole("tab")).toHaveLength(2);
   });
 
-  it("a request the server refuses is not read again", async () => {
+  it("a request the server refuses is not read again until asked, then starts from the tail", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    let refuse = true;
     const calls = stubLogs(() =>
-      json({ error: { code: "agent_too_old", message: "the agent predates the journal endpoint" } }, 409),
+      refuse
+        ? json({ error: { code: "agent_too_old", message: "the agent predates the journal endpoint" } }, 409)
+        : json({ lines: ["fresh"], cursor: "f1" }),
     );
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) });
     renderWithClient(<ServerLogs serverId="srv1" serverName="web1" />);
     expect(await screen.findByText("the agent predates the journal endpoint")).toBeInTheDocument();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(SERVER_LOG_MAX_BACKOFF_MS * 2);
     });
     expect(calls).toHaveLength(1);
+    refuse = false;
+    await user.click(screen.getByRole("button", { name: /try again/i }));
+    await waitFor(() => expect(screen.getByTestId("server-logs").textContent).toBe("fresh"));
+    expect(calls.at(-1)?.url).toBe("/api/v1/servers/srv1/logs?unit=caddy");
+    expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
   });
 
   it("stops reading when the card goes away", async () => {
@@ -281,7 +308,7 @@ describe("server logs", () => {
   it("a viewer is told the journal is for operators, and nothing is read", async () => {
     const calls = stubLogs(() => json({ lines: ["secret"], cursor: "k" }), "viewer");
     renderWithClient(<ServerLogs serverId="srv1" serverName="web1" />);
-    expect(await screen.findByText(/shown to operators and admins/i)).toBeInTheDocument();
+    expect(await screen.findByText(/shown to operators and owners/i)).toBeInTheDocument();
     expect(screen.queryByTestId("server-logs")).not.toBeInTheDocument();
     expect(calls).toHaveLength(0);
   });

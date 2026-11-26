@@ -315,7 +315,7 @@ export const CERTIFICATE_FOLLOW_MS = 5000;
 
 /**
  * The site's certificate. `followUntil` (epoch ms) keeps reading it every
- * few seconds while it is still pending: after a retry's route job ends,
+ * few seconds until it is valid: after a retry's route job ends,
  * Caddy issues the certificate on its own time.
  */
 export function useCertificate(siteId: string, followUntil: number | null = null) {
@@ -325,7 +325,10 @@ export function useCertificate(siteId: string, followUntil: number | null = null
     // Each read asks the agent; a minute old is fresh enough for a page view.
     staleTime: 60_000,
     refetchInterval: (query) =>
-      followUntil !== null && Date.now() < followUntil && query.state.data?.state === "pending"
+      followUntil !== null &&
+      Date.now() < followUntil &&
+      query.state.data !== undefined &&
+      query.state.data.state !== "valid"
         ? CERTIFICATE_FOLLOW_MS
         : false,
   });

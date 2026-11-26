@@ -3,6 +3,7 @@ import { useMe } from "@/lib/api";
 import { api, ApiError, type SystemUnit } from "@/lib/client";
 import { redirectOnUnauthorised } from "@/lib/session";
 import { ErrorText } from "./ErrorText";
+import { Button } from "./ui/button";
 import { LogPanel } from "./LogPanel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
@@ -34,13 +35,17 @@ export function useServerJournal(serverId: string, unit: SystemUnit, live: boole
   const [lines, setLines] = React.useState<string[]>([]);
   const [error, setError] = React.useState<unknown>(null);
   const cursor = React.useRef<string | null>(null);
+  // Set when the server refused a read (4xx): polling has stopped until `restart`.
+  const [halted, setHalted] = React.useState(false);
+  const [attempt, setAttempt] = React.useState(0);
 
-  // A new server or unit starts a fresh journal.
+  // A new server or unit, or a restart after a refusal, starts a fresh journal.
   React.useEffect(() => {
     cursor.current = null;
     setLines([]);
     setError(null);
-  }, [serverId, unit]);
+    setHalted(false);
+  }, [serverId, unit, attempt]);
 
   React.useEffect(() => {
     if (!live) return;
@@ -80,7 +85,10 @@ export function useServerJournal(serverId: string, unit: SystemUnit, live: boole
         if (stopped) return;
         setError(err);
         if (redirectOnUnauthorised(err)) return;
-        if (err instanceof ApiError && err.status >= 400 && err.status < 500) return;
+        if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+          setHalted(true);
+          return;
+        }
         wait = Math.min(wait * 2, SERVER_LOG_MAX_BACKOFF_MS);
       }
       schedule();
@@ -91,9 +99,11 @@ export function useServerJournal(serverId: string, unit: SystemUnit, live: boole
       document.removeEventListener("visibilitychange", onVisible);
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [serverId, unit, live]);
+  }, [serverId, unit, live, attempt]);
 
-  return { lines, error };
+  /** Read again from the tail after a refusal. */
+  const restart = React.useCallback(() => setAttempt((n) => n + 1), []);
+  return { lines, error, halted, restart };
 }
 
 /** Server detail card: Caddy's and the agent's journal on that host, with pause and copy. */
@@ -109,7 +119,7 @@ export function ServerLogs({ serverId, serverName }: { serverId: string; serverN
           <CardTitle>Service logs</CardTitle>
           <CardDescription>
             The journal of Caddy and the Setu agent on {serverName} is shown to operators and
-            admins.
+            owners.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -121,7 +131,7 @@ export function ServerLogs({ serverId, serverName }: { serverId: string; serverN
 function ServerJournalCard({ serverId, serverName }: { serverId: string; serverName: string }) {
   const [unit, setUnit] = React.useState<SystemUnit>("caddy");
   const [paused, setPaused] = React.useState(false);
-  const { lines, error } = useServerJournal(serverId, unit, !paused);
+  const { lines, error, halted, restart } = useServerJournal(serverId, unit, !paused);
   const label = UNITS.find((u) => u.unit === unit)?.label ?? unit;
 
   return (
@@ -142,7 +152,14 @@ function ServerJournalCard({ serverId, serverName }: { serverId: string; serverN
             ))}
           </TabsList>
         </Tabs>
-        <ErrorText error={error} />
+        <div className="flex items-start justify-between gap-3">
+          <ErrorText error={error} />
+          {halted ? (
+            <Button type="button" variant="outline" size="sm" onClick={restart}>
+              Try again
+            </Button>
+          ) : null}
+        </div>
         <LogPanel
           title={`${label} journal`}
           testId="server-logs"

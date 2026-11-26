@@ -19,7 +19,11 @@ export function normaliseHost(input: string): string {
  */
 export function asciiHost(input: string): string | null {
   const host = normaliseHost(input);
-  if (host === "" || /[*:/?#@\\[\]\s]/.test(host) || IPV4_RE.test(host)) return null;
+  // `%` would be decoded by the URL parser; a name whose last label is all
+  // digits is an IP address in some form (`1.2.3`, `127.1`), which the URL
+  // parser would turn into a dotted quad and the server refuses.
+  if (host === "" || /[*:/?#@%\\[\]\s]/.test(host) || IPV4_RE.test(host)) return null;
+  if (/^(\d+|0x[0-9a-f]*)$/.test(host.split(".").at(-1) ?? "")) return null;
   let ascii: string;
   try {
     // The URL parser applies the same UTS #46 mapping as the server's `idna`.

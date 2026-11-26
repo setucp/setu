@@ -41,6 +41,10 @@ describe("site aliases", { timeout: 15_000 }, () => {
     expect(aliasError("bücher.example", [{ host: "xn--bcher-kva.example", mode: "redirect" }], "x.example")).toMatch(/Already listed/);
     expect(aliasError("1.2.3.4", rows, "blog.example.com")).toMatch(/bare hostname/);
     expect(aliasError("*.example.com", rows, "blog.example.com")).toMatch(/bare hostname/);
+    // Short and hex IP forms the URL parser would turn into a dotted quad, and escapes.
+    for (const ip of ["1.2.3", "127.1", "0x7f.1", "10.0x1", "ex%41mple.com"]) {
+      expect(aliasError(ip, rows, "blog.example.com"), ip).toMatch(/bare hostname/);
+    }
   });
 
   it("names the automatic www redirect only where the agent makes one", async () => {
