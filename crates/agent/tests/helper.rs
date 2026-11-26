@@ -364,11 +364,18 @@ fn child(root: &Path, verb: &str, input: &str, sudo_uid: Option<&str>) -> std::p
         None => cmd.env_remove("SUDO_UID"),
     };
     let mut c = cmd.spawn().expect("spawn child");
-    c.stdin
+    // A refusing child may exit before it reads stdin; the tests assert on the
+    // exit status and stderr, so a broken pipe here is not a failure.
+    match c
+        .stdin
         .take()
         .expect("stdin")
         .write_all(format!("{input}\n").as_bytes())
-        .expect("write stdin");
+    {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(e) => panic!("write stdin: {e}"),
+    }
     c.wait_with_output().expect("wait")
 }
 

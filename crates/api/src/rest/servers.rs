@@ -20,7 +20,7 @@ use utoipa::ToSchema;
 use crate::auth::{audit, require_role, ClientIp, Role, Session};
 use crate::state::AppState;
 
-use super::ApiJson;
+use super::{agent_at_least, agent_too_old_message, ApiJson, AGENT_0_1_7};
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ServerOut {
@@ -416,6 +416,9 @@ pub async fn logs(
     }
     let lines = q.lines.unwrap_or(200).clamp(1, 1000);
     let server = state.db.servers().get(&id).await?;
+    if !agent_at_least(server.agent_version.as_deref(), AGENT_0_1_7) {
+        return Err(AppError::conflict(agent_too_old_message(AGENT_0_1_7)));
+    }
     let result = state
         .agent
         .call(
