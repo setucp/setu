@@ -310,7 +310,7 @@ export function useSetNoindex(siteId: string) {
   });
 }
 
-/** How often a certificate still pending after a retry is read again. */
+/** How often a certificate not yet valid after a retry is read again. */
 export const CERTIFICATE_FOLLOW_MS = 5000;
 
 /**

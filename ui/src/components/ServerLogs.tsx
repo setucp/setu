@@ -75,6 +75,8 @@ export function useServerJournal(serverId: string, unit: SystemUnit, live: boole
         cursor.current = page.cursor ?? cursor.current;
         wait = SERVER_LOG_POLL_MS;
         setError(null);
+        // A read that works again (say, after a pause and resume) clears a refusal.
+        setHalted(false);
         if (page.lines.length > 0) {
           setLines((prev) => {
             const next = prev.concat(page.lines);

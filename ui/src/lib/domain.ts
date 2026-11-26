@@ -4,7 +4,6 @@
  * neither refuse a name the server takes nor accept one it refuses.
  */
 const ASCII_HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
-const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 
 /** What the server stores for a typed host: trimmed, lower case, no trailing dot. */
 export function normaliseHost(input: string): string {
@@ -19,11 +18,8 @@ export function normaliseHost(input: string): string {
  */
 export function asciiHost(input: string): string | null {
   const host = normaliseHost(input);
-  // `%` would be decoded by the URL parser; a name whose last label is all
-  // digits is an IP address in some form (`1.2.3`, `127.1`), which the URL
-  // parser would turn into a dotted quad and the server refuses.
-  if (host === "" || /[*:/?#@%\\[\]\s]/.test(host) || IPV4_RE.test(host)) return null;
-  if (/^(\d+|0x[0-9a-f]*)$/.test(host.split(".").at(-1) ?? "")) return null;
+  // `%` would be decoded by the URL parser.
+  if (host === "" || /[*:/?#@%\\[\]\s]/.test(host)) return null;
   let ascii: string;
   try {
     // The URL parser applies the same UTS #46 mapping as the server's `idna`.
@@ -31,6 +27,10 @@ export function asciiHost(input: string): string | null {
   } catch {
     return null;
   }
+  // Checked after the mapping, as the server does: every IPv4 form the parser
+  // takes (`127.1`, `0x7f.1`, full-width `１２７.１`, `127。1`) comes out as a
+  // dotted quad, whose last label is all digits; the server refuses those.
+  if (/^\d+$/.test(ascii.split(".").at(-1) ?? "")) return null;
   if (ascii.length > 253 || !ASCII_HOST_RE.test(ascii)) return null;
   if (ascii.split(".").some((label) => label.length > 63)) return null;
   return ascii;

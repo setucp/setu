@@ -127,6 +127,71 @@ describe("site certificate", () => {
     expect(await screen.findByText("valid")).toBeInTheDocument();
   });
 
+  it("a certificate that is not pending (expired) is followed after the retry until valid, then no more", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let cert: unknown = { ...valid, state: "expired", days_left: -2 };
+    const calls = stubFetch((url, method) => {
+      if (url.endsWith("/api/v1/auth/me")) return json(me("operator"));
+      if (url.endsWith(`${CERT}/retry`) && method === "POST") {
+        return json({ id: "job-r", kind: "route_update", status: "queued" }, 202);
+      }
+      if (url.endsWith(CERT)) return json(cert);
+      if (url.endsWith("/api/v1/jobs/job-r")) return json({ id: "job-r", kind: "route_update", status: "done" });
+      return notFound();
+    });
+    const certReads = () => calls.filter((c) => c.url === CERT).length;
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) });
+    renderWithClient(<SiteCertificate site={site()} />);
+    await user.click(await screen.findByRole("button", { name: /retry now/i }));
+    await screen.findByText("done");
+    await waitFor(() => expect(certReads()).toBeGreaterThanOrEqual(2));
+    expect(screen.getByText("expired")).toBeInTheDocument();
+    cert = valid;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CERTIFICATE_FOLLOW_MS);
+    });
+    expect(await screen.findByText("valid")).toBeInTheDocument();
+    const settled = certReads();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CERTIFICATE_FOLLOW_MS * 3);
+    });
+    expect(certReads()).toBe(settled);
+  });
+
+  it("a job read that fails and then works again ends the retry once, not twice", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Valid throughout, so only the job's end reads the certificate again.
+    const jobReads = [
+      () => json({ id: "job-r", kind: "route_update", status: "running" }),
+      () => json({ error: { code: "internal", message: "boom" } }, 500),
+      () => json({ id: "job-r", kind: "route_update", status: "running" }),
+      () => json({ id: "job-r", kind: "route_update", status: "done" }),
+    ];
+    let job = 0;
+    const calls = stubFetch((url, method) => {
+      if (url.endsWith("/api/v1/auth/me")) return json(me("operator"));
+      if (url.endsWith(`${CERT}/retry`) && method === "POST") {
+        return json({ id: "job-r", kind: "route_update", status: "queued" }, 202);
+      }
+      if (url.endsWith(CERT)) return json(valid);
+      if (url.endsWith("/api/v1/jobs/job-r")) return jobReads[Math.min(job++, jobReads.length - 1)]!();
+      return notFound();
+    });
+    const certReads = () => calls.filter((c) => c.url === CERT).length;
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) });
+    renderWithClient(<SiteCertificate site={site()} />);
+    await user.click(await screen.findByRole("button", { name: /retry now/i }));
+    for (let i = 0; i < 4; i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+    }
+    await waitFor(() => expect(job).toBeGreaterThanOrEqual(4));
+    await screen.findByText("done");
+    // One read on mount, one when the job first counted as ended.
+    expect(certReads()).toBe(2);
+  });
+
   it("the retry comes back when its job can no longer be read", async () => {
     const calls = stubFetch((url, method) => {
       if (url.endsWith("/api/v1/auth/me")) return json(me("operator"));
@@ -265,6 +330,24 @@ describe("server logs", () => {
     await user.click(screen.getByRole("button", { name: /try again/i }));
     await waitFor(() => expect(screen.getByTestId("server-logs").textContent).toBe("fresh"));
     expect(calls.at(-1)?.url).toBe("/api/v1/servers/srv1/logs?unit=caddy");
+    expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
+  });
+
+  it("a refused read that works again after a pause and resume clears the refusal", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let refuse = true;
+    stubLogs(() =>
+      refuse
+        ? json({ error: { code: "agent_too_old", message: "the agent predates the journal endpoint" } }, 409)
+        : json({ lines: ["back"], cursor: "b1" }),
+    );
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) });
+    renderWithClient(<ServerLogs serverId="srv1" serverName="web1" />);
+    expect(await screen.findByRole("button", { name: /try again/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /pause live tail/i }));
+    refuse = false;
+    await user.click(screen.getByRole("button", { name: /resume live tail/i }));
+    await waitFor(() => expect(screen.getByTestId("server-logs").textContent).toBe("back"));
     expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
   });
 

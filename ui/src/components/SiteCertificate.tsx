@@ -135,6 +135,7 @@ export function SiteCertificate({ site }: { site: SiteDetail }) {
               </Button>
               {jobId !== null ? (
                 <RetryJob
+                  key={jobId}
                   id={jobId}
                   siteId={site.id}
                   onEnd={() => {
@@ -156,7 +157,7 @@ export function SiteCertificate({ site }: { site: SiteDetail }) {
   );
 }
 
-/** How long the card keeps reading a pending certificate after the retry job ends. */
+/** How long the card keeps reading a certificate that is not yet valid after the retry job ends. */
 const FOLLOW_AFTER_RETRY_MS = 120_000;
 
 /**
@@ -171,8 +172,12 @@ function RetryJob({ id, siteId, onEnd }: { id: string; siteId: string; onEnd: ()
   const ended = (status !== undefined && !jobIsOpen(status)) || job.isError;
   const onEndRef = React.useRef(onEnd);
   onEndRef.current = onEnd;
+  // Once per job: a read that fails and then works again while the job runs
+  // must not end it a second time.
+  const endedOnce = React.useRef(false);
   React.useEffect(() => {
-    if (ended) {
+    if (ended && !endedOnce.current) {
+      endedOnce.current = true;
       void queryClient.invalidateQueries({ queryKey: ["sites", siteId, "certificate"] });
       onEndRef.current();
     }
