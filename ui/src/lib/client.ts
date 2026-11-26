@@ -28,6 +28,10 @@ export type ManifestError = components["schemas"]["ManifestErrorOut"];
 export type ValidateResponse = components["schemas"]["ValidateResponse"];
 export type CreateServerResponse = components["schemas"]["CreateServerResponse"];
 export type Certificate = components["schemas"]["CertificateOut"];
+export type Alias = components["schemas"]["AliasItem"];
+export type AliasMode = components["schemas"]["AliasMode"];
+export type AliasesSet = components["schemas"]["AliasesSetResponse"];
+export type NoindexSet = components["schemas"]["NoindexSetResponse"];
 export type CertState = components["schemas"]["CertState"];
 export type SystemLogs = components["schemas"]["SystemLogsOut"];
 export type SystemUnit = components["schemas"]["SystemUnit"];
@@ -337,6 +341,38 @@ export const api = {
   domainCheck(domain: string, serverId: string): Promise<DomainCheck> {
     const q = new URLSearchParams({ domain, server_id: serverId });
     return request(`/api/v1/domain-check?${q.toString()}`);
+  },
+
+  /** The site's extra hostnames, each redirecting to its domain or served as well. */
+  async getAliases(siteId: string): Promise<Alias[]> {
+    const body = await request<{ aliases: Alias[] }>(
+      `/api/v1/sites/${encodeURIComponent(siteId)}/aliases`,
+    );
+    return body.aliases;
+  },
+
+  /** Replace the whole alias list; a route job starts. */
+  putAliases(siteId: string, aliases: Alias[]): Promise<AliasesSet> {
+    return request(`/api/v1/sites/${encodeURIComponent(siteId)}/aliases`, {
+      method: "PUT",
+      body: JSON.stringify({ aliases }),
+    });
+  },
+
+  /** Whether the site's route asks search engines to stay away. */
+  async getNoindex(siteId: string): Promise<boolean> {
+    const body = await request<{ enabled: boolean }>(
+      `/api/v1/sites/${encodeURIComponent(siteId)}/noindex`,
+    );
+    return body.enabled;
+  },
+
+  /** Turn noindex on or off; a route job starts. */
+  putNoindex(siteId: string, enabled: boolean): Promise<NoindexSet> {
+    return request(`/api/v1/sites/${encodeURIComponent(siteId)}/noindex`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    });
   },
 
   /** The certificate Caddy serves for the site's domain, read by the agent now. */

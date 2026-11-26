@@ -7,6 +7,7 @@ import {
   usePlans,
   useServers,
 } from "@/lib/api";
+import { DOMAIN_RE } from "@/lib/domain";
 import { formatMb } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { DomainCheck } from "./DomainCheck";
@@ -21,7 +22,6 @@ import { Select } from "./ui/select";
 import { Skeleton } from "./ui/skeleton";
 import { Textarea } from "./ui/textarea";
 
-const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
 
 /** Parse `KEY=value` lines into the `prompts` map the API expects.
  * Returns the map plus the 1-based numbers of lines that do not parse

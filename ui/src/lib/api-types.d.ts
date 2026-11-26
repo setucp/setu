@@ -729,6 +729,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sites/{id}/aliases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The site's aliases. */
+        get: operations["get"];
+        /**
+         * Replace the site's aliases (operator and above); queues a route update.
+         *     400 for a bad host or mode, 409 (and nothing stored) when a host is
+         *     another site's domain or alias, or the site has an active job.
+         */
+        put: operations["put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sites/{id}/backups": {
         parameters: {
             query?: never;
@@ -939,6 +961,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sites/{id}/noindex": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether the site asks search engines to stay away. */
+        get: operations["get"];
+        /**
+         * Turn the option on or off (operator and above); queues a route update.
+         *     409 (and nothing stored) while the site has an active job.
+         */
+        put: operations["put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sites/{id}/reset": {
         parameters: {
             query?: never;
@@ -1116,6 +1159,35 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description One extra hostname of a site (issue #18). */
+        Alias: {
+            host: string;
+            mode: components["schemas"]["AliasMode"];
+        };
+        /** @description One alias: a hostname and how it answers. */
+        AliasItem: {
+            host: string;
+            /** @description `redirect` (308 to the site's domain) or `serve` (the site answers). */
+            mode: string;
+        };
+        /**
+         * @description How a site answers on an extra hostname.
+         * @enum {string}
+         */
+        AliasMode: "redirect" | "serve";
+        /** @description `PUT /sites/{id}/aliases` body: the whole new list. */
+        AliasesRequest: {
+            aliases: components["schemas"]["AliasItem"][];
+        };
+        /** @description The aliases of a site. */
+        AliasesResponse: {
+            aliases: components["schemas"]["AliasItem"][];
+        };
+        /** @description The aliases after a change and the route job that applies them. */
+        AliasesSetResponse: {
+            aliases: components["schemas"]["AliasItem"][];
+            job: components["schemas"]["JobOut"];
+        };
         AppListOut: {
             apps: components["schemas"]["AppOut"][];
         };
@@ -1333,6 +1405,11 @@ export interface components {
             kind: "health";
             site: components["schemas"]["SiteSpec"];
         } | {
+            /**
+             * @description Extra hostnames. Absent in commands queued by an older control
+             *     plane: none.
+             */
+            aliases?: components["schemas"]["Alias"][];
             basic_auth?: null | components["schemas"]["BasicAuth"];
             domain: string;
             /**
@@ -1344,6 +1421,12 @@ export interface components {
             force_reload?: boolean;
             /** @enum {string} */
             kind: "set_route";
+            /**
+             * @description Ask search engines to stay away (`X-Robots-Tag` and a
+             *     disallow-all `/robots.txt`). Absent in commands queued by an
+             *     older control plane: off.
+             */
+            noindex?: boolean;
             /** Format: int32 */
             port: number;
             site_short_id: string;
@@ -1652,6 +1735,19 @@ export interface components {
             line?: number | null;
             message: string;
             path: string;
+        };
+        /** @description `PUT /sites/{id}/noindex` body. */
+        NoindexRequest: {
+            enabled: boolean;
+        };
+        /** @description The option as stored. */
+        NoindexResponse: {
+            enabled: boolean;
+        };
+        /** @description The option after a change and the route job that applies it. */
+        NoindexSetResponse: {
+            enabled: boolean;
+            job: components["schemas"]["JobOut"];
         };
         OperatorListOut: {
             operators: components["schemas"]["OperatorOut"][];
@@ -3894,6 +3990,110 @@ export interface operations {
             };
         };
     };
+    get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AliasesResponse"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AliasesRequest"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AliasesSetResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     list: {
         parameters: {
             query?: never;
@@ -4556,6 +4756,110 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NoindexResponse"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Site id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NoindexRequest"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NoindexSetResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

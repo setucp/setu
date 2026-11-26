@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
+  type Alias,
   type BasicAuthPutBody,
   type CreateSitePayload,
   type EnvPutBody,
@@ -267,6 +268,44 @@ export function useDomainCheck(domain: string | null, serverId: string | null) {
     queryFn: () => api.domainCheck(domain ?? "", serverId ?? ""),
     enabled: domain !== null && serverId !== null,
     staleTime: 30_000,
+  });
+}
+
+export function useAliases(siteId: string) {
+  return useQuery({
+    queryKey: ["sites", siteId, "aliases"],
+    queryFn: () => api.getAliases(siteId),
+  });
+}
+
+/** Replaces the alias list; the caller follows the returned route job. */
+export function useSetAliases(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (aliases: Alias[]) => api.putAliases(siteId, aliases),
+    onSuccess: (res) => {
+      queryClient.setQueryData(["sites", siteId, "aliases"], res.aliases);
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+export function useNoindex(siteId: string) {
+  return useQuery({
+    queryKey: ["sites", siteId, "noindex"],
+    queryFn: () => api.getNoindex(siteId),
+  });
+}
+
+/** Turns noindex on or off; the caller follows the returned route job. */
+export function useSetNoindex(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) => api.putNoindex(siteId, enabled),
+    onSuccess: (res) => {
+      queryClient.setQueryData(["sites", siteId, "noindex"], res.enabled);
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
   });
 }
 

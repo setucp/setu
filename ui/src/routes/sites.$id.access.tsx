@@ -1,6 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ErrorText } from "@/components/ErrorText";
 import { SiteAccess } from "@/components/SiteAccess";
+import { SiteAliases } from "@/components/SiteAliases";
+import { SiteNoindex } from "@/components/SiteNoindex";
 import { SkeletonRows } from "@/components/ui/skeleton";
 import { useSite } from "@/lib/api";
 import { ApiError } from "@/lib/client";
@@ -16,10 +18,12 @@ function SiteAccessTab() {
 
   if (site.error instanceof ApiError) return <ErrorText error={site.error} />;
   if (site.data === undefined) return <SkeletonRows rows={3} />;
+  const toJob = (jobId: string) => void navigate({ to: "/jobs/$id", params: { id: jobId } });
   return (
-    <SiteAccess
-      site={site.data}
-      onSubmitted={(jobId) => void navigate({ to: "/jobs/$id", params: { id: jobId } })}
-    />
+    <div className="flex flex-col gap-4">
+      <SiteAccess site={site.data} onSubmitted={toJob} />
+      <SiteAliases site={site.data} onSubmitted={toJob} />
+      <SiteNoindex site={site.data} onSubmitted={toJob} />
+    </div>
   );
 }
