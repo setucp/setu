@@ -3,6 +3,18 @@
 All notable changes to Setu. Release notes are cut from the section
 matching the tag.
 
+## Unreleased
+
+### Added
+
+- **Panel UI for the 0.1.7 APIs.** The site Overview tab has a
+  certificate card (state, issuer, expiry, a retry that follows its route
+  job); each server has a Caddy/agent log view (cursor polling, pause);
+  the new-site form runs the DNS pre-check on the domain; the Access tab
+  edits the site's extra hostnames (redirect or serve each, the DNS
+  pre-check per name, saved as one list) and turns noindex on or off
+  (asking first). Viewers see all of them read-only.
+
 ## 0.1.7 — 2026-11-23
 
 ### Added
