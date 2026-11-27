@@ -28,6 +28,28 @@ const servers = {
   servers: [{ id: "srv1", name: "web1", status: "online", created_at: "", updated_at: "" }],
 };
 
+const domainOk = {
+  domain: "blog.example.com",
+  server_ip: "203.0.113.7",
+  ok: true,
+  findings: [
+    { id: "dns", level: "ok", message: "resolves to 203.0.113.7" },
+    { id: "points_at_server", level: "ok", message: "points at the server (203.0.113.7)" },
+    { id: "caa", level: "ok", message: "no CAA record; any CA may issue" },
+  ],
+};
+
+const domainBad = {
+  domain: "blog.example.com",
+  server_ip: "203.0.113.7",
+  ok: false,
+  findings: [
+    { id: "dns", level: "ok", message: "resolves to 198.51.100.1" },
+    { id: "points_at_server", level: "error", message: "points at 198.51.100.1, not 203.0.113.7" },
+    { id: "caa", level: "warn", message: "the CAA lookup failed (SERVFAIL); Let's Encrypt may refuse to issue" },
+  ],
+};
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -49,6 +71,7 @@ function stubApi(posts: { url: string; init?: RequestInit }[] = []) {
     if (path.includes("/api/v1/apps/hello/versions")) return json(versions);
     if (path.endsWith("/api/v1/plans")) return json(plans);
     if (path.endsWith("/api/v1/servers")) return json(servers);
+    if (path.includes("/api/v1/domain-check")) return json(domainOk);
     return new Response("not found", { status: 404 });
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -158,5 +181,100 @@ describe("new site wizard", () => {
     await fillValid(user);
     await user.click(screen.getByRole("button", { name: /create site/i }));
     expect(await screen.findByText(/domain is already taken/i)).toBeInTheDocument();
+  });
+});
+
+describe("domain pre-check", { timeout: 15_000 }, () => {
+  function stubWith(opts: { serverList?: unknown; check?: unknown; posts?: { url: string }[] }) {
+    const checks: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        const path = String(url);
+        if (init?.method === "POST" && path.endsWith("/api/v1/sites")) {
+          opts.posts?.push({ url: path });
+          return json({ site: { id: "site9" }, job: { id: "job7", status: "queued" } });
+        }
+        if (path.endsWith("/api/v1/apps")) return json(apps);
+        if (path.includes("/versions")) return json(versions);
+        if (path.endsWith("/api/v1/plans")) return json(plans);
+        if (path.endsWith("/api/v1/servers")) return json(opts.serverList ?? servers);
+        if (path.includes("/api/v1/domain-check")) {
+          checks.push(path);
+          return json(opts.check ?? domainOk);
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    return checks;
+  }
+
+  it("checks the domain against the only server once typing stops", async () => {
+    const user = userEvent.setup();
+    const checks = stubWith({});
+    renderWizard();
+    await fillValid(user);
+    const section = await screen.findByRole("region", { name: /dns check/i }, { timeout: 3000 });
+    expect(section).toHaveTextContent(/points at the server; https can be issued/i);
+    expect(section).toHaveTextContent(/points at the server \(203\.0\.113\.7\)/);
+    expect(section).toHaveTextContent("203.0.113.7");
+    // One request, for the whole domain, not one per keystroke.
+    expect(checks).toHaveLength(1);
+    const q = new URL(checks[0] ?? "", "http://x").searchParams;
+    expect(q.get("domain")).toBe("blog.example.com");
+    expect(q.get("server_id")).toBe("srv1");
+  });
+
+  it("reports an error but still lets the site be created", async () => {
+    const user = userEvent.setup();
+    const posts: { url: string }[] = [];
+    stubWith({ check: domainBad, posts });
+    renderWizard();
+    await fillValid(user);
+    const section = await screen.findByRole("region", { name: /dns check/i }, { timeout: 3000 });
+    expect(section).toHaveTextContent(/https will not work until this is fixed/i);
+    expect(screen.getByRole("img", { name: "Problem" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Warning" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /create site/i }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+  });
+
+  it("asks for a server when placement is automatic among several", async () => {
+    const user = userEvent.setup();
+    const two = {
+      servers: [
+        ...servers.servers,
+        { id: "srv2", name: "web2", status: "online", created_at: "", updated_at: "" },
+      ],
+    };
+    const checks = stubWith({ serverList: two });
+    renderWizard();
+    await fillValid(user);
+    expect(await screen.findByText(/choose a server in step 2/i)).toBeInTheDocument();
+    expect(checks).toHaveLength(0);
+    await user.selectOptions(screen.getByLabelText(/^server$/i), "srv2");
+    await screen.findByRole("region", { name: /dns check/i }, { timeout: 3000 });
+    expect(new URL(checks[0] ?? "", "http://x").searchParams.get("server_id")).toBe("srv2");
+  });
+
+  it("checks again on request", async () => {
+    const user = userEvent.setup();
+    const checks = stubWith({});
+    renderWizard();
+    await fillValid(user);
+    await screen.findByRole("region", { name: /dns check/i }, { timeout: 3000 });
+    await user.click(screen.getByRole("button", { name: /check again/i }));
+    await waitFor(() => expect(checks).toHaveLength(2));
+  });
+
+  it("does not check an invalid domain", async () => {
+    const user = userEvent.setup();
+    const checks = stubWith({});
+    renderWizard();
+    await screen.findByRole("option", { name: "Hello" });
+    await user.type(screen.getByLabelText(/domain/i), "not a domain");
+    await new Promise((r) => setTimeout(r, 800));
+    expect(screen.queryByText(/checking dns/i)).not.toBeInTheDocument();
+    expect(checks).toHaveLength(0);
   });
 });

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
+  type Alias,
   type BasicAuthPutBody,
   type CreateSitePayload,
   type EnvPutBody,
@@ -95,7 +96,8 @@ export function usePlans() {
   return useQuery({ queryKey: ["plans"], queryFn: () => api.listPlans() });
 }
 
-function jobIsOpen(status: string): boolean {
+/** Whether a job is still queued or running. */
+export function jobIsOpen(status: string): boolean {
   return status === "queued" || status === "running";
 }
 
@@ -252,6 +254,92 @@ export function useSetBasicAuth(siteId: string) {
         basic_auth: res.basic_auth ?? null,
         route: res.route,
       });
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+/**
+ * The DNS pre-check for a domain on a server. Disabled until both are known
+ * (pass `null`); a result stays fresh for 30 s, and "Check again" refetches.
+ */
+export function useDomainCheck(domain: string | null, serverId: string | null) {
+  return useQuery({
+    queryKey: ["domain-check", domain, serverId],
+    queryFn: () => api.domainCheck(domain ?? "", serverId ?? ""),
+    enabled: domain !== null && serverId !== null,
+    staleTime: 30_000,
+  });
+}
+
+export function useAliases(siteId: string) {
+  return useQuery({
+    queryKey: ["sites", siteId, "aliases"],
+    queryFn: () => api.getAliases(siteId),
+  });
+}
+
+/** Replaces the alias list; the caller follows the returned route job. */
+export function useSetAliases(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (aliases: Alias[]) => api.putAliases(siteId, aliases),
+    onSuccess: (res) => {
+      queryClient.setQueryData(["sites", siteId, "aliases"], res.aliases);
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+export function useNoindex(siteId: string) {
+  return useQuery({
+    queryKey: ["sites", siteId, "noindex"],
+    queryFn: () => api.getNoindex(siteId),
+  });
+}
+
+/** Turns noindex on or off; the caller follows the returned route job. */
+export function useSetNoindex(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) => api.putNoindex(siteId, enabled),
+    onSuccess: (res) => {
+      queryClient.setQueryData(["sites", siteId, "noindex"], res.enabled);
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+/** How often a certificate not yet valid after a retry is read again. */
+export const CERTIFICATE_FOLLOW_MS = 5000;
+
+/**
+ * The site's certificate. `followUntil` (epoch ms) keeps reading it every
+ * few seconds until it is valid: after a retry's route job ends,
+ * Caddy issues the certificate on its own time.
+ */
+export function useCertificate(siteId: string, followUntil: number | null = null) {
+  return useQuery({
+    queryKey: ["sites", siteId, "certificate"],
+    queryFn: () => api.getCertificate(siteId),
+    // Each read asks the agent; a minute old is fresh enough for a page view.
+    staleTime: 60_000,
+    refetchInterval: (query) =>
+      followUntil !== null &&
+      Date.now() < followUntil &&
+      query.state.data !== undefined &&
+      query.state.data.state !== "valid"
+        ? CERTIFICATE_FOLLOW_MS
+        : false,
+  });
+}
+
+/** Queues the route job that makes Caddy retry; the caller follows the job. */
+export function useRetryCertificate(siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.retryCertificate(siteId),
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
     },
   });

@@ -27,9 +27,20 @@ export type Backup = components["schemas"]["BackupOut"];
 export type ManifestError = components["schemas"]["ManifestErrorOut"];
 export type ValidateResponse = components["schemas"]["ValidateResponse"];
 export type CreateServerResponse = components["schemas"]["CreateServerResponse"];
+export type Certificate = components["schemas"]["CertificateOut"];
+export type Alias = components["schemas"]["AliasItem"];
+export type AliasMode = components["schemas"]["AliasMode"];
+export type AliasesSet = components["schemas"]["AliasesSetResponse"];
+export type NoindexSet = components["schemas"]["NoindexSetResponse"];
+export type CertState = components["schemas"]["CertState"];
+export type SystemLogs = components["schemas"]["SystemLogsOut"];
+export type SystemUnit = components["schemas"]["SystemUnit"];
 export type SiteJobResponse = components["schemas"]["SiteJobResponse"];
 export type SetupStatus = components["schemas"]["SetupStatusOut"];
 export type LocalServerResponse = components["schemas"]["LocalServerResponse"];
+export type DomainCheck = components["schemas"]["DomainCheckOut"];
+export type DomainFinding = components["schemas"]["Finding"];
+export type FindingLevel = components["schemas"]["Level"];
 
 export interface PlanLimits {
   memory_mb?: number;
@@ -205,6 +216,16 @@ export const api = {
     return request(`/api/v1/servers/${encodeURIComponent(id)}`);
   },
 
+  /**
+   * One page of a host service's journal (`caddy` or `agent`). Pass the
+   * previous page's `cursor` to read only what came after it.
+   */
+  serverLogs(id: string, unit: SystemUnit, cursor: string | null): Promise<SystemLogs> {
+    const q = new URLSearchParams({ unit });
+    if (cursor !== null) q.set("cursor", cursor);
+    return request(`/api/v1/servers/${encodeURIComponent(id)}/logs?${q.toString()}`);
+  },
+
   createServer(name: string): Promise<CreateServerResponse> {
     return request("/api/v1/servers", {
       method: "POST",
@@ -310,6 +331,59 @@ export const api = {
   deleteBasicAuth(siteId: string): Promise<BasicAuthJobResponse> {
     return request(`/api/v1/sites/${encodeURIComponent(siteId)}/basic-auth`, {
       method: "DELETE",
+    });
+  },
+
+  /**
+   * DNS pre-check before a site is created: does `domain` resolve, point at
+   * the server, sit behind a proxy, allow Let's Encrypt (CAA)? Reads DNS only.
+   */
+  domainCheck(domain: string, serverId: string): Promise<DomainCheck> {
+    const q = new URLSearchParams({ domain, server_id: serverId });
+    return request(`/api/v1/domain-check?${q.toString()}`);
+  },
+
+  /** The site's extra hostnames, each redirecting to its domain or served as well. */
+  async getAliases(siteId: string): Promise<Alias[]> {
+    const body = await request<{ aliases: Alias[] }>(
+      `/api/v1/sites/${encodeURIComponent(siteId)}/aliases`,
+    );
+    return body.aliases;
+  },
+
+  /** Replace the whole alias list; a route job starts. */
+  putAliases(siteId: string, aliases: Alias[]): Promise<AliasesSet> {
+    return request(`/api/v1/sites/${encodeURIComponent(siteId)}/aliases`, {
+      method: "PUT",
+      body: JSON.stringify({ aliases }),
+    });
+  },
+
+  /** Whether the site's route asks search engines to stay away. */
+  async getNoindex(siteId: string): Promise<boolean> {
+    const body = await request<{ enabled: boolean }>(
+      `/api/v1/sites/${encodeURIComponent(siteId)}/noindex`,
+    );
+    return body.enabled;
+  },
+
+  /** Turn noindex on or off; a route job starts. */
+  putNoindex(siteId: string, enabled: boolean): Promise<NoindexSet> {
+    return request(`/api/v1/sites/${encodeURIComponent(siteId)}/noindex`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    });
+  },
+
+  /** The certificate Caddy serves for the site's domain, read by the agent now. */
+  getCertificate(siteId: string): Promise<Certificate> {
+    return request(`/api/v1/sites/${encodeURIComponent(siteId)}/certificate`);
+  },
+
+  /** Make Caddy try to get the site's certificate now; a route job starts. */
+  retryCertificate(siteId: string): Promise<Job> {
+    return request(`/api/v1/sites/${encodeURIComponent(siteId)}/certificate/retry`, {
+      method: "POST",
     });
   },
 
