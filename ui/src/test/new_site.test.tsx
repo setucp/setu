@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { NewSiteWizard } from "@/components/NewSiteWizard";
 
 const apps = {
@@ -9,7 +9,13 @@ const apps = {
 };
 const versions = {
   versions: [
-    { id: "v1", app_id: "hello", version: "0.1.0", channel: "stable", published_at: "2026-10-01T00:00:00Z" },
+    {
+      id: "v1",
+      app_id: "hello",
+      version: "0.1.0",
+      channel: "stable",
+      published_at: "2026-10-01T00:00:00Z",
+    },
   ],
 };
 const plans = {
@@ -46,7 +52,11 @@ const domainBad = {
   findings: [
     { id: "dns", level: "ok", message: "resolves to 198.51.100.1" },
     { id: "points_at_server", level: "error", message: "points at 198.51.100.1, not 203.0.113.7" },
-    { id: "caa", level: "warn", message: "the CAA lookup failed (SERVFAIL); Let's Encrypt may refuse to issue" },
+    {
+      id: "caa",
+      level: "warn",
+      message: "the CAA lookup failed (SERVFAIL); Let's Encrypt may refuse to issue",
+    },
   ],
 };
 
@@ -89,17 +99,51 @@ function renderWizard(onCreated?: (jobId: string) => void) {
   );
 }
 
-async function fillValid(user: ReturnType<typeof userEvent.setup>) {
-  await screen.findByRole("option", { name: "Hello" });
-  await user.selectOptions(await screen.findByLabelText(/application/i), "hello");
-  await screen.findByRole("option", { name: "0.1.0" });
-  await user.selectOptions(screen.getByLabelText(/version/i), "0.1.0");
-  await screen.findByRole("option", { name: "standard" });
-  await user.selectOptions(screen.getByLabelText(/plan/i), "plan1");
-  await user.type(screen.getByLabelText(/site name/i), "blog");
-  await user.type(screen.getByLabelText(/domain/i), "blog.example.com");
-  await user.type(screen.getByLabelText(/owner email/i), "owner@example.com");
+type User = ReturnType<typeof userEvent.setup>;
+
+// The wizard's fields react to `change` only (no key, focus or blur handlers), so the tests
+// set each value with one change event and press a button with one click. user-event's
+// click, select and type each replay a pointer, focus and key sequence that re-renders the
+// wizard many times, and role queries walk the whole page: on a loaded machine that took a
+// test past its 5 s limit.
+function enter(field: HTMLElement, value: string) {
+  fireEvent.change(field, { target: { value } });
 }
+
+function press(name: RegExp) {
+  fireEvent.click(screen.getByText(name, { selector: "button" }));
+}
+
+// Waits until a select lists `text`; a text query is far cheaper than a role query.
+async function option(text: string) {
+  await screen.findByText(text, { selector: "option" });
+}
+
+// `typeWith` types the domain key by key, for the test that checks the DNS pre-check
+// waits for typing to stop before it asks.
+async function fillValid({ typeWith }: { typeWith?: User } = {}) {
+  await option("Hello");
+  enter(screen.getByLabelText(/application/i), "hello");
+  await option("0.1.0");
+  enter(screen.getByLabelText(/version/i), "0.1.0");
+  await option("standard");
+  enter(screen.getByLabelText(/plan/i), "plan1");
+  enter(screen.getByLabelText(/site name/i), "blog");
+  const domain = screen.getByLabelText(/domain/i);
+  if (typeWith) await typeWith.type(domain, "blog.example.com");
+  else enter(domain, "blog.example.com");
+  enter(screen.getByLabelText(/owner email/i), "owner@example.com");
+}
+
+// The first render in a test worker compiles React's and the wizard's code paths, which took
+// over a second on a loaded machine and failed whichever test came first. Render once here, so
+// every test's own time limit covers only its own work.
+beforeAll(async () => {
+  stubApi();
+  const { unmount } = renderWizard();
+  await screen.findByText("Hello", { selector: "option" }, { timeout: 9000 });
+  unmount();
+});
 
 describe("new site wizard", () => {
   beforeEach(() => {
@@ -107,15 +151,13 @@ describe("new site wizard", () => {
   });
 
   it("rejects an invalid domain without posting", async () => {
-    const user = userEvent.setup();
     const posts: { url: string; init?: RequestInit }[] = [];
     stubApi(posts);
     renderWizard();
-    await fillValid(user);
+    await fillValid();
     const domain = screen.getByLabelText(/domain/i);
-    await user.clear(domain);
-    await user.type(domain, "not a domain");
-    await user.click(screen.getByRole("button", { name: /create site/i }));
+    enter(domain, "not a domain");
+    press(/create site/i);
     expect(
       await screen.findByText(/enter a valid domain/i, {}, { timeout: 5000 }),
     ).toBeInTheDocument();
@@ -123,14 +165,13 @@ describe("new site wizard", () => {
   });
 
   it("posts the payload then reports the job", async () => {
-    const user = userEvent.setup();
     const posts: { url: string; init?: RequestInit }[] = [];
     stubApi(posts);
     const onCreated = vi.fn();
     renderWizard(onCreated);
-    await fillValid(user);
-    await user.type(screen.getByLabelText(/prompt values/i), "HELLO_NAME=blog\n");
-    await user.click(screen.getByRole("button", { name: /create site/i }));
+    await fillValid();
+    enter(screen.getByLabelText(/prompt values/i), "HELLO_NAME=blog\n");
+    press(/create site/i);
 
     await waitFor(() => expect(posts).toHaveLength(1));
     const body = JSON.parse(String(posts[0]?.init?.body));
@@ -147,28 +188,23 @@ describe("new site wizard", () => {
   });
 
   it("rejects unparsable prompt lines without posting", async () => {
-    const user = userEvent.setup();
     const posts: { url: string; init?: RequestInit }[] = [];
     stubApi(posts);
     renderWizard();
-    await fillValid(user);
-    await user.type(screen.getByLabelText(/prompt values/i), "HELLO_NAME blog\n");
-    await user.click(screen.getByRole("button", { name: /create site/i }));
+    await fillValid();
+    enter(screen.getByLabelText(/prompt values/i), "HELLO_NAME blog\n");
+    press(/create site/i);
     expect(await screen.findByText(/must be KEY=value lines/i)).toBeInTheDocument();
     expect(posts).toHaveLength(0);
   });
 
   it("shows the server message when the domain is taken", async () => {
-    const user = userEvent.setup();
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: unknown, init?: RequestInit) => {
         const path = String(url);
         if (init?.method === "POST" && path.endsWith("/api/v1/sites")) {
-          return json(
-            { error: { code: "conflict", message: "domain is already taken" } },
-            409,
-          );
+          return json({ error: { code: "conflict", message: "domain is already taken" } }, 409);
         }
         if (path.endsWith("/api/v1/apps")) return json(apps);
         if (path.includes("/versions")) return json(versions);
@@ -178,8 +214,8 @@ describe("new site wizard", () => {
       }),
     );
     renderWizard();
-    await fillValid(user);
-    await user.click(screen.getByRole("button", { name: /create site/i }));
+    await fillValid();
+    press(/create site/i);
     expect(await screen.findByText(/domain is already taken/i)).toBeInTheDocument();
   });
 });
@@ -213,7 +249,7 @@ describe("domain pre-check", { timeout: 15_000 }, () => {
     const user = userEvent.setup();
     const checks = stubWith({});
     renderWizard();
-    await fillValid(user);
+    await fillValid({ typeWith: user });
     const section = await screen.findByRole("region", { name: /dns check/i }, { timeout: 3000 });
     expect(section).toHaveTextContent(/points at the server; https can be issued/i);
     expect(section).toHaveTextContent(/points at the server \(203\.0\.113\.7\)/);
@@ -226,21 +262,19 @@ describe("domain pre-check", { timeout: 15_000 }, () => {
   });
 
   it("reports an error but still lets the site be created", async () => {
-    const user = userEvent.setup();
     const posts: { url: string }[] = [];
     stubWith({ check: domainBad, posts });
     renderWizard();
-    await fillValid(user);
+    await fillValid();
     const section = await screen.findByRole("region", { name: /dns check/i }, { timeout: 3000 });
     expect(section).toHaveTextContent(/https will not work until this is fixed/i);
     expect(screen.getByRole("img", { name: "Problem" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Warning" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /create site/i }));
+    press(/create site/i);
     await waitFor(() => expect(posts).toHaveLength(1));
   });
 
   it("asks for a server when placement is automatic among several", async () => {
-    const user = userEvent.setup();
     const two = {
       servers: [
         ...servers.servers,
@@ -249,30 +283,28 @@ describe("domain pre-check", { timeout: 15_000 }, () => {
     };
     const checks = stubWith({ serverList: two });
     renderWizard();
-    await fillValid(user);
+    await fillValid();
     expect(await screen.findByText(/choose a server in step 2/i)).toBeInTheDocument();
     expect(checks).toHaveLength(0);
-    await user.selectOptions(screen.getByLabelText(/^server$/i), "srv2");
+    enter(screen.getByLabelText(/^server$/i), "srv2");
     await screen.findByRole("region", { name: /dns check/i }, { timeout: 3000 });
     expect(new URL(checks[0] ?? "", "http://x").searchParams.get("server_id")).toBe("srv2");
   });
 
   it("checks again on request", async () => {
-    const user = userEvent.setup();
     const checks = stubWith({});
     renderWizard();
-    await fillValid(user);
+    await fillValid();
     await screen.findByRole("region", { name: /dns check/i }, { timeout: 3000 });
-    await user.click(screen.getByRole("button", { name: /check again/i }));
+    press(/check again/i);
     await waitFor(() => expect(checks).toHaveLength(2));
   });
 
   it("does not check an invalid domain", async () => {
-    const user = userEvent.setup();
     const checks = stubWith({});
     renderWizard();
-    await screen.findByRole("option", { name: "Hello" });
-    await user.type(screen.getByLabelText(/domain/i), "not a domain");
+    await option("Hello");
+    enter(screen.getByLabelText(/domain/i), "not a domain");
     await new Promise((r) => setTimeout(r, 800));
     expect(screen.queryByText(/checking dns/i)).not.toBeInTheDocument();
     expect(checks).toHaveLength(0);
