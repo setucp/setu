@@ -58,26 +58,75 @@ impl<'a> Metrics<'a> {
         .map_err(map_db_error)
     }
 
-    /// The newest sample of each of `site_ids` in one query (`DISTINCT
-    /// ON`). Sites without a sample are absent from the map.
+    /// The newest sample of each of `site_ids` in one query. Sites
+    /// without a sample are absent from the map.
+    ///
+    /// One backward read of the `(site_id, at)` primary key per site (a
+    /// `LATERAL` subquery with `LIMIT 1`). `DISTINCT ON (site_id)` reads
+    /// every row of every listed site (~43,000 per site after 30 days)
+    /// and took 8-10 s in production.
     pub async fn latest_for_sites(
         &self,
         site_ids: &[String],
     ) -> Result<std::collections::HashMap<String, LatestMetric>, AppError> {
+        Ok(self
+            .latest_for_sites_within(site_ids, None)
+            .await?
+            .unwrap_or_default())
+    }
+
+    /// Like [`Self::latest_for_sites`], but Postgres itself cancels the
+    /// query after `limit` (`SET LOCAL statement_timeout`), returning
+    /// `Ok(None)`. Dropping a sqlx future does not cancel the running
+    /// query (the connection would stay busy until Postgres finishes),
+    /// so a caller-side timeout alone is not enough to free the pool.
+    pub async fn latest_for_sites_within(
+        &self,
+        site_ids: &[String],
+        limit: Option<Duration>,
+    ) -> Result<Option<std::collections::HashMap<String, LatestMetric>>, AppError> {
         if site_ids.is_empty() {
-            return Ok(std::collections::HashMap::new());
+            return Ok(Some(std::collections::HashMap::new()));
+        }
+        let mut tx = self.pool.begin().await.map_err(map_db_error)?;
+        if let Some(limit) = limit {
+            // SET LOCAL takes no bind parameters; the value is an integer.
+            let ms = limit.as_millis().max(1);
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SET LOCAL statement_timeout = {ms}"
+            )))
+            .execute(&mut *tx)
+            .await
+            .map_err(map_db_error)?;
         }
         let rows = sqlx::query_as!(
             LatestMetric,
-            "SELECT DISTINCT ON (site_id) site_id, at, cpu_seconds, memory_bytes, disk_bytes
-             FROM site_metrics WHERE site_id = ANY($1)
-             ORDER BY site_id, at DESC",
+            r#"SELECT s.id AS "site_id!", m.at AS "at!", m.cpu_seconds AS "cpu_seconds!",
+                      m.memory_bytes AS "memory_bytes!", m.disk_bytes AS "disk_bytes!"
+               FROM unnest($1::text[]) AS s(id)
+               CROSS JOIN LATERAL (
+                   SELECT at, cpu_seconds, memory_bytes, disk_bytes
+                   FROM site_metrics WHERE site_id = s.id
+                   ORDER BY at DESC LIMIT 1
+               ) m"#,
             site_ids,
         )
-        .fetch_all(self.pool)
-        .await
-        .map_err(map_db_error)?;
-        Ok(rows.into_iter().map(|m| (m.site_id.clone(), m)).collect())
+        .fetch_all(&mut *tx)
+        .await;
+        match rows {
+            Ok(rows) => {
+                tx.commit().await.map_err(map_db_error)?;
+                Ok(Some(
+                    rows.into_iter().map(|m| (m.site_id.clone(), m)).collect(),
+                ))
+            }
+            // 57014 = query_canceled (statement_timeout fired).
+            Err(sqlx::Error::Database(db)) if db.code().as_deref() == Some("57014") => {
+                let _ = tx.rollback().await;
+                Ok(None)
+            }
+            Err(e) => Err(map_db_error(e)),
+        }
     }
 
     /// Delete samples older than `older_than`. Returns rows removed.

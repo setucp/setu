@@ -102,12 +102,23 @@ function toApiError(status: number, text: string): ApiError {
   return new ApiError(status, "unknown", `request failed with ${status}`);
 }
 
+/** A list load that has not answered after this long fails, so the page can offer a retry. */
+const LIST_TIMEOUT_MS = 15_000;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: init?.body === undefined ? undefined : { "content-type": "application/json" },
-    ...init,
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      credentials: "same-origin",
+      headers: init?.body === undefined ? undefined : { "content-type": "application/json" },
+      ...init,
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "TimeoutError") {
+      throw new Error("The panel did not answer in time.");
+    }
+    throw e;
+  }
   if (!response.ok) {
     throw toApiError(response.status, await response.text());
   }
@@ -141,7 +152,9 @@ export const api = {
   },
 
   async listSites(): Promise<SiteListItem[]> {
-    const body = await request<{ sites: SiteListItem[] }>("/api/v1/sites");
+    const body = await request<{ sites: SiteListItem[] }>("/api/v1/sites", {
+      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+    });
     return body.sites;
   },
 
@@ -160,7 +173,9 @@ export const api = {
   },
 
   async listServers(): Promise<Server[]> {
-    const body = await request<{ servers: Server[] }>("/api/v1/servers");
+    const body = await request<{ servers: Server[] }>("/api/v1/servers", {
+      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+    });
     return body.servers;
   },
 
@@ -195,7 +210,9 @@ export const api = {
   },
 
   async listPlans(): Promise<Plan[]> {
-    const body = await request<{ plans: Plan[] }>("/api/v1/plans");
+    const body = await request<{ plans: Plan[] }>("/api/v1/plans", {
+      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+    });
     return unwrap(body, "plans").map((p) => ({
       ...p,
       limits: (p.limits ?? {}) as PlanLimits,

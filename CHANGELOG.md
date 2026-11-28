@@ -5,6 +5,16 @@ matching the tag.
 
 ## Unreleased
 
+### Fixed
+
+- **The sites list no longer hangs on a large metrics history.** The
+  latest-metrics lookup read every sample of every listed site (8-10 s
+  with 30 days of per-minute samples); it is now one backward primary-key
+  read per site. The list also returns without metrics if they take
+  longer than 2 s (Postgres cancels the query, so it cannot hold a pool
+  connection), and the panel shows an error with a Retry button
+  (and gives up after 15 s) instead of a permanent loading skeleton.
+
 ### Added
 
 - **Panel UI for the 0.1.7 APIs.** The site Overview tab has a
