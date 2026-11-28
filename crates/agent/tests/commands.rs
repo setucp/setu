@@ -807,23 +807,25 @@ async fn health_polls_until_2xx_or_grace() {
     );
 }
 
+/// A fake `journalctl` in `bin`: a symlink to a checked-in executable
+/// fixture that writes its argv to `args` beside the symlink. The test
+/// process never opens an executable for writing (a script written then
+/// exec'd races with forks on other test threads and fails with ETXTBSY).
+fn fake_journalctl(bin: &std::path::Path, fixture: &str) -> std::path::PathBuf {
+    let link = bin.join("journalctl");
+    let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(fixture);
+    std::os::unix::fs::symlink(target, &link).expect("symlink fixture");
+    link
+}
+
 #[tokio::test]
 async fn fetch_logs_returns_cursor() {
     let dir = tempfile::tempdir().expect("tempdir");
     let bin = tempfile::tempdir().expect("bindir");
-    let args_file = dir.path().join("args");
-    let script = bin.path().join("journalctl");
-    std::fs::write(
-        &script,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n\
-             echo '{{\"__CURSOR\":\"c1\",\"MESSAGE\":\"one\"}}'\n\
-             echo '{{\"__CURSOR\":\"c2\",\"MESSAGE\":\"two\"}}'\n",
-            args_file.display()
-        ),
-    )
-    .expect("script");
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let script = fake_journalctl(bin.path(), "fake_journalctl_site.sh");
+    let args_file = bin.path().join("args");
     let rt: FakeRt = NativeRuntime::new(
         FakeHelper::new(),
         FakePostgres::new(),
@@ -853,18 +855,8 @@ async fn fetch_logs_returns_cursor() {
 async fn fetch_system_logs_reads_the_fixed_unit() {
     let dir = tempfile::tempdir().expect("tempdir");
     let bin = tempfile::tempdir().expect("bindir");
-    let args_file = dir.path().join("args");
-    let script = bin.path().join("journalctl");
-    std::fs::write(
-        &script,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n\
-             echo '{{\"__CURSOR\":\"c1\",\"MESSAGE\":\"\\u001b[32mcaddy up\"}}'\n",
-            args_file.display()
-        ),
-    )
-    .expect("script");
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let script = fake_journalctl(bin.path(), "fake_journalctl_system.sh");
+    let args_file = bin.path().join("args");
     let rt: FakeRt = NativeRuntime::new(
         FakeHelper::new(),
         FakePostgres::new(),
