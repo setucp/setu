@@ -58,8 +58,13 @@ impl<'a> Metrics<'a> {
         .map_err(map_db_error)
     }
 
-    /// The newest sample of each of `site_ids` in one query (`DISTINCT
-    /// ON`). Sites without a sample are absent from the map.
+    /// The newest sample of each of `site_ids` in one query. Sites
+    /// without a sample are absent from the map.
+    ///
+    /// One backward read of the `(site_id, at)` primary key per site (a
+    /// `LATERAL` subquery with `LIMIT 1`). `DISTINCT ON (site_id)` reads
+    /// every row of every listed site (~43,000 per site after 30 days)
+    /// and took 8-10 s in production.
     pub async fn latest_for_sites(
         &self,
         site_ids: &[String],
@@ -69,9 +74,14 @@ impl<'a> Metrics<'a> {
         }
         let rows = sqlx::query_as!(
             LatestMetric,
-            "SELECT DISTINCT ON (site_id) site_id, at, cpu_seconds, memory_bytes, disk_bytes
-             FROM site_metrics WHERE site_id = ANY($1)
-             ORDER BY site_id, at DESC",
+            r#"SELECT s.id AS "site_id!", m.at AS "at!", m.cpu_seconds AS "cpu_seconds!",
+                      m.memory_bytes AS "memory_bytes!", m.disk_bytes AS "disk_bytes!"
+               FROM unnest($1::text[]) AS s(id)
+               CROSS JOIN LATERAL (
+                   SELECT at, cpu_seconds, memory_bytes, disk_bytes
+                   FROM site_metrics WHERE site_id = s.id
+                   ORDER BY at DESC LIMIT 1
+               ) m"#,
             site_ids,
         )
         .fetch_all(self.pool)

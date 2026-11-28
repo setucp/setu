@@ -419,6 +419,10 @@ pub(crate) async fn require_no_running_job(
     Ok(())
 }
 
+/// How long the site list waits for the latest metrics before listing
+/// the sites without them.
+const METRICS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// List sites (viewer and above).
 #[utoipa::path(
     get,
@@ -435,7 +439,24 @@ pub async fn list(
     require_role(&session, Role::Viewer).await?;
     let sites = state.db.sites().list().await?;
     let ids: Vec<String> = sites.iter().map(|s| s.id.clone()).collect();
-    let latest = state.db.metrics().latest_for_sites(&ids).await?;
+    // The list never waits on metrics: if they are slow or fail, the
+    // sites are still returned, with `metrics: null` ("—" in the panel).
+    let latest = match tokio::time::timeout(
+        METRICS_TIMEOUT,
+        state.db.metrics().latest_for_sites(&ids),
+    )
+    .await
+    {
+        Ok(Ok(latest)) => latest,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "site list: latest metrics failed; listing without them");
+            std::collections::HashMap::new()
+        }
+        Err(_) => {
+            tracing::warn!("site list: latest metrics timed out; listing without them");
+            std::collections::HashMap::new()
+        }
+    };
     Ok(Json(SiteListOut {
         sites: sites
             .iter()

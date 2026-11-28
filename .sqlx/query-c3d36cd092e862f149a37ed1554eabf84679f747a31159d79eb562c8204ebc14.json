@@ -1,22 +1,17 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT DISTINCT ON (site_id) site_id, at, cpu_seconds, memory_bytes, disk_bytes\n             FROM site_metrics WHERE site_id = ANY($1)\n             ORDER BY site_id, at DESC",
+  "query": "SELECT s.id AS \"site_id!\", m.at AS \"at!\", m.cpu_seconds AS \"cpu_seconds!\",\n                      m.memory_bytes AS \"memory_bytes!\", m.disk_bytes AS \"disk_bytes!\"\n               FROM unnest($1::text[]) AS s(id)\n               CROSS JOIN LATERAL (\n                   SELECT at, cpu_seconds, memory_bytes, disk_bytes\n                   FROM site_metrics WHERE site_id = s.id\n                   ORDER BY at DESC LIMIT 1\n               ) m",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "site_id",
+        "name": "site_id!",
         "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "site_metrics",
-            "name": "site_id"
-          }
-        }
+        "origin": "Expression"
       },
       {
         "ordinal": 1,
-        "name": "at",
+        "name": "at!",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
@@ -27,7 +22,7 @@
       },
       {
         "ordinal": 2,
-        "name": "cpu_seconds",
+        "name": "cpu_seconds!",
         "type_info": "Float8",
         "origin": {
           "Table": {
@@ -38,7 +33,7 @@
       },
       {
         "ordinal": 3,
-        "name": "memory_bytes",
+        "name": "memory_bytes!",
         "type_info": "Int8",
         "origin": {
           "Table": {
@@ -49,7 +44,7 @@
       },
       {
         "ordinal": 4,
-        "name": "disk_bytes",
+        "name": "disk_bytes!",
         "type_info": "Int8",
         "origin": {
           "Table": {
@@ -65,12 +60,12 @@
       ]
     },
     "nullable": [
-      false,
+      null,
       false,
       false,
       false,
       false
     ]
   },
-  "hash": "0bb3193098fc61cce670541def5f47106d3674df59e0c673c1dfafc73697d5b4"
+  "hash": "c3d36cd092e862f149a37ed1554eabf84679f747a31159d79eb562c8204ebc14"
 }

@@ -1191,6 +1191,119 @@ async fn latest_for_sites_returns_the_newest_sample_per_site() {
     assert!(db.metrics().latest_for_sites(&[]).await.unwrap().is_empty());
 }
 
+/// The query the repo replaced (kept here as the reference semantics).
+const OLD_LATEST_SQL: &str = "SELECT DISTINCT ON (site_id) site_id, at, cpu_seconds, \
+     memory_bytes, disk_bytes FROM site_metrics WHERE site_id = ANY($1) \
+     ORDER BY site_id, at DESC";
+
+/// The shape of `Metrics::latest_for_sites`, for EXPLAIN.
+const LATERAL_LATEST_SQL: &str = "SELECT s.id, m.at, m.cpu_seconds, m.memory_bytes, m.disk_bytes \
+     FROM unnest($1::text[]) AS s(id) CROSS JOIN LATERAL ( \
+       SELECT at, cpu_seconds, memory_bytes, disk_bytes FROM site_metrics \
+       WHERE site_id = s.id ORDER BY at DESC LIMIT 1) m";
+
+/// 30 days of per-minute samples for several sites (production shape):
+/// the result matches the old `DISTINCT ON` query, the plan reads the
+/// primary key backwards per site (no scan of the history), and the call
+/// finishes well inside a generous bound.
+#[tokio::test]
+async fn latest_for_sites_with_a_month_of_samples_uses_the_index() {
+    let (test, db) = test_db().await;
+    let server = online_server(&db, 100_000, false).await;
+    let plan = catalogue(&db, 512).await;
+    let mut ids = Vec::new();
+    for i in 0..5 {
+        let site = db
+            .sites()
+            .create(&new_site(
+                Some(&server.id),
+                &plan,
+                &format!("m{i}.example.com"),
+                512,
+            ))
+            .await
+            .expect("site");
+        ids.push(site.id);
+    }
+    // A sixth site with no samples at all.
+    let empty = db
+        .sites()
+        .create(&new_site(Some(&server.id), &plan, "empty.example.com", 512))
+        .await
+        .expect("site");
+
+    // Whole minutes ago, 30 days of history; each site's newest sample
+    // is a different age so the answers differ per site.
+    sqlx::query(
+        "INSERT INTO site_metrics (site_id, at, cpu_seconds, memory_bytes, disk_bytes)
+         SELECT s.id, date_trunc('minute', now()) - (g.n + s.ord) * interval '1 minute',
+                g.n::float8, 1000 + g.n + s.ord, 5000 + g.n
+         FROM unnest($1::text[]) WITH ORDINALITY AS s(id, ord)
+         CROSS JOIN generate_series(0, 43199) AS g(n)",
+    )
+    .bind(&ids)
+    .execute(&test.pool)
+    .await
+    .expect("seed");
+    sqlx::query("ANALYZE site_metrics")
+        .execute(&test.pool)
+        .await
+        .expect("analyze");
+
+    let mut asked = ids.clone();
+    asked.push(empty.id.clone());
+    asked.push("no-such-site".to_string());
+
+    let started = std::time::Instant::now();
+    let got = db.metrics().latest_for_sites(&asked).await.unwrap();
+    let elapsed = started.elapsed();
+
+    let old: Vec<(String, chrono::DateTime<chrono::Utc>, f64, i64, i64)> =
+        sqlx::query_as(OLD_LATEST_SQL)
+            .bind(&asked)
+            .fetch_all(&test.pool)
+            .await
+            .unwrap();
+    assert_eq!(old.len(), 5);
+    assert_eq!(got.len(), old.len(), "same sites, none for the empty ones");
+    for (site_id, at, cpu, mem, disk) in old {
+        let m = &got[&site_id];
+        assert_eq!(
+            (m.at, m.cpu_seconds, m.memory_bytes, m.disk_bytes),
+            (at, cpu, mem, disk)
+        );
+    }
+    assert!(!got.contains_key(&empty.id));
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "latest_for_sites took {elapsed:?} for 5 sites x 43,200 samples"
+    );
+
+    // The plan: an index scan per site, never a scan of the table.
+    let plan_rows: Vec<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (ANALYZE, BUFFERS) {LATERAL_LATEST_SQL}"
+    )))
+    .bind(&asked)
+    .fetch_all(&test.pool)
+    .await
+    .unwrap();
+    let plan_text = plan_rows
+        .into_iter()
+        .map(|r| r.0)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plan_text.contains("Index Scan Backward using site_metrics_pkey")
+            || plan_text.contains("Index Only Scan Backward using site_metrics_pkey"),
+        "expected a backward primary-key scan:\n{plan_text}"
+    );
+    assert!(
+        !plan_text.contains("Seq Scan on site_metrics"),
+        "{plan_text}"
+    );
+    assert!(!plan_text.contains("Sort"), "{plan_text}");
+}
+
 /// Review Focus 3: NULL site ids never collide in the partial unique
 /// index; a site's own active-job guard still holds.
 #[tokio::test]
