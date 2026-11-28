@@ -420,8 +420,11 @@ pub(crate) async fn require_no_running_job(
 }
 
 /// How long the site list waits for the latest metrics before listing
-/// the sites without them.
+/// the sites without them. Postgres cancels the query at this limit
+/// (freeing the pool connection); the tokio timeout is a backstop with a
+/// little slack.
 const METRICS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const METRICS_BACKSTOP: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// List sites (viewer and above).
 #[utoipa::path(
@@ -442,12 +445,21 @@ pub async fn list(
     // The list never waits on metrics: if they are slow or fail, the
     // sites are still returned, with `metrics: null` ("—" in the panel).
     let latest = match tokio::time::timeout(
-        METRICS_TIMEOUT,
-        state.db.metrics().latest_for_sites(&ids),
+        METRICS_BACKSTOP,
+        state
+            .db
+            .metrics()
+            .latest_for_sites_within(&ids, Some(METRICS_TIMEOUT)),
     )
     .await
     {
-        Ok(Ok(latest)) => latest,
+        Ok(Ok(Some(latest))) => latest,
+        Ok(Ok(None)) => {
+            tracing::warn!(
+                "site list: latest metrics hit the statement timeout; listing without them"
+            );
+            std::collections::HashMap::new()
+        }
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "site list: latest metrics failed; listing without them");
             std::collections::HashMap::new()

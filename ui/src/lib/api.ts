@@ -41,7 +41,7 @@ export function useLogout() {
 }
 
 export function useSites() {
-  return useQuery({ queryKey: ["sites"], queryFn: () => api.listSites() });
+  return useQuery({ queryKey: ["sites"], queryFn: () => api.listSites(), retry: 0 });
 }
 
 export function useSite(id: string) {
@@ -49,7 +49,7 @@ export function useSite(id: string) {
 }
 
 export function useServers() {
-  return useQuery({ queryKey: ["servers"], queryFn: () => api.listServers() });
+  return useQuery({ queryKey: ["servers"], queryFn: () => api.listServers(), retry: 0 });
 }
 
 export function useApps() {
@@ -93,7 +93,7 @@ export function useClearAppSource(appId: string) {
 }
 
 export function usePlans() {
-  return useQuery({ queryKey: ["plans"], queryFn: () => api.listPlans() });
+  return useQuery({ queryKey: ["plans"], queryFn: () => api.listPlans(), retry: 0 });
 }
 
 /** Whether a job is still queued or running. */

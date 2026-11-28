@@ -1,6 +1,6 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SitesListPage } from "@/components/SitesListPage";
 import {
   json,
@@ -34,5 +34,17 @@ describe("sites list load failure", () => {
     await waitFor(() => expect(screen.getAllByRole("row").length).toBeGreaterThan(1));
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
     expect(sitesCalls).toBe(2);
+  });
+
+  it("says so plainly when the request times out", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new DOMException("signal timed out", "TimeoutError");
+      }),
+    );
+    renderWithClient(<SitesListPage />);
+    expect(await screen.findAllByText("The panel did not answer in time.")).not.toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 });

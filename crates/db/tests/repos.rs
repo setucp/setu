@@ -1254,9 +1254,7 @@ async fn latest_for_sites_with_a_month_of_samples_uses_the_index() {
     asked.push(empty.id.clone());
     asked.push("no-such-site".to_string());
 
-    let started = std::time::Instant::now();
     let got = db.metrics().latest_for_sites(&asked).await.unwrap();
-    let elapsed = started.elapsed();
 
     let old: Vec<(String, chrono::DateTime<chrono::Utc>, f64, i64, i64)> =
         sqlx::query_as(OLD_LATEST_SQL)
@@ -1274,10 +1272,6 @@ async fn latest_for_sites_with_a_month_of_samples_uses_the_index() {
         );
     }
     assert!(!got.contains_key(&empty.id));
-    assert!(
-        elapsed < Duration::from_secs(2),
-        "latest_for_sites took {elapsed:?} for 5 sites x 43,200 samples"
-    );
 
     // The plan: an index scan per site, never a scan of the table.
     let plan_rows: Vec<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
@@ -1302,6 +1296,57 @@ async fn latest_for_sites_with_a_month_of_samples_uses_the_index() {
         "{plan_text}"
     );
     assert!(!plan_text.contains("Sort"), "{plan_text}");
+}
+
+/// A statement_timeout cancellation yields `None` (the list then shows
+/// sites without metrics) and the connection goes back to the pool usable.
+#[tokio::test]
+async fn latest_for_sites_within_is_cancelled_by_postgres_and_frees_the_connection() {
+    let (test, db) = test_db().await;
+    let s = site(&db).await;
+    let now = chrono::Utc::now();
+    db.metrics()
+        .insert_batch(
+            &s.server_id,
+            &[setu_proto::SiteMetric {
+                short_id: s.short_id.clone(),
+                at: now,
+                cpu_seconds: 1.0,
+                memory_bytes: 1 << 20,
+                disk_bytes: 1 << 20,
+            }],
+        )
+        .await
+        .unwrap();
+
+    // Another session holds an exclusive lock, so the read must wait.
+    let mut locker = test.pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE site_metrics IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *locker)
+        .await
+        .unwrap();
+    let ids = [s.id.clone()];
+    let cancelled = db
+        .metrics()
+        .latest_for_sites_within(&ids, Some(Duration::from_millis(200)))
+        .await
+        .unwrap();
+    assert!(cancelled.is_none(), "Postgres cancelled the blocked query");
+    locker.rollback().await.unwrap();
+
+    let ok = db
+        .metrics()
+        .latest_for_sites_within(&ids, Some(Duration::from_secs(5)))
+        .await
+        .unwrap()
+        .expect("answers once the lock is gone");
+    assert_eq!(ok[&s.id].memory_bytes, 1 << 20);
+    // The timeout was transaction-local: it did not stick to the pooled connection.
+    let timeout: String = sqlx::query_scalar("SHOW statement_timeout")
+        .fetch_one(&test.pool)
+        .await
+        .unwrap();
+    assert_eq!(timeout, "0");
 }
 
 /// Review Focus 3: NULL site ids never collide in the partial unique

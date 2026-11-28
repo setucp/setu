@@ -106,11 +106,19 @@ function toApiError(status: number, text: string): ApiError {
 const LIST_TIMEOUT_MS = 15_000;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: init?.body === undefined ? undefined : { "content-type": "application/json" },
-    ...init,
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      credentials: "same-origin",
+      headers: init?.body === undefined ? undefined : { "content-type": "application/json" },
+      ...init,
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "TimeoutError") {
+      throw new Error("The panel did not answer in time.");
+    }
+    throw e;
+  }
   if (!response.ok) {
     throw toApiError(response.status, await response.text());
   }
